@@ -39,6 +39,7 @@ export async function POST(request: Request) {
         email: user.email,
         role: user.role,
         lastLogin: user.lastLogin,
+        displayName: user.displayName ?? null,
         hasPasskeys,
       },
     })

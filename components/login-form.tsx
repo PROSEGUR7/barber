@@ -75,6 +75,7 @@ export function LoginForm({
         email?: string
         role?: string
         hasPasskeys?: boolean
+        displayName?: string | null
       }
 
       if (user.email) {
@@ -84,6 +85,12 @@ export function LoginForm({
         }
       } else {
         localStorage.removeItem("userEmail")
+      }
+
+      if (user.displayName) {
+        localStorage.setItem("userDisplayName", user.displayName)
+      } else {
+        localStorage.removeItem("userDisplayName")
       }
       const userId = typeof user.id === "number" ? user.id : null
 
@@ -177,6 +184,7 @@ export function LoginForm({
         id?: number
         email?: string
         role?: string
+        displayName?: string | null
       }
 
       if (user.email) {
@@ -186,6 +194,12 @@ export function LoginForm({
         }
       } else {
         localStorage.removeItem("userEmail")
+      }
+
+      if (user.displayName) {
+        localStorage.setItem("userDisplayName", user.displayName)
+      } else {
+        localStorage.removeItem("userDisplayName")
       }
 
       if (typeof user.id === "number") {

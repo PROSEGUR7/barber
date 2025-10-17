@@ -9,64 +9,82 @@ import {
   DollarSign,
   Heart,
   Home,
-  Layers3,
   Receipt,
   Scissors,
   Settings2,
   TrendingUp,
   UserCircle,
-  UserCog,
   Users,
 } from "lucide-react"
 
 import { NavMain } from "./nav-main"
 import { NavUser } from "./nav-user"
-import { TeamSwitcher } from "./team-switcher"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
-  SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
 
-// Menú adaptado a Barbería: secciones base (Inicio, Empleados, Clientes, Servicios, Agendamientos, Disponibilidad, Pagos)
-const data = {
-  user: {
-    name: "Cliente Demo",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
-  teams: [
-    {
-      name: "Cliente",
-      logo: Layers3,
-      plan: "Role",
-    },
-    {
-      name: "Peluquero",
-      logo: UserCog,
-      plan: "Role",
-    },
-    {
-      name: "Administrador",
-      logo: Settings2,
-      plan: "Role",
-    },
-  ],
+type RoleKey = "client" | "barber" | "admin"
+
+const roleLabels: Record<RoleKey, string> = {
+  client: "Cliente",
+  barber: "Peluquero",
+  admin: "Administrador",
+}
+
+const defaultAvatar = "/placeholder-user.jpg"
+
+function formatDisplayName(raw: string): string {
+  if (!raw) {
+    return ""
+  }
+
+  return raw
+    .split(/\s+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ")
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const [role, setRole] = React.useState<"client" | "barber" | "admin">("client")
+  const [role, setRole] = React.useState<RoleKey>("client")
+  const [userInfo, setUserInfo] = React.useState({
+    name: "Usuario BarberPro",
+    email: "",
+    avatar: defaultAvatar,
+    roleLabel: roleLabels.client,
+  })
 
   React.useEffect(() => {
-    const r = (typeof window !== "undefined" && localStorage.getItem("userRole")) as
-      | "client"
-      | "barber"
-      | "admin"
-      | null
-    if (r === "client" || r === "barber" || r === "admin") setRole(r)
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const storedRole = localStorage.getItem("userRole") as RoleKey | null
+    if (storedRole === "client" || storedRole === "barber" || storedRole === "admin") {
+      setRole(storedRole)
+    }
+
+  const storedEmail = (localStorage.getItem("userEmail") ?? "").trim()
+  const storedDisplayName = (localStorage.getItem("userDisplayName") ?? "").trim()
+    const fallbackName = storedDisplayName || (storedEmail ? storedEmail.split("@")[0] : "Usuario BarberPro")
+    const formattedName = formatDisplayName(fallbackName).trim() || "Usuario BarberPro"
+
+    setUserInfo((previous) => ({
+      ...previous,
+      name: formattedName,
+      email: storedEmail,
+    }))
   }, [])
+
+  React.useEffect(() => {
+    setUserInfo((previous) => ({
+      ...previous,
+      roleLabel: roleLabels[role],
+    }))
+  }, [role])
 
   const menusByRole = React.useMemo(() => {
     const clientNav = [
@@ -76,8 +94,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         url: "/booking",
         icon: CalendarDays,
       },
-  { title: "Mis Citas", url: "/dashboard/appointments", icon: ClipboardList },
-  { title: "Mis barberos favoritos", url: "/favorites", icon: Heart },
+      { title: "Mis Citas", url: "/dashboard/appointments", icon: ClipboardList },
+      { title: "Mis barberos favoritos", url: "/favorites", icon: Heart },
       { title: "Pagos / Wallet", url: "/wallet", icon: DollarSign },
       { title: "Perfil", url: "/profile", icon: UserCircle },
     ]
@@ -129,14 +147,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <TeamSwitcher teams={data.teams} />
-      </SidebarHeader>
       <SidebarContent>
         <NavMain label="Barbería" items={current.nav} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser user={userInfo} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

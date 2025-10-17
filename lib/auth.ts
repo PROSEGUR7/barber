@@ -28,6 +28,7 @@ export type AuthUser = {
   email: string
   role: AppUserRole
   lastLogin: string | null
+  displayName?: string | null
 }
 
 export type UserWithPassword = AuthUser & {
@@ -74,13 +75,15 @@ export async function findUserByEmailAndRole(
 
   // Ensure TypeScript understands the role value comes from DB enum
   const dbRoleFromRow = row.rol as keyof typeof roleFromDb
+  const appRole = roleFromDb[dbRoleFromRow]
 
   return {
     id: row.id,
     email: row.correo,
     passwordHash: row.passwordhash,
-    role: roleFromDb[dbRoleFromRow],
+    role: appRole,
     lastLogin: row.ultimo_acceso,
+    displayName: await getDisplayNameForRole(row.id, appRole),
   }
 }
 
@@ -105,13 +108,16 @@ export async function findUserByEmail(
 
   const row = result.rows[0]
   const dbRoleFromRow = row.rol as keyof typeof roleFromDb
+  const appRole = roleFromDb[dbRoleFromRow]
+  const displayName = await getDisplayNameForRole(row.id, appRole)
 
   return {
     id: row.id,
     email: row.correo,
     passwordHash: row.passwordhash,
-    role: roleFromDb[dbRoleFromRow],
+    role: appRole,
     lastLogin: row.ultimo_acceso,
+    displayName,
   }
 }
 
@@ -134,12 +140,15 @@ export async function findUserById(id: number): Promise<AuthUser | null> {
 
   const row = result.rows[0]
   const dbRoleFromRow = row.rol as keyof typeof roleFromDb
+  const appRole = roleFromDb[dbRoleFromRow]
+  const displayName = await getDisplayNameForRole(row.id, appRole)
 
   return {
     id: row.id,
     email: row.correo,
-    role: roleFromDb[dbRoleFromRow],
+    role: appRole,
     lastLogin: row.ultimo_acceso,
+    displayName,
   }
 }
 
@@ -215,6 +224,7 @@ export async function createUser({
       email: userRow.correo,
       role: appRole,
       lastLogin: userRow.ultimo_acceso,
+      displayName: await getDisplayNameForRole(userRow.id, appRole),
     }
   } catch (error) {
     try {
@@ -267,4 +277,31 @@ export async function markUserLogin(userId: number) {
      WHERE id = $1`,
     [userId],
   )
+}
+
+async function getDisplayNameForRole(userId: number, role: AppUserRole): Promise<string | null> {
+  try {
+    switch (role) {
+      case "client": {
+        const result = await pool.query<{ nombre: string | null }>(
+          `SELECT nombre FROM tenant_base.clientes WHERE user_id = $1 LIMIT 1`,
+          [userId],
+        )
+        return result.rows[0]?.nombre ?? null
+      }
+      case "barber": {
+        const result = await pool.query<{ nombre: string | null }>(
+          `SELECT nombre FROM tenant_base.empleados WHERE user_id = $1 LIMIT 1`,
+          [userId],
+        )
+        return result.rows[0]?.nombre ?? null
+      }
+      case "admin":
+      default:
+        return null
+    }
+  } catch (error) {
+    console.warn("Failed to load display name for user", { userId, role }, error)
+    return null
+  }
 }

@@ -18,7 +18,7 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/c
 export function NavUser({
   user,
 }: {
-  user: { name: string; email: string; avatar: string }
+  user: { name: string; email: string; avatar: string; roleLabel?: string }
 }) {
   const { isMobile } = useSidebar()
   const router = useRouter()
@@ -27,6 +27,7 @@ export function NavUser({
     try {
       localStorage.removeItem("userRole")
       localStorage.removeItem("userEmail")
+      localStorage.removeItem("userDisplayName")
     } catch {}
     router.push("/login")
   }
