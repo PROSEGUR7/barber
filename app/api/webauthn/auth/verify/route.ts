@@ -12,9 +12,19 @@ export async function POST(request: Request) {
     const json = await request.json()
     const { credential } = bodySchema.parse(json)
 
+    const hostHeader = request.headers.get("host")
+    const urlHost = (() => {
+      try {
+        return new URL(request.url).hostname
+      } catch {
+        return null
+      }
+    })()
+
     const { verified, user } = await verifyPasskeyAuthentication({
       credential,
       requestOrigin: request.headers.get("origin"),
+      rpIdHint: hostHeader ?? urlHost,
     })
 
     if (!verified) {

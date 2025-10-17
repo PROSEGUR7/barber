@@ -32,9 +32,30 @@ function getAppUrl() {
 const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "BarberPro"
 const ORIGIN = getAppUrl()
 
-function resolveRpId(requestOrigin?: string | null): string {
+function cleanHost(value: string): string {
+  if (!value) {
+    return value
+  }
+
+  try {
+    const url = value.includes("//") ? new URL(value) : new URL(`https://${value}`)
+    return url.hostname
+  } catch (error) {
+    const withoutPort = value.split(":")[0]
+    return withoutPort
+  }
+}
+
+function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): string {
   if (process.env.WEBAUTHN_RP_ID) {
     return process.env.WEBAUTHN_RP_ID
+  }
+
+  if (rpIdHint) {
+    const sanitized = cleanHost(rpIdHint)
+    if (sanitized) {
+      return sanitized
+    }
   }
 
   if (requestOrigin) {
@@ -173,11 +194,13 @@ type AuthenticationOptionsOverrides = {
 type RegistrationOptionsParams = {
   overrides?: RegistrationOptionsOverrides
   requestOrigin?: string | null
+  rpIdHint?: string | null
 }
 
 type AuthenticationOptionsParams = {
   overrides?: AuthenticationOptionsOverrides
   requestOrigin?: string | null
+  rpIdHint?: string | null
 }
 
 async function upsertChallenge(userId: number, challengeType: ChallengeType, challenge: string) {
@@ -356,7 +379,7 @@ export async function generatePasskeyRegistrationOptions(
   const existingPasskeys = await getPasskeysForUser(user.id)
 
   const overrides = params?.overrides
-  const rpID = resolveRpId(params?.requestOrigin)
+  const rpID = resolveRpId(params?.requestOrigin, params?.rpIdHint)
 
   const authenticatorSelection: AuthenticatorSelectionCriteria = {
     residentKey: (overrides?.residentKey ?? "preferred") as AuthenticatorSelectionCriteria["residentKey"],
@@ -387,10 +410,12 @@ export async function verifyPasskeyRegistration({
   userId,
   credential,
   requestOrigin,
+  rpIdHint,
 }: {
   userId: number
   credential: RegistrationResponseJSON
   requestOrigin?: string | null
+  rpIdHint?: string | null
 }) {
   await ensureTables()
 
@@ -409,7 +434,7 @@ export async function verifyPasskeyRegistration({
     console.debug("[WebAuthn] Registration expected origins", expectedOrigins)
   }
 
-  const expectedRPID = resolveRpId(requestOrigin)
+  const expectedRPID = resolveRpId(requestOrigin, rpIdHint)
 
   const verification = await verifyRegistrationResponse({
     response: credential,
@@ -460,7 +485,7 @@ export async function generatePasskeyAuthenticationOptions(
   }
 
   const overrides = params?.overrides
-  const rpID = resolveRpId(params?.requestOrigin)
+  const rpID = resolveRpId(params?.requestOrigin, params?.rpIdHint)
 
   const options = await generateAuthenticationOptions({
     rpID,
@@ -476,9 +501,11 @@ export async function generatePasskeyAuthenticationOptions(
 export async function verifyPasskeyAuthentication({
   credential,
   requestOrigin,
+  rpIdHint,
 }: {
   credential: AuthenticationResponseJSON
   requestOrigin?: string | null
+  rpIdHint?: string | null
 }) {
   await ensureTables()
 
@@ -511,7 +538,7 @@ export async function verifyPasskeyAuthentication({
     console.debug("[WebAuthn] Authentication expected origins", expectedOrigins)
   }
 
-  const expectedRPID = resolveRpId(requestOrigin)
+  const expectedRPID = resolveRpId(requestOrigin, rpIdHint)
 
   const verification = await verifyAuthenticationResponse({
     response: credential,

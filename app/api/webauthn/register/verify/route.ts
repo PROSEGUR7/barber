@@ -13,10 +13,20 @@ export async function POST(request: Request) {
     const json = await request.json()
     const { userId, credential } = bodySchema.parse(json)
 
+    const hostHeader = request.headers.get("host")
+    const urlHost = (() => {
+      try {
+        return new URL(request.url).hostname
+      } catch {
+        return null
+      }
+    })()
+
     const verification = await verifyPasskeyRegistration({
       userId,
       credential,
       requestOrigin: request.headers.get("origin"),
+      rpIdHint: hostHeader ?? urlHost,
     })
 
     return NextResponse.json({ verification })

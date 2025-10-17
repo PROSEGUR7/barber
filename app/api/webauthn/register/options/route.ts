@@ -30,6 +30,13 @@ export async function POST(request: Request) {
     const { userId } = bodySchema.parse(json)
 
     const preferPlatform = shouldPreferPlatformAuthenticator(request.headers.get("user-agent"))
+    const urlHost = (() => {
+      try {
+        return new URL(request.url).hostname
+      } catch {
+        return null
+      }
+    })()
 
     const options = await generatePasskeyRegistrationOptions(userId, {
       overrides: preferPlatform
@@ -40,6 +47,7 @@ export async function POST(request: Request) {
           }
         : undefined,
       requestOrigin: request.headers.get("origin"),
+      rpIdHint: request.headers.get("host") ?? urlHost,
     })
 
     return NextResponse.json({ options })
