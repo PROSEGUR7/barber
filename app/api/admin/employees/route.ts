@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { getEmployeesWithStats, registerEmployee } from "@/lib/admin"
+import { EmployeeRecordNotFoundError, getEmployeesWithStats, registerEmployee } from "@/lib/admin"
 import { UserAlreadyExistsError } from "@/lib/auth"
 
 const createEmployeeSchema = z.object({
@@ -56,6 +56,13 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "Ya existe un usuario con ese correo" },
         { status: 409 },
+      )
+    }
+
+    if (error instanceof EmployeeRecordNotFoundError) {
+      return NextResponse.json(
+        { error: "No se pudo crear el empleado en el sistema" },
+        { status: 500 },
       )
     }
 

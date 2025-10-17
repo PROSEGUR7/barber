@@ -17,6 +17,13 @@ export type EmployeeSummary = {
   rating: number | null
 }
 
+export class EmployeeRecordNotFoundError extends Error {
+  constructor(message = "EMPLOYEE_RECORD_NOT_FOUND") {
+    super(message)
+    this.name = "EmployeeRecordNotFoundError"
+  }
+}
+
 type EmployeeSummaryRow = {
   id: number
   user_id: number
@@ -203,7 +210,7 @@ export async function registerEmployee(input: {
 
   const employee = await getEmployeeByUserId(user.id)
   if (!employee) {
-    throw new Error("EMPLOYEE_NOT_CREATED")
+    throw new EmployeeRecordNotFoundError()
   }
 
   return employee
