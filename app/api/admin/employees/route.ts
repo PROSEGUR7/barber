@@ -13,11 +13,9 @@ const createEmployeeSchema = z.object({
   phone: z
     .string()
     .trim()
+    .min(7, "Ingresa un teléfono válido")
     .max(20, "El teléfono es demasiado largo")
-    .optional()
-    .refine((value) => !value || value.length >= 7, {
-      message: "El teléfono debe tener al menos 7 dígitos",
-    }),
+    .regex(/^[0-9+\-\s]+$/, "El teléfono solo puede tener números y símbolos + -"),
 })
 
 export async function GET() {
@@ -36,10 +34,12 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const json = await request.json().catch(() => ({}))
-    const payload = createEmployeeSchema.transform((data) => ({
-      ...data,
-      phone: data.phone ? data.phone.trim() : undefined,
-    })).parse(json)
+    const payload = createEmployeeSchema
+      .transform((data) => ({
+        ...data,
+        phone: data.phone.trim(),
+      }))
+      .parse(json)
 
     const employee = await registerEmployee(payload)
 

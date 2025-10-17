@@ -104,7 +104,7 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
       COALESCE(COUNT(a.id), 0) AS total_appointments,
       COALESCE(COUNT(a.id) FILTER (WHERE a.estado IN ('pendiente', 'confirmada')), 0) AS active_appointments,
       COALESCE(COUNT(a.id) FILTER (WHERE a.estado = 'completada'), 0) AS completed_appointments,
-      COALESCE(SUM(p.monto_final), 0) AS total_revenue,
+  COALESCE(SUM(p.monto), 0) AS total_revenue,
       COALESCE(array_agg(DISTINCT s.nombre) FILTER (WHERE s.nombre IS NOT NULL), ARRAY[]::text[]) AS services
     FROM tenant_base.empleados e
     INNER JOIN tenant_base.users u ON u.id = e.user_id
@@ -173,18 +173,20 @@ export async function registerEmployee(input: {
   name: string
   email: string
   password: string
-  phone?: string | null
+  phone: string
 }): Promise<EmployeeSummary> {
   let user: AuthUser
 
   try {
+    const sanitizedPhone = input.phone.trim()
+
     user = await createUser({
       email: input.email,
       password: input.password,
       role: "barber",
       profile: {
         name: input.name,
-        phone: input.phone ?? undefined,
+        phone: sanitizedPhone,
       },
     })
   } catch (error) {
@@ -193,19 +195,6 @@ export async function registerEmployee(input: {
     }
 
     throw error
-  }
-
-  if (input.phone) {
-    try {
-      await pool.query(
-        `UPDATE tenant_base.empleados
-           SET telefono = $1
-         WHERE user_id = $2`,
-        [input.phone, user.id],
-      )
-    } catch (error) {
-      console.warn("Failed to update employee phone", { userId: user.id, error })
-    }
   }
 
   const employee = await getEmployeeByUserId(user.id)

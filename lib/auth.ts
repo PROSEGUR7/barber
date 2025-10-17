@@ -204,16 +204,18 @@ export async function createUser({
       )
     } else if (appRole === "barber") {
       const fullName = profile?.name?.trim()
-      if (!fullName) {
+      const phone = profile?.phone?.trim()
+
+      if (!fullName || !phone) {
         throw new MissingProfileDataError(
           "EMPLOYEE_PROFILE_DATA_REQUIRED",
         )
       }
 
       await client.query(
-        `INSERT INTO tenant_base.empleados (user_id, nombre)
-         VALUES ($1, $2)`,
-        [userRow.id, fullName],
+        `INSERT INTO tenant_base.empleados (user_id, nombre, telefono)
+         VALUES ($1, $2, $3)`,
+        [userRow.id, fullName, phone],
       )
     }
 

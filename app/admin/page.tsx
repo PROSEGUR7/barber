@@ -169,7 +169,7 @@ export default function AdminDashboard() {
 
     const sanitizedName = formName.trim()
     const sanitizedEmail = formEmail.trim().toLowerCase()
-    const sanitizedPhone = formPhone.trim()
+  const sanitizedPhone = formPhone.trim()
 
     if (sanitizedName.length < 2) {
       setFormError("Ingresa un nombre válido.")
@@ -181,8 +181,18 @@ export default function AdminDashboard() {
       return
     }
 
-    if (sanitizedPhone && sanitizedPhone.length < 7) {
+    if (!sanitizedPhone) {
       setFormError("Ingresa un teléfono válido.")
+      return
+    }
+
+    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
+      setFormError("El teléfono debe tener entre 7 y 20 caracteres.")
+      return
+    }
+
+    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
+      setFormError("El teléfono solo puede tener números y símbolos + -.")
       return
     }
 
@@ -203,7 +213,7 @@ export default function AdminDashboard() {
           name: sanitizedName,
           email: sanitizedEmail,
           password: formPassword,
-          phone: sanitizedPhone || undefined,
+          phone: sanitizedPhone,
         }),
       })
 
@@ -356,9 +366,10 @@ export default function AdminDashboard() {
                             setFormPhone(event.target.value)
                             setFormError(null)
                           }}
-                          placeholder="Opcional"
+                          placeholder="Ej. 3001234567"
+                          required
                         />
-                        <FieldDescription>Útil para recordatorios y contacto directo.</FieldDescription>
+                        <FieldDescription>Solo números, espacios o símbolos + - (mínimo 7 caracteres).</FieldDescription>
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
