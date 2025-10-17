@@ -1,26 +1,12 @@
-"use client"
+﻿"use client"
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { CalendarCheck2, CalendarClock, DollarSign, Plus, UserCircle, Users } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { CalendarCheck2, CalendarClock, DollarSign, UserCircle, Users } from "lucide-react"
 
-import { AdminClientsTable, AdminEmployeesTable } from "@/components/admin"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet"
-import { useToast } from "@/hooks/use-toast"
 import type { ClientSummary, EmployeeSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
@@ -29,17 +15,9 @@ type EmployeesResponse = {
   error?: string
 }
 
-type CreateEmployeeResponse = EmployeesResponse & {
-  employee?: EmployeeSummary
-}
-
 type ClientsResponse = {
   clients?: ClientSummary[]
   error?: string
-}
-
-type CreateClientResponse = ClientsResponse & {
-  client?: ClientSummary
 }
 
 function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
@@ -51,46 +29,13 @@ function sortClients(list: ClientSummary[]): ClientSummary[] {
 }
 
 export default function AdminDashboard() {
-  const { toast } = useToast()
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
-  const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
-  const [employeesError, setEmployeesError] = useState<string | null>(null)
-  const [isEmployeeRegisterOpen, setIsEmployeeRegisterOpen] = useState(false)
-  const [employeeFormName, setEmployeeFormName] = useState("")
-  const [employeeFormEmail, setEmployeeFormEmail] = useState("")
-  const [employeeFormPhone, setEmployeeFormPhone] = useState("")
-  const [employeeFormPassword, setEmployeeFormPassword] = useState("")
-  const [employeeFormError, setEmployeeFormError] = useState<string | null>(null)
-  const [isEmployeeSubmitting, setIsEmployeeSubmitting] = useState(false)
-
   const [clients, setClients] = useState<ClientSummary[]>([])
+  const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
   const [areClientsLoading, setAreClientsLoading] = useState(true)
+  const [employeesError, setEmployeesError] = useState<string | null>(null)
   const [clientsError, setClientsError] = useState<string | null>(null)
-  const [isClientRegisterOpen, setIsClientRegisterOpen] = useState(false)
-  const [clientFormName, setClientFormName] = useState("")
-  const [clientFormEmail, setClientFormEmail] = useState("")
-  const [clientFormPhone, setClientFormPhone] = useState("")
-  const [clientFormPassword, setClientFormPassword] = useState("")
-  const [clientFormError, setClientFormError] = useState<string | null>(null)
-  const [isClientSubmitting, setIsClientSubmitting] = useState(false)
 
-  const resetEmployeeForm = useCallback(() => {
-    setEmployeeFormName("")
-    setEmployeeFormEmail("")
-    setEmployeeFormPhone("")
-    setEmployeeFormPassword("")
-    setEmployeeFormError(null)
-  }, [])
-
-  const resetClientForm = useCallback(() => {
-    setClientFormName("")
-    setClientFormEmail("")
-    setClientFormPhone("")
-    setClientFormPassword("")
-    setClientFormError(null)
-  }, [])
-
-  // Fetch employees from the API and avoid state updates when unmounted.
   const loadEmployees = useCallback(
     async (signal?: AbortSignal) => {
       setAreEmployeesLoading(true)
@@ -108,12 +53,12 @@ export default function AdminDashboard() {
           const list = Array.isArray(data.employees) ? data.employees : []
           setEmployees(sortEmployees(list))
         }
-      } catch (err) {
+      } catch (error) {
         if (signal?.aborted) {
           return
         }
 
-        console.error("Error fetching employees", err)
+        console.error("Error fetching employees", error)
         setEmployeesError("No se pudieron cargar los empleados.")
       } finally {
         if (!signal?.aborted) {
@@ -141,12 +86,12 @@ export default function AdminDashboard() {
           const list = Array.isArray(data.clients) ? data.clients : []
           setClients(sortClients(list))
         }
-      } catch (err) {
+      } catch (error) {
         if (signal?.aborted) {
           return
         }
 
-        console.error("Error fetching clients", err)
+        console.error("Error fetching clients", error)
         setClientsError("No se pudieron cargar los clientes.")
       } finally {
         if (!signal?.aborted) {
@@ -171,21 +116,13 @@ export default function AdminDashboard() {
     return () => controller.abort()
   }, [loadClients])
 
-  useEffect(() => {
-    if (!isEmployeeRegisterOpen) {
-      resetEmployeeForm()
-      setIsEmployeeSubmitting(false)
-    }
-  }, [isEmployeeRegisterOpen, resetEmployeeForm])
+  const handleReload = useCallback(() => {
+    void loadEmployees()
+    void loadClients()
+  }, [loadClients, loadEmployees])
 
-  useEffect(() => {
-    if (!isClientRegisterOpen) {
-      resetClientForm()
-      setIsClientSubmitting(false)
-    }
-  }, [isClientRegisterOpen, resetClientForm])
-
-  const isDashboardLoading = areEmployeesLoading || areClientsLoading
+  const isLoading = areEmployeesLoading || areClientsLoading
+  const hasErrors = Boolean(employeesError || clientsError)
 
   const metrics = useMemo(() => {
     const totals = {
@@ -207,194 +144,33 @@ export default function AdminDashboard() {
     return totals
   }, [clients, employees])
 
-  const shouldShowEmployeesErrorCard = Boolean(employeesError) && !areEmployeesLoading && employees.length === 0
-  const shouldShowClientsErrorCard = Boolean(clientsError) && !areClientsLoading && clients.length === 0
-
-  const handleEmployeesReload = useCallback(() => {
-    void loadEmployees()
-  }, [loadEmployees])
-
-  const handleClientsReload = useCallback(() => {
-    void loadClients()
-  }, [loadClients])
-
-  const handleEmployeeSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setEmployeeFormError(null)
-
-    const sanitizedName = employeeFormName.trim()
-    const sanitizedEmail = employeeFormEmail.trim().toLowerCase()
-    const sanitizedPhone = employeeFormPhone.trim()
-
-    if (sanitizedName.length < 2) {
-      setEmployeeFormError("Ingresa un nombre válido.")
-      return
-    }
-
-    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
-      setEmployeeFormError("Ingresa un correo válido.")
-      return
-    }
-
-    if (!sanitizedPhone) {
-      setEmployeeFormError("Ingresa un teléfono válido.")
-      return
-    }
-
-    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
-      setEmployeeFormError("El teléfono debe tener entre 7 y 20 caracteres.")
-      return
-    }
-
-    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
-      setEmployeeFormError("El teléfono solo puede tener números y símbolos + -.")
-      return
-    }
-
-    if (employeeFormPassword.length < 8) {
-      setEmployeeFormError("La contraseña debe tener al menos 8 caracteres.")
-      return
-    }
-
-    setIsEmployeeSubmitting(true)
-
-    try {
-      const response = await fetch("/api/admin/employees", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: sanitizedName,
-          email: sanitizedEmail,
-          password: employeeFormPassword,
-          phone: sanitizedPhone,
-        }),
-      })
-
-      const data: CreateEmployeeResponse = await response.json().catch(() => ({} as CreateEmployeeResponse))
-
-      if (!response.ok || !data.employee) {
-        setEmployeeFormError(data.error ?? "No se pudo crear el empleado.")
-        return
-      }
-
-      setEmployees((previous) => {
-        const next = previous.filter((item) => item.id !== data.employee!.id)
-        next.push(data.employee!)
-        return sortEmployees(next)
-      })
-
-      setEmployeesError(null)
-      resetEmployeeForm()
-      setIsEmployeeRegisterOpen(false)
-
-      toast({
-        title: "Empleado registrado",
-        description: "El nuevo empleado ya puede gestionar citas y servicios.",
-      })
-    } catch (err) {
-      console.error("Error creating employee", err)
-      setEmployeeFormError("Error de conexión con el servidor.")
-    } finally {
-      setIsEmployeeSubmitting(false)
-    }
-  }
-
-  const handleClientSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setClientFormError(null)
-
-    const sanitizedName = clientFormName.trim()
-    const sanitizedEmail = clientFormEmail.trim().toLowerCase()
-    const sanitizedPhone = clientFormPhone.trim()
-
-    if (sanitizedName.length < 2) {
-      setClientFormError("Ingresa un nombre válido.")
-      return
-    }
-
-    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
-      setClientFormError("Ingresa un correo válido.")
-      return
-    }
-
-    if (!sanitizedPhone) {
-      setClientFormError("Ingresa un teléfono válido.")
-      return
-    }
-
-    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
-      setClientFormError("El teléfono debe tener entre 7 y 20 caracteres.")
-      return
-    }
-
-    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
-      setClientFormError("El teléfono solo puede tener números y símbolos + -.")
-      return
-    }
-
-    if (clientFormPassword.length < 8) {
-      setClientFormError("La contraseña debe tener al menos 8 caracteres.")
-      return
-    }
-
-    setIsClientSubmitting(true)
-
-    try {
-      const response = await fetch("/api/admin/clients", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: sanitizedName,
-          email: sanitizedEmail,
-          password: clientFormPassword,
-          phone: sanitizedPhone,
-        }),
-      })
-
-      const data: CreateClientResponse = await response.json().catch(() => ({} as CreateClientResponse))
-
-      if (!response.ok || !data.client) {
-        setClientFormError(data.error ?? "No se pudo crear el cliente.")
-        return
-      }
-
-      setClients((previous) => {
-        const next = previous.filter((item) => item.id !== data.client!.id)
-        next.push(data.client!)
-        return sortClients(next)
-      })
-
-      setClientsError(null)
-      resetClientForm()
-      setIsClientRegisterOpen(false)
-
-      toast({
-        title: "Cliente registrado",
-        description: "El nuevo cliente ya puede gestionar sus reservas.",
-      })
-    } catch (err) {
-      console.error("Error creating client", err)
-      setClientFormError("Error de conexión con el servidor.")
-    } finally {
-      setIsClientSubmitting(false)
-    }
-  }
-
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Panel de administración</h1>
           <p className="text-muted-foreground">
-            Monitorea el rendimiento del equipo, la base de clientes y registra nuevos perfiles.
+            Consulta los indicadores generales de la barberia y navega a las secciones detalladas desde la barra
+            lateral.
           </p>
         </header>
 
-        {isDashboardLoading ? (
+        {hasErrors && (
+          <Alert variant="destructive">
+            <AlertTitle>Tuvimos problemas al cargar algunos datos</AlertTitle>
+            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1 text-sm">
+                {employeesError && <p>Empleados: {employeesError}</p>}
+                {clientsError && <p>Clientes: {clientsError}</p>}
+              </div>
+              <Button variant="outline" onClick={handleReload}>
+                Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {isLoading ? (
           <StatsSkeleton />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
@@ -452,315 +228,6 @@ export default function AdminDashboard() {
             </Card>
           </div>
         )}
-
-    <section id="empleados" className="scroll-mt-24 space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-semibold">Gestión de empleados</h2>
-              <p className="text-muted-foreground">Consulta actividad, servicios y registra nuevos perfiles.</p>
-            </div>
-            <Sheet open={isEmployeeRegisterOpen} onOpenChange={setIsEmployeeRegisterOpen}>
-              <SheetTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Registrar empleado
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
-                <form onSubmit={handleEmployeeSubmit} className="flex h-full flex-col">
-                  <SheetHeader className="border-b px-6 py-4 text-left">
-                    <SheetTitle>Registrar nuevo empleado</SheetTitle>
-                    <SheetDescription>
-                      Crea un usuario para un miembro del equipo. Podrá actualizar sus datos después.
-                    </SheetDescription>
-                  </SheetHeader>
-                  <div className="flex-1 overflow-y-auto px-6 py-4">
-                    <FieldGroup>
-                      <Field>
-                        <FieldLabel htmlFor="employee-name">Nombre completo</FieldLabel>
-                        <Input
-                          id="employee-name"
-                          value={employeeFormName}
-                          onChange={(event) => {
-                            setEmployeeFormName(event.target.value)
-                            setEmployeeFormError(null)
-                          }}
-                          placeholder="Ej. Juan Pérez"
-                          required
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="employee-email">Correo electrónico</FieldLabel>
-                        <Input
-                          id="employee-email"
-                          type="email"
-                          value={employeeFormEmail}
-                          onChange={(event) => {
-                            setEmployeeFormEmail(event.target.value)
-                            setEmployeeFormError(null)
-                          }}
-                          placeholder="empleado@barberia.com"
-                          required
-                        />
-                        <FieldDescription>El empleado usará este correo para iniciar sesión.</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="employee-phone">Teléfono</FieldLabel>
-                        <Input
-                          id="employee-phone"
-                          type="tel"
-                          value={employeeFormPhone}
-                          onChange={(event) => {
-                            setEmployeeFormPhone(event.target.value)
-                            setEmployeeFormError(null)
-                          }}
-                          placeholder="Ej. 3001234567"
-                          required
-                        />
-                        <FieldDescription>Solo números, espacios o símbolos + - (mínimo 7 caracteres).</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
-                        <Input
-                          id="employee-password"
-                          type="password"
-                          value={employeeFormPassword}
-                          onChange={(event) => {
-                            setEmployeeFormPassword(event.target.value)
-                            setEmployeeFormError(null)
-                          }}
-                          placeholder="Mínimo 8 caracteres"
-                          minLength={8}
-                          required
-                        />
-                        <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
-                      </Field>
-                    </FieldGroup>
-                  </div>
-                  <SheetFooter className="border-t px-6 py-4">
-                    {employeeFormError && <p className="text-sm text-destructive">{employeeFormError}</p>}
-                    <Button type="submit" className="w-full" disabled={isEmployeeSubmitting}>
-                      {isEmployeeSubmitting ? "Registrando..." : "Registrar empleado"}
-                    </Button>
-                  </SheetFooter>
-                </form>
-              </SheetContent>
-            </Sheet>
-          </div>
-
-          {shouldShowEmployeesErrorCard ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>No pudimos cargar a los empleados</CardTitle>
-                <CardDescription>Intenta nuevamente para ver la información más reciente del equipo.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-                <Button onClick={handleEmployeesReload}>Reintentar</Button>
-              </CardContent>
-            </Card>
-          ) : areEmployeesLoading ? (
-            <EmployeesTableSkeleton />
-          ) : employees.length === 0 ? (
-            <Empty className="border border-dashed">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Users className="h-5 w-5" />
-                </EmptyMedia>
-                <EmptyTitle>Sin empleados registrados</EmptyTitle>
-                <EmptyDescription>
-                  Crea el primer perfil para comenzar a asignar citas y servicios.
-                </EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={() => setIsEmployeeRegisterOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Registrar empleado
-                </Button>
-              </EmptyContent>
-            </Empty>
-          ) : (
-            <>
-              {employeesError && (
-                <Alert variant="destructive">
-                  <AlertTitle>Error al actualizar la lista</AlertTitle>
-                  <AlertDescription>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <span>{employeesError}</span>
-                      <Button variant="outline" onClick={handleEmployeesReload}>
-                        Reintentar
-                      </Button>
-                    </div>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <AdminEmployeesTable employees={employees} />
-            </>
-          )}
-        </section>
-
-        <section id="clientes" className="scroll-mt-24 space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-semibold">Gestión de clientes</h2>
-              <p className="text-muted-foreground">Revisa historial de citas, clasificaciones y registra nuevos clientes.</p>
-            </div>
-            <Sheet open={isClientRegisterOpen} onOpenChange={setIsClientRegisterOpen}>
-              <SheetTrigger asChild>
-                <Button variant="outline">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Registrar cliente
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
-                <form onSubmit={handleClientSubmit} className="flex h-full flex-col">
-                  <SheetHeader className="border-b px-6 py-4 text-left">
-                    <SheetTitle>Registrar nuevo cliente</SheetTitle>
-                    <SheetDescription>
-                      Crea un acceso para un cliente. Podrá actualizar sus datos después.
-                    </SheetDescription>
-                  </SheetHeader>
-                  <div className="flex-1 overflow-y-auto px-6 py-4">
-                    <FieldGroup>
-                      <Field>
-                        <FieldLabel htmlFor="client-name">Nombre completo</FieldLabel>
-                        <Input
-                          id="client-name"
-                          value={clientFormName}
-                          onChange={(event) => {
-                            setClientFormName(event.target.value)
-                            setClientFormError(null)
-                          }}
-                          placeholder="Ej. Andrea Gómez"
-                          required
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="client-email">Correo electrónico</FieldLabel>
-                        <Input
-                          id="client-email"
-                          type="email"
-                          value={clientFormEmail}
-                          onChange={(event) => {
-                            setClientFormEmail(event.target.value)
-                            setClientFormError(null)
-                          }}
-                          placeholder="cliente@correo.com"
-                          required
-                        />
-                        <FieldDescription>El cliente usará este correo para iniciar sesión.</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="client-phone">Teléfono</FieldLabel>
-                        <Input
-                          id="client-phone"
-                          type="tel"
-                          value={clientFormPhone}
-                          onChange={(event) => {
-                            setClientFormPhone(event.target.value)
-                            setClientFormError(null)
-                          }}
-                          placeholder="Ej. 3109876543"
-                          required
-                        />
-                        <FieldDescription>Solo números, espacios o símbolos + - (mínimo 7 caracteres).</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="client-password">Contraseña temporal</FieldLabel>
-                        <Input
-                          id="client-password"
-                          type="password"
-                          value={clientFormPassword}
-                          onChange={(event) => {
-                            setClientFormPassword(event.target.value)
-                            setClientFormError(null)
-                          }}
-                          placeholder="Mínimo 8 caracteres"
-                          minLength={8}
-                          required
-                        />
-                        <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
-                      </Field>
-                    </FieldGroup>
-                  </div>
-                  <SheetFooter className="border-t px-6 py-4">
-                    {clientFormError && <p className="text-sm text-destructive">{clientFormError}</p>}
-                    <Button type="submit" className="w-full" disabled={isClientSubmitting}>
-                      {isClientSubmitting ? "Registrando..." : "Registrar cliente"}
-                    </Button>
-                  </SheetFooter>
-                </form>
-              </SheetContent>
-            </Sheet>
-          </div>
-
-          {shouldShowClientsErrorCard ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>No pudimos cargar a los clientes</CardTitle>
-                <CardDescription>Intenta nuevamente para obtener la lista actualizada de clientes.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-                <Button onClick={handleClientsReload}>Reintentar</Button>
-              </CardContent>
-            </Card>
-          ) : areClientsLoading ? (
-            <ClientsTableSkeleton />
-          ) : clients.length === 0 ? (
-            <Empty className="border border-dashed">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <UserCircle className="h-5 w-5" />
-                </EmptyMedia>
-                <EmptyTitle>Sin clientes registrados</EmptyTitle>
-                <EmptyDescription>Registra el primer cliente para gestionar reservas y seguimientos.</EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={() => setIsClientRegisterOpen(true)} variant="outline">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Registrar cliente
-                </Button>
-              </EmptyContent>
-            </Empty>
-          ) : (
-            <>
-              {clientsError && (
-                <Alert variant="destructive">
-                  <AlertTitle>Error al actualizar la lista</AlertTitle>
-                  <AlertDescription>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <span>{clientsError}</span>
-                      <Button variant="outline" onClick={handleClientsReload}>
-                        Reintentar
-                      </Button>
-                    </div>
-                  </AlertDescription>
-                </Alert>
-              )}
-              <AdminClientsTable clients={clients} />
-            </>
-          )}
-        </section>
-
-        <PlaceholderSection
-          id="citas"
-          title="Agendamientos"
-          description="Monitorea y administra las reservas pendientes y completadas."
-        />
-        <PlaceholderSection
-          id="servicios"
-          title="Servicios"
-          description="Configura los servicios ofrecidos y sus tarifas."
-        />
-        <PlaceholderSection
-          id="pagos"
-          title="Pagos y facturación"
-          description="Supervisa los pagos recibidos y las facturas generadas."
-        />
-        <PlaceholderSection
-          id="ajustes"
-          title="Ajustes y configuración"
-          description="Personaliza parámetros generales del panel administrativo."
-        />
       </main>
     </div>
   )
@@ -768,7 +235,7 @@ export default function AdminDashboard() {
 
 function StatsSkeleton() {
   return (
-  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
       {Array.from({ length: 5 }).map((_, index) => (
         <Card key={index}>
           <CardHeader className="space-y-2">
@@ -781,101 +248,5 @@ function StatsSkeleton() {
         </Card>
       ))}
     </div>
-  )
-}
-
-function ClientsTableSkeleton() {
-  return (
-    <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
-      <CardHeader className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-10 w-10 rounded-xl" />
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-44" />
-            <Skeleton className="h-3 w-64" />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Skeleton className="h-9 w-full sm:w-64" />
-          <div className="flex gap-2">
-            <Skeleton className="h-9 w-32" />
-            <Skeleton className="h-9 w-28" />
-            <Skeleton className="h-9 w-28" />
-          </div>
-        </div>
-        <div className="overflow-hidden rounded-xl border border-border/60">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <div
-              key={index}
-              className="border-border/60 bg-muted/20 px-4 py-5"
-            >
-              <Skeleton className="h-6 w-full" />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function EmployeesTableSkeleton() {
-  return (
-    <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
-      <CardHeader className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-10 w-10 rounded-xl" />
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-3 w-72" />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Skeleton className="h-9 w-full sm:w-64" />
-          <div className="flex gap-2">
-            <Skeleton className="h-9 w-32" />
-            <Skeleton className="h-9 w-24" />
-            <Skeleton className="h-9 w-28" />
-          </div>
-        </div>
-        <div className="overflow-hidden rounded-xl border border-border/60">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <div
-              key={index}
-              className="border-border/60 bg-muted/20 px-4 py-5"
-            >
-              <Skeleton className="h-6 w-full" />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function PlaceholderSection({
-  id,
-  title,
-  description,
-}: {
-  id: string
-  title: string
-  description: string
-}) {
-  return (
-    <section id={id} className="scroll-mt-24 space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-2xl font-semibold">{title}</h2>
-        <p className="text-muted-foreground">{description}</p>
-      </div>
-      <Card className="border border-dashed">
-        <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          Estamos trabajando en esta sección. Pronto verás información detallada aquí.
-        </CardContent>
-      </Card>
-    </section>
   )
 }

@@ -109,12 +109,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     const adminNav = [
       { title: "Dashboard General", url: "/admin", icon: Home },
-      { title: "Agendamientos", url: "/admin#citas", icon: CalendarDays },
-      { title: "Empleados", url: "/admin#empleados", icon: Users },
-      { title: "Clientes", url: "/admin#clientes", icon: Users },
-      { title: "Servicios", url: "/admin#servicios", icon: Scissors },
-      { title: "Pagos y Facturación", url: "/admin#pagos", icon: Receipt },
-      { title: "Ajustes / Configuración", url: "/admin#ajustes", icon: Settings2 },
+      { title: "Agendamientos", url: "/admin/agendamientos", icon: CalendarDays },
+      { title: "Empleados", url: "/admin/empleados", icon: Users },
+      { title: "Clientes", url: "/admin/clientes", icon: Users },
+      { title: "Servicios", url: "/admin/servicios", icon: Scissors },
+      { title: "Pagos y Facturación", url: "/admin/pagos", icon: Receipt },
+      { title: "Ajustes / Configuración", url: "/admin/ajustes", icon: Settings2 },
     ]
 
     return {
