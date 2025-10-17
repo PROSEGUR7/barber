@@ -3,8 +3,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { CalendarCheck2, CalendarClock, DollarSign, Plus, Users } from "lucide-react"
 
+import { AdminEmployeesTable } from "@/components/admin"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -20,9 +20,9 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useToast } from "@/hooks/use-toast"
 import type { EmployeeSummary } from "@/lib/admin"
+import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type EmployeesResponse = {
   employees?: EmployeeSummary[]
@@ -33,40 +33,8 @@ type CreateEmployeeResponse = EmployeesResponse & {
   employee?: EmployeeSummary
 }
 
-const SERVICE_BADGE_LIMIT = 3
-const currencyFormatter = new Intl.NumberFormat("es-AR", {
-  style: "currency",
-  currency: "ARS",
-})
-const numberFormatter = new Intl.NumberFormat("es-AR")
-
 function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
-}
-
-function formatCurrency(value: number): string {
-  return currencyFormatter.format(value)
-}
-
-function formatNumber(value: number): string {
-  return numberFormatter.format(value)
-}
-
-function formatJoinedAt(value: string | null): string {
-  if (!value) {
-    return "Sin fecha"
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return "Sin fecha"
-  }
-
-  return date.toLocaleDateString("es-ES", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  })
 }
 
 export default function AdminDashboard() {
@@ -445,92 +413,12 @@ export default function AdminDashboard() {
                   </AlertDescription>
                 </Alert>
               )}
-              <EmployeesTable employees={employees} />
+              <AdminEmployeesTable employees={employees} />
             </>
           )}
         </section>
       </main>
     </div>
-  )
-}
-
-function EmployeesTable({ employees }: { employees: EmployeeSummary[] }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Empleados registrados</CardTitle>
-        <CardDescription>Actividad reciente del equipo y servicios asignados.</CardDescription>
-      </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Empleado</TableHead>
-              <TableHead>Contacto</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead>Citas</TableHead>
-              <TableHead className="text-right">Ingresos</TableHead>
-              <TableHead>Servicios</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {employees.map((employee) => {
-              const servicesToShow = employee.services.slice(0, SERVICE_BADGE_LIMIT)
-              const remainingServices = employee.services.length - servicesToShow.length
-
-              return (
-                <TableRow key={employee.id}>
-                  <TableCell>
-                    <div className="font-medium">{employee.name}</div>
-                    <div className="text-xs text-muted-foreground">ID usuario: {employee.userId}</div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm">{employee.email}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {employee.phone ? employee.phone : "Sin teléfono"}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col gap-2">
-                      <Badge variant="outline" className="w-fit capitalize">
-                        {employee.status ?? "Sin estado"}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        Ingreso: {formatJoinedAt(employee.joinedAt)}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm font-semibold">{formatNumber(employee.totalAppointments)}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Próximas: {formatNumber(employee.upcomingAppointments)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Completadas: {formatNumber(employee.completedAppointments)}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right font-semibold">{formatCurrency(employee.totalRevenue)}</TableCell>
-                  <TableCell>
-                    {servicesToShow.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {servicesToShow.map((service) => (
-                          <Badge key={service} variant="secondary" className="capitalize">
-                            {service}
-                          </Badge>
-                        ))}
-                        {remainingServices > 0 && <Badge variant="outline">+{remainingServices}</Badge>}
-                      </div>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">Sin servicios</span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
   )
 }
 
@@ -554,15 +442,35 @@ function StatsSkeleton() {
 
 function EmployeesTableSkeleton() {
   return (
-    <Card>
-      <CardHeader className="space-y-2">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-4 w-64" />
+    <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
+      <CardHeader className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-72" />
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Skeleton key={index} className="h-12 w-full" />
-        ))}
+      <CardContent className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Skeleton className="h-9 w-full sm:w-64" />
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-32" />
+            <Skeleton className="h-9 w-24" />
+            <Skeleton className="h-9 w-28" />
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-border/60">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div
+              key={index}
+              className="border-border/60 bg-muted/20 px-4 py-5"
+            >
+              <Skeleton className="h-6 w-full" />
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   )
