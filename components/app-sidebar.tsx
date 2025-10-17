@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import {
-  Boxes,
   CalendarDays,
   ClipboardList,
   Clock,
@@ -110,29 +109,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     const adminNav = [
       { title: "Dashboard General", url: "/admin", icon: Home },
-      {
-        title: "Agendamientos",
-        url: "/admin#citas",
-        icon: CalendarDays,
-        items: [
-          { title: "Reservar", url: "/booking" },
-          { title: "Todas las Citas", url: "/admin#citas" },
-        ],
-      },
-      { title: "Empleados", url: "/admin#empleados", icon: Users, items: [
-        { title: "Listado", url: "/admin#empleados" },
-        { title: "Horarios", url: "/admin#horarios" },
-      ] },
-      { title: "Clientes", url: "/admin#clientes", icon: Users, items: [
-        { title: "Listado", url: "/admin#clientes" },
-        { title: "Historial", url: "/admin#historial" },
-      ] },
-      { title: "Servicios", url: "/admin#servicios", icon: Scissors, items: [
-        { title: "Catálogo", url: "/admin#servicios" },
-        { title: "Precios", url: "/admin#precios" },
-      ] },
+      { title: "Agendamientos", url: "/admin#citas", icon: CalendarDays },
+      { title: "Empleados", url: "/admin#empleados", icon: Users },
+      { title: "Clientes", url: "/admin#clientes", icon: Users },
+      { title: "Servicios", url: "/admin#servicios", icon: Scissors },
       { title: "Pagos y Facturación", url: "/admin#pagos", icon: Receipt },
-      { title: "Inventario / Productos", url: "/admin#inventario", icon: Boxes },
       { title: "Ajustes / Configuración", url: "/admin#ajustes", icon: Settings2 },
     ]
 
