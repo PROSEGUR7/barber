@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { CalendarCheck2, CalendarClock, DollarSign, Plus, Users } from "lucide-react"
 
-import { AdminEmployeesTable } from "@/components/admin"
+import { AdminClientsTable, AdminEmployeesTable } from "@/components/admin"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,7 +21,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { useToast } from "@/hooks/use-toast"
-import type { EmployeeSummary } from "@/lib/admin"
+import type { ClientSummary, EmployeeSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type EmployeesResponse = {
@@ -33,36 +33,68 @@ type CreateEmployeeResponse = EmployeesResponse & {
   employee?: EmployeeSummary
 }
 
+type ClientsResponse = {
+  clients?: ClientSummary[]
+  error?: string
+}
+
+type CreateClientResponse = ClientsResponse & {
+  client?: ClientSummary
+}
+
 function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
+}
+
+function sortClients(list: ClientSummary[]): ClientSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
 
 export default function AdminDashboard() {
   const { toast } = useToast()
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [isRegisterOpen, setIsRegisterOpen] = useState(false)
-  const [formName, setFormName] = useState("")
-  const [formEmail, setFormEmail] = useState("")
-  const [formPhone, setFormPhone] = useState("")
-  const [formPassword, setFormPassword] = useState("")
-  const [formError, setFormError] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
+  const [employeesError, setEmployeesError] = useState<string | null>(null)
+  const [isEmployeeRegisterOpen, setIsEmployeeRegisterOpen] = useState(false)
+  const [employeeFormName, setEmployeeFormName] = useState("")
+  const [employeeFormEmail, setEmployeeFormEmail] = useState("")
+  const [employeeFormPhone, setEmployeeFormPhone] = useState("")
+  const [employeeFormPassword, setEmployeeFormPassword] = useState("")
+  const [employeeFormError, setEmployeeFormError] = useState<string | null>(null)
+  const [isEmployeeSubmitting, setIsEmployeeSubmitting] = useState(false)
 
-  const resetForm = useCallback(() => {
-    setFormName("")
-    setFormEmail("")
-    setFormPhone("")
-    setFormPassword("")
-    setFormError(null)
+  const [clients, setClients] = useState<ClientSummary[]>([])
+  const [areClientsLoading, setAreClientsLoading] = useState(true)
+  const [clientsError, setClientsError] = useState<string | null>(null)
+  const [isClientRegisterOpen, setIsClientRegisterOpen] = useState(false)
+  const [clientFormName, setClientFormName] = useState("")
+  const [clientFormEmail, setClientFormEmail] = useState("")
+  const [clientFormPhone, setClientFormPhone] = useState("")
+  const [clientFormPassword, setClientFormPassword] = useState("")
+  const [clientFormError, setClientFormError] = useState<string | null>(null)
+  const [isClientSubmitting, setIsClientSubmitting] = useState(false)
+
+  const resetEmployeeForm = useCallback(() => {
+    setEmployeeFormName("")
+    setEmployeeFormEmail("")
+    setEmployeeFormPhone("")
+    setEmployeeFormPassword("")
+    setEmployeeFormError(null)
+  }, [])
+
+  const resetClientForm = useCallback(() => {
+    setClientFormName("")
+    setClientFormEmail("")
+    setClientFormPhone("")
+    setClientFormPassword("")
+    setClientFormError(null)
   }, [])
 
   // Fetch employees from the API and avoid state updates when unmounted.
   const loadEmployees = useCallback(
     async (signal?: AbortSignal) => {
-      setIsLoading(true)
-      setError(null)
+      setAreEmployeesLoading(true)
+      setEmployeesError(null)
 
       try {
         const response = await fetch("/api/admin/employees", { signal, cache: "no-store" })
@@ -82,10 +114,10 @@ export default function AdminDashboard() {
         }
 
         console.error("Error fetching employees", err)
-        setError("No se pudieron cargar los empleados.")
+        setEmployeesError("No se pudieron cargar los empleados.")
       } finally {
         if (!signal?.aborted) {
-          setIsLoading(false)
+          setAreEmployeesLoading(false)
         }
       }
     },
@@ -100,11 +132,11 @@ export default function AdminDashboard() {
   }, [loadEmployees])
 
   useEffect(() => {
-    if (!isRegisterOpen) {
-      resetForm()
-      setIsSubmitting(false)
+    if (!isEmployeeRegisterOpen) {
+      resetEmployeeForm()
+      setIsEmployeeSubmitting(false)
     }
-  }, [isRegisterOpen, resetForm])
+  }, [isEmployeeRegisterOpen, resetEmployeeForm])
 
   const metrics = useMemo(() => {
     const totals = {
@@ -125,51 +157,51 @@ export default function AdminDashboard() {
     return totals
   }, [employees])
 
-  const shouldShowErrorCard = Boolean(error) && !isLoading && employees.length === 0
+  const shouldShowEmployeesErrorCard = Boolean(employeesError) && !areEmployeesLoading && employees.length === 0
 
-  const handleReload = useCallback(() => {
+  const handleEmployeesReload = useCallback(() => {
     void loadEmployees()
   }, [loadEmployees])
 
   const handleEmployeeSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setFormError(null)
+    setEmployeeFormError(null)
 
-    const sanitizedName = formName.trim()
-    const sanitizedEmail = formEmail.trim().toLowerCase()
-  const sanitizedPhone = formPhone.trim()
+    const sanitizedName = employeeFormName.trim()
+    const sanitizedEmail = employeeFormEmail.trim().toLowerCase()
+    const sanitizedPhone = employeeFormPhone.trim()
 
     if (sanitizedName.length < 2) {
-      setFormError("Ingresa un nombre válido.")
+      setEmployeeFormError("Ingresa un nombre válido.")
       return
     }
 
     if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
-      setFormError("Ingresa un correo válido.")
+      setEmployeeFormError("Ingresa un correo válido.")
       return
     }
 
     if (!sanitizedPhone) {
-      setFormError("Ingresa un teléfono válido.")
+      setEmployeeFormError("Ingresa un teléfono válido.")
       return
     }
 
     if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
-      setFormError("El teléfono debe tener entre 7 y 20 caracteres.")
+      setEmployeeFormError("El teléfono debe tener entre 7 y 20 caracteres.")
       return
     }
 
     if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
-      setFormError("El teléfono solo puede tener números y símbolos + -.")
+      setEmployeeFormError("El teléfono solo puede tener números y símbolos + -.")
       return
     }
 
-    if (formPassword.length < 8) {
-      setFormError("La contraseña debe tener al menos 8 caracteres.")
+    if (employeeFormPassword.length < 8) {
+      setEmployeeFormError("La contraseña debe tener al menos 8 caracteres.")
       return
     }
 
-    setIsSubmitting(true)
+    setIsEmployeeSubmitting(true)
 
     try {
       const response = await fetch("/api/admin/employees", {
@@ -180,7 +212,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({
           name: sanitizedName,
           email: sanitizedEmail,
-          password: formPassword,
+          password: employeeFormPassword,
           phone: sanitizedPhone,
         }),
       })
@@ -188,7 +220,7 @@ export default function AdminDashboard() {
       const data: CreateEmployeeResponse = await response.json().catch(() => ({} as CreateEmployeeResponse))
 
       if (!response.ok || !data.employee) {
-        setFormError(data.error ?? "No se pudo crear el empleado.")
+        setEmployeeFormError(data.error ?? "No se pudo crear el empleado.")
         return
       }
 
@@ -198,9 +230,9 @@ export default function AdminDashboard() {
         return sortEmployees(next)
       })
 
-  setError(null)
-  resetForm()
-  setIsRegisterOpen(false)
+      setEmployeesError(null)
+      resetEmployeeForm()
+      setIsEmployeeRegisterOpen(false)
 
       toast({
         title: "Empleado registrado",
@@ -208,9 +240,9 @@ export default function AdminDashboard() {
       })
     } catch (err) {
       console.error("Error creating employee", err)
-      setFormError("Error de conexión con el servidor.")
+      setEmployeeFormError("Error de conexión con el servidor.")
     } finally {
-      setIsSubmitting(false)
+      setIsEmployeeSubmitting(false)
     }
   }
 
@@ -224,7 +256,7 @@ export default function AdminDashboard() {
           </p>
         </header>
 
-        {isLoading ? (
+        {areEmployeesLoading ? (
           <StatsSkeleton />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -279,7 +311,7 @@ export default function AdminDashboard() {
               <h2 className="text-2xl font-semibold">Gestión de empleados</h2>
               <p className="text-muted-foreground">Consulta actividad, servicios y registra nuevos perfiles.</p>
             </div>
-            <Sheet open={isRegisterOpen} onOpenChange={setIsRegisterOpen}>
+            <Sheet open={isEmployeeRegisterOpen} onOpenChange={setIsEmployeeRegisterOpen}>
               <SheetTrigger asChild>
                 <Button>
                   <Plus className="mr-2 h-4 w-4" />
@@ -300,10 +332,10 @@ export default function AdminDashboard() {
                         <FieldLabel htmlFor="employee-name">Nombre completo</FieldLabel>
                         <Input
                           id="employee-name"
-                          value={formName}
+                          value={employeeFormName}
                           onChange={(event) => {
-                            setFormName(event.target.value)
-                            setFormError(null)
+                            setEmployeeFormName(event.target.value)
+                            setEmployeeFormError(null)
                           }}
                           placeholder="Ej. Juan Pérez"
                           required
@@ -314,10 +346,10 @@ export default function AdminDashboard() {
                         <Input
                           id="employee-email"
                           type="email"
-                          value={formEmail}
+                          value={employeeFormEmail}
                           onChange={(event) => {
-                            setFormEmail(event.target.value)
-                            setFormError(null)
+                            setEmployeeFormEmail(event.target.value)
+                            setEmployeeFormError(null)
                           }}
                           placeholder="empleado@barberia.com"
                           required
@@ -329,10 +361,10 @@ export default function AdminDashboard() {
                         <Input
                           id="employee-phone"
                           type="tel"
-                          value={formPhone}
+                          value={employeeFormPhone}
                           onChange={(event) => {
-                            setFormPhone(event.target.value)
-                            setFormError(null)
+                            setEmployeeFormPhone(event.target.value)
+                            setEmployeeFormError(null)
                           }}
                           placeholder="Ej. 3001234567"
                           required
@@ -344,10 +376,10 @@ export default function AdminDashboard() {
                         <Input
                           id="employee-password"
                           type="password"
-                          value={formPassword}
+                          value={employeeFormPassword}
                           onChange={(event) => {
-                            setFormPassword(event.target.value)
-                            setFormError(null)
+                            setEmployeeFormPassword(event.target.value)
+                            setEmployeeFormError(null)
                           }}
                           placeholder="Mínimo 8 caracteres"
                           minLength={8}
@@ -358,9 +390,9 @@ export default function AdminDashboard() {
                     </FieldGroup>
                   </div>
                   <SheetFooter className="border-t px-6 py-4">
-                    {formError && <p className="text-sm text-destructive">{formError}</p>}
-                    <Button type="submit" className="w-full" disabled={isSubmitting}>
-                      {isSubmitting ? "Registrando..." : "Registrar empleado"}
+                    {employeeFormError && <p className="text-sm text-destructive">{employeeFormError}</p>}
+                    <Button type="submit" className="w-full" disabled={isEmployeeSubmitting}>
+                      {isEmployeeSubmitting ? "Registrando..." : "Registrar empleado"}
                     </Button>
                   </SheetFooter>
                 </form>
@@ -368,17 +400,17 @@ export default function AdminDashboard() {
             </Sheet>
           </div>
 
-          {shouldShowErrorCard ? (
+          {shouldShowEmployeesErrorCard ? (
             <Card>
               <CardHeader>
                 <CardTitle>No pudimos cargar a los empleados</CardTitle>
                 <CardDescription>Intenta nuevamente para ver la información más reciente del equipo.</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-                <Button onClick={handleReload}>Reintentar</Button>
+                <Button onClick={handleEmployeesReload}>Reintentar</Button>
               </CardContent>
             </Card>
-          ) : isLoading ? (
+          ) : areEmployeesLoading ? (
             <EmployeesTableSkeleton />
           ) : employees.length === 0 ? (
             <Empty className="border border-dashed">
@@ -392,7 +424,7 @@ export default function AdminDashboard() {
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button onClick={() => setIsRegisterOpen(true)}>
+                <Button onClick={() => setIsEmployeeRegisterOpen(true)}>
                   <Plus className="mr-2 h-4 w-4" />
                   Registrar empleado
                 </Button>
@@ -400,13 +432,13 @@ export default function AdminDashboard() {
             </Empty>
           ) : (
             <>
-              {error && (
+              {employeesError && (
                 <Alert variant="destructive">
                   <AlertTitle>Error al actualizar la lista</AlertTitle>
                   <AlertDescription>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <span>{error}</span>
-                      <Button variant="outline" onClick={handleReload}>
+                      <span>{employeesError}</span>
+                      <Button variant="outline" onClick={handleEmployeesReload}>
                         Reintentar
                       </Button>
                     </div>

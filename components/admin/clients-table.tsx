@@ -7,9 +7,9 @@ import {
   useState,
 } from 'react'
 import {
-  type ColumnDef,
-  type Column,
   type CellContext,
+  type Column,
+  type ColumnDef,
   type HeaderContext,
   type RowSelectionState,
   type SortingState,
@@ -27,10 +27,11 @@ import {
   IconDownload,
   IconMail,
   IconPhone,
-  IconUsersGroup,
+  IconUsers,
 } from '@tabler/icons-react'
 import {
   ArrowUpDown,
+  CalendarClock,
   MoreHorizontal,
   Search,
 } from 'lucide-react'
@@ -64,68 +65,73 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useToast } from '@/hooks/use-toast'
-import type { EmployeeSummary } from '@/lib/admin'
+import type { ClientSummary } from '@/lib/admin'
 import {
   formatCurrency,
-  formatJoinedAt,
+  formatDate,
+  formatDateTime,
   formatNumber,
 } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 
-const SERVICE_BADGE_LIMIT = 3
 const COLUMN_LABELS: Record<string, string> = {
-  name: 'Empleado',
+  name: 'Cliente',
   contact: 'Contacto',
-  status: 'Estado',
+  type: 'Tipo',
   totalAppointments: 'Citas',
-  totalRevenue: 'Ingresos',
-  services: 'Servicios',
+  lastAppointmentAt: 'Última cita',
+  totalSpent: 'Total invertido',
   actions: 'Acciones',
 }
 
-export function AdminEmployeesTable({
-  employees,
+export function AdminClientsTable({
+  clients,
 }: {
-  employees: EmployeeSummary[]
+  clients: ClientSummary[]
 }) {
   const { toast } = useToast()
   const [sorting, setSorting] = useState<SortingState>([
-    { id: 'totalRevenue', desc: true },
+    { id: 'totalSpent', desc: true },
   ])
   const [columnVisibility, setColumnVisibility] =
     useState<VisibilityState>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
   const [density, setDensity] = useState<'comfortable' | 'compact'>(
     'comfortable',
   )
 
-  const statusOptions = useMemo(() => {
+  const handleUnavailableAction = useCallback(
+    (action: string, clientName: string) => {
+      toast({
+        title: `${action} aún no disponible`,
+        description: `Pronto podrás gestionar esta acción para ${clientName}.`,
+      })
+    },
+    [toast],
+  )
+
+  const typeOptions = useMemo(() => {
     const map = new Map<string, string>()
 
-    for (const employee of employees) {
-      const normalized = normalizeStatus(employee.status)
+    for (const client of clients) {
+      const normalized = normalizeClientType(client.type)
       map.set(normalized.value, normalized.label)
     }
 
     return Array.from(map.entries())
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }))
-  }, [employees])
+  }, [clients])
 
-  const filteredEmployees = useMemo(() => {
+  const filteredClients = useMemo(() => {
     const search = searchTerm.trim().toLowerCase()
 
-    return employees.filter((employee) => {
+    return clients.filter((client) => {
       const matchesSearch =
         search.length === 0 ||
-        [
-          employee.name,
-          employee.email,
-          employee.phone ?? '',
-          employee.services.join(' '),
-        ]
+        [client.name, client.email, client.phone ?? '']
           .map((value) => value.toLowerCase())
           .some((value) => value.includes(search))
 
@@ -133,33 +139,23 @@ export function AdminEmployeesTable({
         return false
       }
 
-      if (statusFilter === 'all') {
+      if (typeFilter === 'all') {
         return true
       }
 
-      if (statusFilter === 'sin-estado') {
-        return !employee.status
+      if (typeFilter === 'sin-clasificar') {
+        return !client.type
       }
 
-      return employee.status?.toLowerCase() === statusFilter
+      return client.type?.toLowerCase() === typeFilter
     })
-  }, [employees, searchTerm, statusFilter])
+  }, [clients, searchTerm, typeFilter])
 
-  const handleUnavailableAction = useCallback(
-    (action: string, employeeName: string) => {
-      toast({
-        title: `${action} aún no disponible`,
-        description: `Pronto podrás gestionar esta acción para ${employeeName}.`,
-      })
-    },
-    [toast],
-  )
-
-  const columns = useMemo<ColumnDef<EmployeeSummary, unknown>[]>(
+  const columns = useMemo<ColumnDef<ClientSummary, unknown>[]>(
     () => [
       {
         id: 'select',
-        header: ({ table }: HeaderContext<EmployeeSummary, unknown>) => (
+        header: ({ table }) => (
           <Checkbox
             checked={table.getIsAllPageRowsSelected()}
             onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
@@ -167,7 +163,7 @@ export function AdminEmployeesTable({
             className="translate-y-0.5"
           />
         ),
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
+        cell: ({ row }) => (
           <Checkbox
             checked={row.getIsSelected()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
@@ -181,10 +177,10 @@ export function AdminEmployeesTable({
       },
       {
         accessorKey: 'name',
-        header: ({ column }: HeaderContext<EmployeeSummary, unknown>) => (
-          <SortableHeader column={column} title="Empleado" />
+        header: ({ column }: HeaderContext<ClientSummary, unknown>) => (
+          <SortableHeader column={column} title="Cliente" />
         ),
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-sm font-semibold uppercase">
               {getInitials(row.original.name)}
@@ -203,7 +199,7 @@ export function AdminEmployeesTable({
       {
         id: 'contact',
         header: () => <span className="text-xs uppercase text-muted-foreground">Contacto</span>,
-        cell: ({ row }) => (
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
           <div className="flex flex-col gap-1 text-sm">
             <span className="flex items-center gap-2">
               <IconMail size={16} className="text-muted-foreground" />
@@ -218,30 +214,29 @@ export function AdminEmployeesTable({
         enableSorting: false,
       },
       {
-        accessorKey: 'status',
-        header: ({ column }: HeaderContext<EmployeeSummary, unknown>) => (
-          <SortableHeader column={column} title="Estado" />
-        ),
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
+        id: 'type',
+        header: () => <span className="text-xs uppercase text-muted-foreground">Tipo</span>,
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
           <div className="flex flex-col gap-1">
             <Badge
-              variant={getStatusVariant(row.original.status)}
+              variant={getClientTypeVariant(row.original.type)}
               className="capitalize"
             >
-              {normalizeStatus(row.original.status).label}
+              {normalizeClientType(row.original.type).label}
             </Badge>
             <span className="text-xs text-muted-foreground">
-              Ingreso: {formatJoinedAt(row.original.joinedAt)}
+              Registrado: {formatDate(row.original.registeredAt)}
             </span>
           </div>
         ),
+        enableSorting: false,
       },
       {
         accessorKey: 'totalAppointments',
-        header: ({ column }: HeaderContext<EmployeeSummary, unknown>) => (
+        header: ({ column }: HeaderContext<ClientSummary, unknown>) => (
           <SortableHeader column={column} title="Citas" />
         ),
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
           <div className="flex flex-col text-sm">
             <span className="font-semibold">
               {formatNumber(row.original.totalAppointments)}
@@ -256,51 +251,34 @@ export function AdminEmployeesTable({
         ),
       },
       {
-        accessorKey: 'totalRevenue',
-        header: ({ column }: HeaderContext<EmployeeSummary, unknown>) => (
-          <SortableHeader column={column} title="Ingresos" align="right" />
+        accessorKey: 'lastAppointmentAt',
+        header: ({ column }: HeaderContext<ClientSummary, unknown>) => (
+          <SortableHeader column={column} title="Última cita" />
         ),
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
-          <div className="text-right font-semibold">
-            {formatCurrency(row.original.totalRevenue)}
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
+          <div className="flex flex-col text-sm">
+            <span>{formatDateTime(row.original.lastAppointmentAt)}</span>
+            <span className="text-xs text-muted-foreground">
+              Última completada: {formatDateTime(row.original.lastCompletedAppointmentAt)}
+            </span>
           </div>
         ),
       },
       {
-        id: 'services',
-        header: () => <span className="text-xs uppercase text-muted-foreground">Servicios</span>,
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => {
-          const services = row.original.services
-          const servicesToShow = services.slice(0, SERVICE_BADGE_LIMIT)
-          const remaining = services.length - servicesToShow.length
-
-          if (servicesToShow.length === 0) {
-            return (
-              <span className="text-sm text-muted-foreground">
-                Sin servicios
-              </span>
-            )
-          }
-
-          return (
-            <div className="flex flex-wrap gap-1">
-              {servicesToShow.map((service: string) => (
-                <Badge key={service} variant="secondary" className="capitalize">
-                  {service}
-                </Badge>
-              ))}
-              {remaining > 0 && (
-                <Badge variant="outline">+{remaining}</Badge>
-              )}
-            </div>
-          )
-        },
-        enableSorting: false,
+        accessorKey: 'totalSpent',
+        header: ({ column }: HeaderContext<ClientSummary, unknown>) => (
+          <SortableHeader column={column} title="Total invertido" align="right" />
+        ),
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
+          <div className="text-right font-semibold">
+            {formatCurrency(row.original.totalSpent)}
+          </div>
+        ),
       },
       {
         id: 'actions',
         header: () => null,
-        cell: ({ row }: CellContext<EmployeeSummary, unknown>) => (
+        cell: ({ row }: CellContext<ClientSummary, unknown>) => (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -322,7 +300,7 @@ export function AdminEmployeesTable({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() =>
-                  handleUnavailableAction('Editar empleado', row.original.name)
+                  handleUnavailableAction('Editar cliente', row.original.name)
                 }
               >
                 Editar
@@ -331,10 +309,7 @@ export function AdminEmployeesTable({
               <DropdownMenuItem
                 variant="destructive"
                 onClick={() =>
-                  handleUnavailableAction(
-                    'Eliminar empleado',
-                    row.original.name,
-                  )
+                  handleUnavailableAction('Eliminar cliente', row.original.name)
                 }
               >
                 Eliminar
@@ -350,8 +325,8 @@ export function AdminEmployeesTable({
     [handleUnavailableAction],
   )
 
-  const table = useReactTable<EmployeeSummary>({
-    data: filteredEmployees,
+  const table = useReactTable<ClientSummary>({
+    data: filteredClients,
     columns,
     state: {
       sorting,
@@ -375,7 +350,7 @@ export function AdminEmployeesTable({
 
   useEffect(() => {
     setRowSelection({})
-  }, [filteredEmployees])
+  }, [filteredClients])
 
   const selectedCount = table.getFilteredSelectedRowModel().rows.length
   const totalFiltered = table.getFilteredRowModel().rows.length
@@ -388,20 +363,28 @@ export function AdminEmployeesTable({
     if (rowsToExport.length === 0) {
       toast({
         title: 'No hay datos para exportar',
-        description: 'Selecciona al menos un empleado o ajusta los filtros.',
+        description: 'Selecciona al menos un cliente o ajusta los filtros.',
       })
       return
     }
 
-    const header = ['Nombre', 'Correo', 'Teléfono', 'Estado', 'Servicios']
+    const header = [
+      'Nombre',
+      'Correo',
+      'Teléfono',
+      'Tipo',
+      'Citas totales',
+      'Total invertido',
+    ]
     const csvRows = rowsToExport.map((row): string => {
-      const employee = row.original
+      const client = row.original
       return [
-        escapeCsv(employee.name),
-        escapeCsv(employee.email),
-        escapeCsv(employee.phone ?? ''),
-        escapeCsv(normalizeStatus(employee.status).label),
-        escapeCsv(employee.services.join(' | ')),
+        escapeCsv(client.name),
+        escapeCsv(client.email),
+        escapeCsv(client.phone ?? ''),
+        escapeCsv(normalizeClientType(client.type).label),
+        escapeCsv(String(client.totalAppointments)),
+        escapeCsv(formatCurrency(client.totalSpent)),
       ].join(',')
     })
 
@@ -412,7 +395,7 @@ export function AdminEmployeesTable({
     link.href = url
     link.setAttribute(
       'download',
-      `empleados-${new Date().toISOString().slice(0, 10)}.csv`,
+      `clientes-${new Date().toISOString().slice(0, 10)}.csv`,
     )
     document.body.appendChild(link)
     link.click()
@@ -421,51 +404,55 @@ export function AdminEmployeesTable({
 
     toast({
       title: 'Exportación completada',
-      description: `Descargaste ${rowsToExport.length} empleados.`,
+      description: `Descargaste ${rowsToExport.length} clientes.`,
     })
   }, [selectedCount, table, toast])
 
   const hasActiveFilters =
-    searchTerm.trim().length > 0 || statusFilter !== 'all'
+    searchTerm.trim().length > 0 || typeFilter !== 'all'
 
   const headerGroups = table.getHeaderGroups()
   const rows = table.getRowModel().rows
   const visibleColumns = table.getAllLeafColumns()
+
+  const typeLabel =
+    typeFilter === 'all' ? 'Todos' : normalizeClientTypeLabel(typeOptions, typeFilter)
 
   return (
     <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
       <CardHeader className="pb-4">
         <div className="flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <IconUsersGroup size={20} />
+            <IconUsers size={20} />
           </div>
           <div>
             <CardTitle className="text-lg font-semibold">
-              Empleados registrados
+              Clientes registrados
             </CardTitle>
             <CardDescription>
-              Visualiza actividad, servicios asignados y rendimiento del equipo.
+              Consulta historial, tipo de cliente y actividad de reservas.
             </CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <DataTableToolbar
+        <ClientsToolbar
           table={table}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
-          statusFilter={statusFilter}
-          onStatusChange={setStatusFilter}
-          statusOptions={statusOptions}
+          typeFilter={typeFilter}
+          onTypeChange={setTypeFilter}
+          typeOptions={typeOptions}
           hasActiveFilters={hasActiveFilters}
           onResetFilters={() => {
             setSearchTerm('')
-            setStatusFilter('all')
+            setTypeFilter('all')
           }}
           density={density}
           onDensityChange={setDensity}
           selectedCount={selectedCount}
           onExport={handleExport}
+          typeLabel={typeLabel}
         />
         <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/60 shadow-sm">
           <Table className={cn('min-w-[960px]', density === 'compact' ? 'text-sm' : 'text-base')}>
@@ -520,10 +507,10 @@ export function AdminEmployeesTable({
           <div>
             {selectedCount > 0 ? (
               <span>
-                {selectedCount} de {totalFiltered} empleados seleccionados.
+                {selectedCount} de {totalFiltered} clientes seleccionados.
               </span>
             ) : (
-              <span>{totalFiltered} empleados filtrados en la tabla.</span>
+              <span>{totalFiltered} clientes filtrados en la tabla.</span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -555,39 +542,36 @@ export function AdminEmployeesTable({
 }
 
 type ToolbarProps = {
-  table: TableInstance<EmployeeSummary>
+  table: TableInstance<ClientSummary>
   searchTerm: string
   onSearchChange: (value: string) => void
-  statusFilter: string
-  onStatusChange: (value: string) => void
-  statusOptions: Array<{ value: string; label: string }>
+  typeFilter: string
+  onTypeChange: (value: string) => void
+  typeOptions: Array<{ value: string; label: string }>
   hasActiveFilters: boolean
   onResetFilters: () => void
   density: 'comfortable' | 'compact'
   onDensityChange: (value: 'comfortable' | 'compact') => void
   selectedCount: number
   onExport: () => void
+  typeLabel: string
 }
 
-function DataTableToolbar({
+function ClientsToolbar({
   table,
   searchTerm,
   onSearchChange,
-  statusFilter,
-  onStatusChange,
-  statusOptions,
+  typeFilter,
+  onTypeChange,
+  typeOptions,
   hasActiveFilters,
   onResetFilters,
   density,
   onDensityChange,
   selectedCount,
   onExport,
+  typeLabel,
 }: ToolbarProps) {
-  const statusLabel =
-    statusFilter === 'all'
-      ? 'Todos'
-      : normalizeStatusLabel(statusOptions, statusFilter)
-
   return (
     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -596,7 +580,7 @@ function DataTableToolbar({
           <Input
             value={searchTerm}
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Buscar por nombre, correo o servicio"
+            placeholder="Buscar por nombre, correo o teléfono"
             className="pl-10"
           />
         </div>
@@ -604,25 +588,23 @@ function DataTableToolbar({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-2">
               <IconAdjustmentsHorizontal size={16} />
-              {`Estado: ${statusLabel.toLowerCase()}`}
+              {`Tipo: ${typeLabel.toLowerCase()}`}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>Filtrar por estado</DropdownMenuLabel>
+            <DropdownMenuLabel>Filtrar por tipo</DropdownMenuLabel>
             <DropdownMenuItem
-              onClick={() => onStatusChange('all')}
-              className={cn(statusFilter === 'all' && 'bg-accent/50')}
+              onClick={() => onTypeChange('all')}
+              className={cn(typeFilter === 'all' && 'bg-accent/50')}
             >
               Todos
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            {statusOptions.map((option) => (
+            {typeOptions.map((option) => (
               <DropdownMenuItem
                 key={option.value}
-                onClick={() => onStatusChange(option.value)}
-                className={cn(
-                  statusFilter === option.value && 'bg-accent/50',
-                )}
+                onClick={() => onTypeChange(option.value)}
+                className={cn(typeFilter === option.value && 'bg-accent/50')}
               >
                 {option.label}
               </DropdownMenuItem>
@@ -652,7 +634,7 @@ function DataTableToolbar({
         >
           {density === 'comfortable' ? 'Modo compacto' : 'Modo amplio'}
         </Button>
-        <TableViewOptions table={table} />
+        <ClientsViewOptions table={table} />
         <Button variant="secondary" size="sm" onClick={onExport}>
           <IconDownload size={16} />
           Exportar
@@ -662,10 +644,10 @@ function DataTableToolbar({
   )
 }
 
-function TableViewOptions({
+function ClientsViewOptions({
   table,
 }: {
-  table: TableInstance<EmployeeSummary>
+  table: TableInstance<ClientSummary>
 }) {
   return (
     <DropdownMenu>
@@ -701,7 +683,7 @@ function TableViewOptions({
 }
 
 type SortableHeaderProps = {
-  column: Column<EmployeeSummary, unknown>
+  column: Column<ClientSummary, unknown>
   title: string
   align?: 'left' | 'right'
 }
@@ -734,15 +716,15 @@ function getInitials(value: string) {
     .slice(0, 2)
     .map((chunk) => chunk[0]?.toUpperCase() ?? '')
     .join('')
-    .slice(0, 2) || 'EM'
+    .slice(0, 2) || 'CL'
 }
 
-function normalizeStatus(status: string | null | undefined) {
-  if (!status) {
-    return { value: 'sin-estado', label: 'Sin estado' }
+function normalizeClientType(type: string | null | undefined) {
+  if (!type) {
+    return { value: 'sin-clasificar', label: 'Sin clasificar' }
   }
 
-  const trimmed = status.trim()
+  const trimmed = type.trim()
   const value = trimmed.toLowerCase()
   const label = trimmed
     .replace(/[_-]+/g, ' ')
@@ -751,7 +733,7 @@ function normalizeStatus(status: string | null | undefined) {
   return { value, label }
 }
 
-function normalizeStatusLabel(
+function normalizeClientTypeLabel(
   options: Array<{ value: string; label: string }>,
   value: string,
 ) {
@@ -759,19 +741,19 @@ function normalizeStatusLabel(
   return match?.label ?? 'Personalizado'
 }
 
-function getStatusVariant(status: string | null | undefined) {
-  const normalized = status?.toLowerCase() ?? ''
+function getClientTypeVariant(type: string | null | undefined) {
+  const normalized = type?.toLowerCase() ?? ''
 
-  if (normalized.includes('suspend') || normalized.includes('bane')) {
-    return 'destructive' as const
-  }
-
-  if (normalized.includes('inactivo') || normalized.includes('pausa')) {
-    return 'outline' as const
-  }
-
-  if (normalized.includes('activo')) {
+  if (normalized.includes('vip')) {
     return 'secondary' as const
+  }
+
+  if (normalized.includes('frecuente')) {
+    return 'default' as const
+  }
+
+  if (normalized.includes('nuevo')) {
+    return 'outline' as const
   }
 
   return 'outline' as const
