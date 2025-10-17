@@ -5,6 +5,7 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server"
 import { isoBase64URL } from "@simplewebauthn/server/helpers"
+import { parse } from "tldts"
 import type {
   AuthenticationResponseJSON,
   AuthenticatorSelectionCriteria,
@@ -39,11 +40,31 @@ function cleanHost(value: string): string {
 
   try {
     const url = value.includes("//") ? new URL(value) : new URL(`https://${value}`)
-    return url.hostname
+    return url.hostname.toLowerCase()
   } catch (error) {
     const withoutPort = value.split(":")[0]
-    return withoutPort
+    return withoutPort.toLowerCase()
   }
+}
+
+// Map a host to the registrable domain so passkeys issued on one subdomain
+// work across other subdomains of the same site.
+function resolveRegistrableDomain(hostname: string): string | null {
+  if (!hostname) {
+    return null
+  }
+
+  const parsed = parse(hostname, { allowPrivateDomains: true })
+
+  if (parsed.isIp === true || hostname === "localhost") {
+    return hostname
+  }
+
+  if (parsed.domain) {
+    return parsed.domain
+  }
+
+  return null
 }
 
 function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): string {
@@ -54,6 +75,10 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
   if (rpIdHint) {
     const sanitized = cleanHost(rpIdHint)
     if (sanitized) {
+      const registrable = resolveRegistrableDomain(sanitized)
+      if (registrable) {
+        return registrable
+      }
       return sanitized
     }
   }
@@ -62,7 +87,12 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
     const normalized = normalizeOrigin(requestOrigin)
     if (normalized) {
       try {
-        return new URL(normalized).hostname
+        const host = new URL(normalized).hostname
+        const registrable = resolveRegistrableDomain(host)
+        if (registrable) {
+          return registrable
+        }
+        return host
       } catch (error) {
         console.warn("Failed to resolve RP ID from request origin", normalized, error)
       }
@@ -70,7 +100,12 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
   }
 
   try {
-    return new URL(getAppUrl()).hostname
+    const host = new URL(getAppUrl()).hostname
+    const registrable = resolveRegistrableDomain(host)
+    if (registrable) {
+      return registrable
+    }
+    return host
   } catch (error) {
     console.warn("Falling back to localhost RP ID", error)
     return "localhost"
