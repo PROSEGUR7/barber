@@ -96,7 +96,14 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
     LEFT JOIN tenant_base.empleados_servicios es ON es.empleado_id = e.id
     LEFT JOIN tenant_base.servicios s ON s.id = es.servicio_id
     ${whereClause}
-    GROUP BY e.id, u.correo
+    GROUP BY
+      e.id,
+      e.user_id,
+      e.nombre,
+      e.telefono,
+      e.estado,
+      e.fecha_ingreso,
+      u.correo
     ORDER BY e.nombre ASC
   `
 

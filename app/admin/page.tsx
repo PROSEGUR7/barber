@@ -7,19 +7,19 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useToast } from "@/hooks/use-toast"
 import type { EmployeeSummary } from "@/lib/admin"
@@ -74,7 +74,7 @@ export default function AdminDashboard() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isRegisterOpen, setIsRegisterOpen] = useState(false)
   const [formName, setFormName] = useState("")
   const [formEmail, setFormEmail] = useState("")
   const [formPhone, setFormPhone] = useState("")
@@ -132,11 +132,11 @@ export default function AdminDashboard() {
   }, [loadEmployees])
 
   useEffect(() => {
-    if (!isDialogOpen) {
+    if (!isRegisterOpen) {
       resetForm()
       setIsSubmitting(false)
     }
-  }, [isDialogOpen, resetForm])
+  }, [isRegisterOpen, resetForm])
 
   const metrics = useMemo(() => {
     const totals = {
@@ -220,9 +220,9 @@ export default function AdminDashboard() {
         return sortEmployees(next)
       })
 
-      setError(null)
-      resetForm()
-      setIsDialogOpen(false)
+  setError(null)
+  resetForm()
+  setIsRegisterOpen(false)
 
       toast({
         title: "Empleado registrado",
@@ -301,90 +301,92 @@ export default function AdminDashboard() {
               <h2 className="text-2xl font-semibold">Gestión de empleados</h2>
               <p className="text-muted-foreground">Consulta actividad, servicios y registra nuevos perfiles.</p>
             </div>
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
+            <Sheet open={isRegisterOpen} onOpenChange={setIsRegisterOpen}>
+              <SheetTrigger asChild>
                 <Button>
                   <Plus className="mr-2 h-4 w-4" />
                   Registrar empleado
                 </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Registrar nuevo empleado</DialogTitle>
-                  <DialogDescription>
-                    Crea un usuario para un miembro del equipo. Podrá actualizar sus datos después.
-                  </DialogDescription>
-                </DialogHeader>
-                <form onSubmit={handleEmployeeSubmit} className="space-y-6">
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel htmlFor="employee-name">Nombre completo</FieldLabel>
-                      <Input
-                        id="employee-name"
-                        value={formName}
-                        onChange={(event) => {
-                          setFormName(event.target.value)
-                          setFormError(null)
-                        }}
-                        placeholder="Ej. Juan Pérez"
-                        required
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="employee-email">Correo electrónico</FieldLabel>
-                      <Input
-                        id="employee-email"
-                        type="email"
-                        value={formEmail}
-                        onChange={(event) => {
-                          setFormEmail(event.target.value)
-                          setFormError(null)
-                        }}
-                        placeholder="empleado@barberia.com"
-                        required
-                      />
-                      <FieldDescription>El empleado usará este correo para iniciar sesión.</FieldDescription>
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="employee-phone">Teléfono</FieldLabel>
-                      <Input
-                        id="employee-phone"
-                        type="tel"
-                        value={formPhone}
-                        onChange={(event) => {
-                          setFormPhone(event.target.value)
-                          setFormError(null)
-                        }}
-                        placeholder="Opcional"
-                      />
-                      <FieldDescription>Útil para recordatorios y contacto directo.</FieldDescription>
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
-                      <Input
-                        id="employee-password"
-                        type="password"
-                        value={formPassword}
-                        onChange={(event) => {
-                          setFormPassword(event.target.value)
-                          setFormError(null)
-                        }}
-                        placeholder="Mínimo 8 caracteres"
-                        minLength={8}
-                        required
-                      />
-                      <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
-                    </Field>
-                  </FieldGroup>
-                  {formError && <p className="text-sm text-destructive">{formError}</p>}
-                  <DialogFooter>
-                    <Button type="submit" className="w-full sm:w-auto" disabled={isSubmitting}>
+              </SheetTrigger>
+              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+                <form onSubmit={handleEmployeeSubmit} className="flex h-full flex-col">
+                  <SheetHeader className="border-b px-6 py-4 text-left">
+                    <SheetTitle>Registrar nuevo empleado</SheetTitle>
+                    <SheetDescription>
+                      Crea un usuario para un miembro del equipo. Podrá actualizar sus datos después.
+                    </SheetDescription>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-y-auto px-6 py-4">
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="employee-name">Nombre completo</FieldLabel>
+                        <Input
+                          id="employee-name"
+                          value={formName}
+                          onChange={(event) => {
+                            setFormName(event.target.value)
+                            setFormError(null)
+                          }}
+                          placeholder="Ej. Juan Pérez"
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="employee-email">Correo electrónico</FieldLabel>
+                        <Input
+                          id="employee-email"
+                          type="email"
+                          value={formEmail}
+                          onChange={(event) => {
+                            setFormEmail(event.target.value)
+                            setFormError(null)
+                          }}
+                          placeholder="empleado@barberia.com"
+                          required
+                        />
+                        <FieldDescription>El empleado usará este correo para iniciar sesión.</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="employee-phone">Teléfono</FieldLabel>
+                        <Input
+                          id="employee-phone"
+                          type="tel"
+                          value={formPhone}
+                          onChange={(event) => {
+                            setFormPhone(event.target.value)
+                            setFormError(null)
+                          }}
+                          placeholder="Opcional"
+                        />
+                        <FieldDescription>Útil para recordatorios y contacto directo.</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
+                        <Input
+                          id="employee-password"
+                          type="password"
+                          value={formPassword}
+                          onChange={(event) => {
+                            setFormPassword(event.target.value)
+                            setFormError(null)
+                          }}
+                          placeholder="Mínimo 8 caracteres"
+                          minLength={8}
+                          required
+                        />
+                        <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
+                      </Field>
+                    </FieldGroup>
+                  </div>
+                  <SheetFooter className="border-t px-6 py-4">
+                    {formError && <p className="text-sm text-destructive">{formError}</p>}
+                    <Button type="submit" className="w-full" disabled={isSubmitting}>
                       {isSubmitting ? "Registrando..." : "Registrar empleado"}
                     </Button>
-                  </DialogFooter>
+                  </SheetFooter>
                 </form>
-              </DialogContent>
-            </Dialog>
+              </SheetContent>
+            </Sheet>
           </div>
 
           {shouldShowErrorCard ? (
@@ -411,7 +413,7 @@ export default function AdminDashboard() {
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button onClick={() => setIsDialogOpen(true)}>
+                <Button onClick={() => setIsRegisterOpen(true)}>
                   <Plus className="mr-2 h-4 w-4" />
                   Registrar empleado
                 </Button>
