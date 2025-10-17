@@ -36,7 +36,10 @@ export function NavMain({
       <SidebarGroupLabel>{label}</SidebarGroupLabel>
       <SidebarMenu>
         {items.map((item) => {
-          const hasChildren = Array.isArray(item.items) && item.items.length > 0
+          const childItems = Array.isArray(item.items)
+            ? item.items.filter((subItem) => subItem?.title && subItem?.url)
+            : []
+          const hasChildren = childItems.length > 0
 
           if (!hasChildren) {
             return (
@@ -68,7 +71,7 @@ export function NavMain({
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <SidebarMenuSub>
-                    {item.items?.map((subItem) => (
+                    {childItems.map((subItem) => (
                       <SidebarMenuSubItem key={subItem.title}>
                         <SidebarMenuSubButton asChild>
                           <a href={subItem.url}>

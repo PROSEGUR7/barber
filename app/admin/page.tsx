@@ -1,486 +1,556 @@
 "use client"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { CalendarCheck2, CalendarClock, DollarSign, Plus, Users } from "lucide-react"
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
-  Users,
-  Scissors,
-  DollarSign,
-  TrendingUp,
-  Calendar,
-  Clock,
-  BarChart3,
-  PieChart,
-  Plus,
-  Edit,
-  Trash2,
-} from "lucide-react"
-import { useState } from "react"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useToast } from "@/hooks/use-toast"
+import type { EmployeeSummary } from "@/lib/admin"
 
-interface Service {
-  id: number
-  name: string
-  price: number
-  duration: string
-  bookings: number
+type EmployeesResponse = {
+  employees?: EmployeeSummary[]
+  error?: string
 }
 
-interface Barber {
-  id: number
-  name: string
-  specialty: string
-  appointments: number
-  rating: number
-  revenue: number
+type CreateEmployeeResponse = EmployeesResponse & {
+  employee?: EmployeeSummary
 }
 
-interface Client {
-  id: number
-  name: string
-  email: string
-  totalVisits: number
-  lastVisit: string
-  totalSpent: number
+const SERVICE_BADGE_LIMIT = 3
+const currencyFormatter = new Intl.NumberFormat("es-AR", {
+  style: "currency",
+  currency: "ARS",
+})
+const numberFormatter = new Intl.NumberFormat("es-AR")
+
+function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
 
-const mockServices: Service[] = [
-  { id: 1, name: "Corte de Cabello", price: 2300, duration: "30 min", bookings: 145 },
-  { id: 2, name: "Corte + Barba", price: 3500, duration: "45 min", bookings: 98 },
-  { id: 3, name: "Afeitado Clásico", price: 1800, duration: "30 min", bookings: 67 },
-  { id: 4, name: "Coloración", price: 4500, duration: "60 min", bookings: 34 },
-  { id: 5, name: "Tratamiento Capilar", price: 3800, duration: "45 min", bookings: 23 },
-]
+function formatCurrency(value: number): string {
+  return currencyFormatter.format(value)
+}
 
-const mockBarbers: Barber[] = [
-  { id: 1, name: "Juan Rivera", specialty: "Cortes Modernos", appointments: 156, rating: 4.9, revenue: 358800 },
-  { id: 2, name: "Carlos Méndez", specialty: "Barbería Clásica", appointments: 142, rating: 4.8, revenue: 326600 },
-  { id: 3, name: "Miguel Ángel", specialty: "Diseños Creativos", appointments: 134, rating: 4.7, revenue: 308200 },
-]
+function formatNumber(value: number): string {
+  return numberFormatter.format(value)
+}
 
-const mockClients: Client[] = [
-  {
-    id: 1,
-    name: "Roberto Sánchez",
-    email: "roberto@email.com",
-    totalVisits: 12,
-    lastVisit: "2024-12-18",
-    totalSpent: 27600,
-  },
-  {
-    id: 2,
-    name: "Carlos Rodríguez",
-    email: "carlos@email.com",
-    totalVisits: 8,
-    lastVisit: "2024-12-17",
-    totalSpent: 18400,
-  },
-  {
-    id: 3,
-    name: "Miguel Torres",
-    email: "miguel@email.com",
-    totalVisits: 15,
-    lastVisit: "2024-12-19",
-    totalSpent: 34500,
-  },
-  { id: 4, name: "José Martínez", email: "jose@email.com", totalVisits: 6, lastVisit: "2024-12-16", totalSpent: 13800 },
-]
+function formatJoinedAt(value: string | null): string {
+  if (!value) {
+    return "Sin fecha"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "Sin fecha"
+  }
+
+  return date.toLocaleDateString("es-ES", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  })
+}
 
 export default function AdminDashboard() {
-  const [services] = useState<Service[]>(mockServices)
-  const [barbers] = useState<Barber[]>(mockBarbers)
-  const [clients] = useState<Client[]>(mockClients)
+  const { toast } = useToast()
+  const [employees, setEmployees] = useState<EmployeeSummary[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [formName, setFormName] = useState("")
+  const [formEmail, setFormEmail] = useState("")
+  const [formPhone, setFormPhone] = useState("")
+  const [formPassword, setFormPassword] = useState("")
+  const [formError, setFormError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const totalRevenue = barbers.reduce((sum, barber) => sum + barber.revenue, 0)
-  const totalAppointments = barbers.reduce((sum, barber) => sum + barber.appointments, 0)
-  const totalClients = clients.length
-  const avgRating = (barbers.reduce((sum, barber) => sum + barber.rating, 0) / barbers.length).toFixed(1)
+  const resetForm = useCallback(() => {
+    setFormName("")
+    setFormEmail("")
+    setFormPhone("")
+    setFormPassword("")
+    setFormError(null)
+  }, [])
+
+  // Fetch employees from the API and avoid state updates when unmounted.
+  const loadEmployees = useCallback(
+    async (signal?: AbortSignal) => {
+      setIsLoading(true)
+      setError(null)
+
+      try {
+        const response = await fetch("/api/admin/employees", { signal, cache: "no-store" })
+        const data: EmployeesResponse = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudieron cargar los empleados")
+        }
+
+        if (!signal?.aborted) {
+          const list = Array.isArray(data.employees) ? data.employees : []
+          setEmployees(sortEmployees(list))
+        }
+      } catch (err) {
+        if (signal?.aborted) {
+          return
+        }
+
+        console.error("Error fetching employees", err)
+        setError("No se pudieron cargar los empleados.")
+      } finally {
+        if (!signal?.aborted) {
+          setIsLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void loadEmployees(controller.signal)
+
+    return () => controller.abort()
+  }, [loadEmployees])
+
+  useEffect(() => {
+    if (!isDialogOpen) {
+      resetForm()
+      setIsSubmitting(false)
+    }
+  }, [isDialogOpen, resetForm])
+
+  const metrics = useMemo(() => {
+    const totals = {
+      totalEmployees: employees.length,
+      totalRevenue: 0,
+      totalAppointments: 0,
+      upcomingAppointments: 0,
+      completedAppointments: 0,
+    }
+
+    for (const employee of employees) {
+      totals.totalRevenue += employee.totalRevenue
+      totals.totalAppointments += employee.totalAppointments
+      totals.upcomingAppointments += employee.upcomingAppointments
+      totals.completedAppointments += employee.completedAppointments
+    }
+
+    return totals
+  }, [employees])
+
+  const shouldShowErrorCard = Boolean(error) && !isLoading && employees.length === 0
+
+  const handleReload = useCallback(() => {
+    void loadEmployees()
+  }, [loadEmployees])
+
+  const handleEmployeeSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setFormError(null)
+
+    const sanitizedName = formName.trim()
+    const sanitizedEmail = formEmail.trim().toLowerCase()
+    const sanitizedPhone = formPhone.trim()
+
+    if (sanitizedName.length < 2) {
+      setFormError("Ingresa un nombre válido.")
+      return
+    }
+
+    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
+      setFormError("Ingresa un correo válido.")
+      return
+    }
+
+    if (sanitizedPhone && sanitizedPhone.length < 7) {
+      setFormError("Ingresa un teléfono válido.")
+      return
+    }
+
+    if (formPassword.length < 8) {
+      setFormError("La contraseña debe tener al menos 8 caracteres.")
+      return
+    }
+
+    setIsSubmitting(true)
+
+    try {
+      const response = await fetch("/api/admin/employees", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: sanitizedName,
+          email: sanitizedEmail,
+          password: formPassword,
+          phone: sanitizedPhone || undefined,
+        }),
+      })
+
+      const data: CreateEmployeeResponse = await response.json().catch(() => ({} as CreateEmployeeResponse))
+
+      if (!response.ok || !data.employee) {
+        setFormError(data.error ?? "No se pudo crear el empleado.")
+        return
+      }
+
+      setEmployees((previous) => {
+        const next = previous.filter((item) => item.id !== data.employee!.id)
+        next.push(data.employee!)
+        return sortEmployees(next)
+      })
+
+      setError(null)
+      resetForm()
+      setIsDialogOpen(false)
+
+      toast({
+        title: "Empleado registrado",
+        description: "El nuevo empleado ya puede gestionar citas y servicios.",
+      })
+    } catch (err) {
+      console.error("Error creating employee", err)
+      setFormError("Error de conexión con el servidor.")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background">
-      <main className="container mx-auto px-4 py-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Panel de Administración</h1>
-            <p className="text-muted-foreground">Gestiona tu barbería y monitorea el rendimiento</p>
-          </div>
+      <main className="container mx-auto space-y-8 px-4 py-8">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-bold">Panel de administración</h1>
+          <p className="text-muted-foreground">
+            Monitorea el rendimiento del equipo y registra nuevos empleados.
+          </p>
+        </header>
 
-          {/* Stats Overview */}
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        {isLoading ? (
+          <StatsSkeleton />
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardDescription>Ingresos Totales</CardDescription>
-                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <CardTitle className="text-3xl">${totalRevenue.toLocaleString()}</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total de empleados</CardTitle>
+                <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="flex items-center gap-2 text-xs text-green-500">
-                  <TrendingUp className="h-3 w-3" />
-                  <span>+12.5% vs mes anterior</span>
-                </div>
+                <div className="text-3xl font-bold">{formatNumber(metrics.totalEmployees)}</div>
+                <p className="text-xs text-muted-foreground">Equipo activo en el sistema</p>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardDescription>Citas Totales</CardDescription>
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <CardTitle className="text-3xl">{totalAppointments}</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Citas totales</CardTitle>
+                <CalendarCheck2 className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="flex items-center gap-2 text-xs text-green-500">
-                  <TrendingUp className="h-3 w-3" />
-                  <span>+8.3% vs mes anterior</span>
-                </div>
+                <div className="text-3xl font-bold">{formatNumber(metrics.totalAppointments)}</div>
+                <p className="text-xs text-muted-foreground">
+                  Completadas: {formatNumber(metrics.completedAppointments)}
+                </p>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardDescription>Clientes Activos</CardDescription>
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <CardTitle className="text-3xl">{totalClients}</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Citas próximas</CardTitle>
+                <CalendarClock className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="flex items-center gap-2 text-xs text-green-500">
-                  <TrendingUp className="h-3 w-3" />
-                  <span>+15.2% vs mes anterior</span>
-                </div>
+                <div className="text-3xl font-bold">{formatNumber(metrics.upcomingAppointments)}</div>
+                <p className="text-xs text-muted-foreground">Reservas agendadas con el equipo</p>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardDescription>Calificación Promedio</CardDescription>
-                  <BarChart3 className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <CardTitle className="text-3xl">{avgRating}</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Ingresos generados</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <p className="text-xs text-muted-foreground">De {barbers.length} peluqueros</p>
+                <div className="text-3xl font-bold">{formatCurrency(metrics.totalRevenue)}</div>
+                <p className="text-xs text-muted-foreground">Ingresos asociados a citas completadas</p>
               </CardContent>
             </Card>
           </div>
+        )}
 
-          {/* Main Content Tabs */}
-          <Tabs defaultValue="overview" className="space-y-6">
-            <TabsList>
-              <TabsTrigger value="overview">
-                <PieChart className="h-4 w-4 mr-2" />
-                Resumen
-              </TabsTrigger>
-              <TabsTrigger value="services">
-                <Scissors className="h-4 w-4 mr-2" />
-                Servicios
-              </TabsTrigger>
-              <TabsTrigger value="barbers">
-                <Users className="h-4 w-4 mr-2" />
-                Peluqueros
-              </TabsTrigger>
-              <TabsTrigger value="clients">
-                <Users className="h-4 w-4 mr-2" />
-                Clientes
-              </TabsTrigger>
-            </TabsList>
-
-            {/* Overview Tab */}
-            <TabsContent value="overview" className="space-y-6">
-              <div className="grid lg:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Servicios Más Populares</CardTitle>
-                    <CardDescription>Por número de reservas este mes</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {services
-                        .sort((a, b) => b.bookings - a.bookings)
-                        .slice(0, 5)
-                        .map((service, index) => (
-                          <div key={service.id} className="flex items-center gap-4">
-                            <div className="flex items-center justify-center h-8 w-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                              {index + 1}
-                            </div>
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-medium">{service.name}</span>
-                                <span className="text-sm text-muted-foreground">{service.bookings} reservas</span>
-                              </div>
-                              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-primary"
-                                  style={{ width: `${(service.bookings / services[0].bookings) * 100}%` }}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Rendimiento de Peluqueros</CardTitle>
-                    <CardDescription>Ingresos generados este mes</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {barbers
-                        .sort((a, b) => b.revenue - a.revenue)
-                        .map((barber, index) => (
-                          <div key={barber.id} className="flex items-center gap-4">
-                            <div className="flex items-center justify-center h-8 w-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                              {index + 1}
-                            </div>
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-medium">{barber.name}</span>
-                                <span className="text-sm font-semibold">${barber.revenue.toLocaleString()}</span>
-                              </div>
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span>{barber.appointments} citas</span>
-                                <span>⭐ {barber.rating}</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <div className="grid lg:grid-cols-3 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Horarios Pico</CardTitle>
-                    <CardDescription>Horas más ocupadas</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm">10:00 - 12:00</span>
-                      </div>
-                      <Badge>Alta demanda</Badge>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm">15:00 - 17:00</span>
-                      </div>
-                      <Badge>Alta demanda</Badge>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm">18:00 - 20:00</span>
-                      </div>
-                      <Badge variant="outline">Media demanda</Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Tasa de Ocupación</CardTitle>
-                    <CardDescription>Promedio semanal</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center">
-                      <div className="text-4xl font-bold text-primary mb-2">87%</div>
-                      <p className="text-sm text-muted-foreground mb-4">Excelente ocupación</p>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-primary" style={{ width: "87%" }} />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Clientes Nuevos</CardTitle>
-                    <CardDescription>Este mes</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center">
-                      <div className="text-4xl font-bold text-primary mb-2">24</div>
-                      <p className="text-sm text-muted-foreground mb-4">+18% vs mes anterior</p>
-                      <div className="flex items-center justify-center gap-2 text-xs text-green-500">
-                        <TrendingUp className="h-3 w-3" />
-                        <span>Crecimiento sostenido</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
-
-            {/* Services Tab */}
-            <TabsContent value="services" className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold">Gestión de Servicios</h2>
-                  <p className="text-muted-foreground">Administra los servicios de tu barbería</p>
-                </div>
+        <section className="space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-2xl font-semibold">Gestión de empleados</h2>
+              <p className="text-muted-foreground">Consulta actividad, servicios y registra nuevos perfiles.</p>
+            </div>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
                 <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Nuevo Servicio
+                  <Plus className="mr-2 h-4 w-4" />
+                  Registrar empleado
                 </Button>
-              </div>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Registrar nuevo empleado</DialogTitle>
+                  <DialogDescription>
+                    Crea un usuario para un miembro del equipo. Podrá actualizar sus datos después.
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleEmployeeSubmit} className="space-y-6">
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="employee-name">Nombre completo</FieldLabel>
+                      <Input
+                        id="employee-name"
+                        value={formName}
+                        onChange={(event) => {
+                          setFormName(event.target.value)
+                          setFormError(null)
+                        }}
+                        placeholder="Ej. Juan Pérez"
+                        required
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="employee-email">Correo electrónico</FieldLabel>
+                      <Input
+                        id="employee-email"
+                        type="email"
+                        value={formEmail}
+                        onChange={(event) => {
+                          setFormEmail(event.target.value)
+                          setFormError(null)
+                        }}
+                        placeholder="empleado@barberia.com"
+                        required
+                      />
+                      <FieldDescription>El empleado usará este correo para iniciar sesión.</FieldDescription>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="employee-phone">Teléfono</FieldLabel>
+                      <Input
+                        id="employee-phone"
+                        type="tel"
+                        value={formPhone}
+                        onChange={(event) => {
+                          setFormPhone(event.target.value)
+                          setFormError(null)
+                        }}
+                        placeholder="Opcional"
+                      />
+                      <FieldDescription>Útil para recordatorios y contacto directo.</FieldDescription>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
+                      <Input
+                        id="employee-password"
+                        type="password"
+                        value={formPassword}
+                        onChange={(event) => {
+                          setFormPassword(event.target.value)
+                          setFormError(null)
+                        }}
+                        placeholder="Mínimo 8 caracteres"
+                        minLength={8}
+                        required
+                      />
+                      <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
+                    </Field>
+                  </FieldGroup>
+                  {formError && <p className="text-sm text-destructive">{formError}</p>}
+                  <DialogFooter>
+                    <Button type="submit" className="w-full sm:w-auto" disabled={isSubmitting}>
+                      {isSubmitting ? "Registrando..." : "Registrar empleado"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
 
-              <Card>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Servicio</TableHead>
-                      <TableHead>Precio</TableHead>
-                      <TableHead>Duración</TableHead>
-                      <TableHead>Reservas</TableHead>
-                      <TableHead>Ingresos</TableHead>
-                      <TableHead className="text-right">Acciones</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {services.map((service) => (
-                      <TableRow key={service.id}>
-                        <TableCell className="font-medium">{service.name}</TableCell>
-                        <TableCell>${service.price}</TableCell>
-                        <TableCell>{service.duration}</TableCell>
-                        <TableCell>{service.bookings}</TableCell>
-                        <TableCell className="font-semibold">
-                          ${(service.price * service.bookings).toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button variant="ghost" size="icon">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon">
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </TabsContent>
-
-            {/* Barbers Tab */}
-            <TabsContent value="barbers" className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold">Gestión de Peluqueros</h2>
-                  <p className="text-muted-foreground">Administra tu equipo de profesionales</p>
-                </div>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Nuevo Peluquero
+          {shouldShowErrorCard ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>No pudimos cargar a los empleados</CardTitle>
+                <CardDescription>Intenta nuevamente para ver la información más reciente del equipo.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                <Button onClick={handleReload}>Reintentar</Button>
+              </CardContent>
+            </Card>
+          ) : isLoading ? (
+            <EmployeesTableSkeleton />
+          ) : employees.length === 0 ? (
+            <Empty className="border border-dashed">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Users className="h-5 w-5" />
+                </EmptyMedia>
+                <EmptyTitle>Sin empleados registrados</EmptyTitle>
+                <EmptyDescription>
+                  Crea el primer perfil para comenzar a asignar citas y servicios.
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button onClick={() => setIsDialogOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Registrar empleado
                 </Button>
-              </div>
-
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {barbers.map((barber) => (
-                  <Card key={barber.id}>
-                    <CardHeader>
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <CardTitle>{barber.name}</CardTitle>
-                          <CardDescription>{barber.specialty}</CardDescription>
-                        </div>
-                        <Badge variant="outline">⭐ {barber.rating}</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">Citas completadas</span>
-                          <span className="font-semibold">{barber.appointments}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">Ingresos generados</span>
-                          <span className="font-semibold">${barber.revenue.toLocaleString()}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">Promedio por cita</span>
-                          <span className="font-semibold">${Math.round(barber.revenue / barber.appointments)}</span>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 pt-2">
-                        <Button variant="outline" size="sm" className="flex-1 bg-transparent">
-                          <Edit className="h-3 w-3 mr-2" />
-                          Editar
-                        </Button>
-                        <Button variant="outline" size="sm" className="flex-1 bg-transparent">
-                          Ver Horarios
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </TabsContent>
-
-            {/* Clients Tab */}
-            <TabsContent value="clients" className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold">Gestión de Clientes</h2>
-                  <p className="text-muted-foreground">Administra tu base de clientes</p>
-                </div>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Nuevo Cliente
-                </Button>
-              </div>
-
-              <Card>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Visitas</TableHead>
-                      <TableHead>Última Visita</TableHead>
-                      <TableHead>Total Gastado</TableHead>
-                      <TableHead className="text-right">Acciones</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {clients.map((client) => (
-                      <TableRow key={client.id}>
-                        <TableCell className="font-medium">{client.name}</TableCell>
-                        <TableCell>{client.email}</TableCell>
-                        <TableCell>{client.totalVisits}</TableCell>
-                        <TableCell>{new Date(client.lastVisit).toLocaleDateString("es-ES")}</TableCell>
-                        <TableCell className="font-semibold">${client.totalSpent.toLocaleString()}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button variant="ghost" size="icon">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button variant="outline" size="sm">
-                              Ver Historial
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </TabsContent>
-          </Tabs>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <>
+              {error && (
+                <Alert variant="destructive">
+                  <AlertTitle>Error al actualizar la lista</AlertTitle>
+                  <AlertDescription>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <span>{error}</span>
+                      <Button variant="outline" onClick={handleReload}>
+                        Reintentar
+                      </Button>
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+              <EmployeesTable employees={employees} />
+            </>
+          )}
+        </section>
       </main>
     </div>
+  )
+}
+
+function EmployeesTable({ employees }: { employees: EmployeeSummary[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Empleados registrados</CardTitle>
+        <CardDescription>Actividad reciente del equipo y servicios asignados.</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Empleado</TableHead>
+              <TableHead>Contacto</TableHead>
+              <TableHead>Estado</TableHead>
+              <TableHead>Citas</TableHead>
+              <TableHead className="text-right">Ingresos</TableHead>
+              <TableHead>Servicios</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {employees.map((employee) => {
+              const servicesToShow = employee.services.slice(0, SERVICE_BADGE_LIMIT)
+              const remainingServices = employee.services.length - servicesToShow.length
+
+              return (
+                <TableRow key={employee.id}>
+                  <TableCell>
+                    <div className="font-medium">{employee.name}</div>
+                    <div className="text-xs text-muted-foreground">ID usuario: {employee.userId}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm">{employee.email}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {employee.phone ? employee.phone : "Sin teléfono"}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-2">
+                      <Badge variant="outline" className="w-fit capitalize">
+                        {employee.status ?? "Sin estado"}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Ingreso: {formatJoinedAt(employee.joinedAt)}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm font-semibold">{formatNumber(employee.totalAppointments)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Próximas: {formatNumber(employee.upcomingAppointments)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Completadas: {formatNumber(employee.completedAppointments)}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right font-semibold">{formatCurrency(employee.totalRevenue)}</TableCell>
+                  <TableCell>
+                    {servicesToShow.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {servicesToShow.map((service) => (
+                          <Badge key={service} variant="secondary" className="capitalize">
+                            {service}
+                          </Badge>
+                        ))}
+                        {remainingServices > 0 && <Badge variant="outline">+{remainingServices}</Badge>}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">Sin servicios</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
+function StatsSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader className="space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-4 w-24" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-8 w-24" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+function EmployeesTableSkeleton() {
+  return (
+    <Card>
+      <CardHeader className="space-y-2">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-4 w-64" />
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <Skeleton key={index} className="h-12 w-full" />
+        ))}
+      </CardContent>
+    </Card>
   )
 }
