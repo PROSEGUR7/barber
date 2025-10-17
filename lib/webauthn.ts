@@ -32,6 +32,59 @@ function getAppUrl() {
 
 const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "BarberPro"
 const ORIGIN = getAppUrl()
+const SHARE_RP_ID_ACROSS_SUBDOMAINS = (process.env.WEBAUTHN_SHARE_RP_ID_ACROSS_SUBDOMAINS ?? "false").toLowerCase() === "true"
+
+const DEFAULT_MULTI_TENANT_SUFFIXES = [
+  "azurewebsites.net",
+  "cloudfront.net",
+  "firebaseapp.com",
+  "github.io",
+  "glitch.me",
+  "herokuapp.com",
+  "netlify.app",
+  "onrender.com",
+  "pages.dev",
+  "render.com",
+  "supabase.co",
+  "supabase.in",
+  "vercel.app",
+]
+
+function parseEnvList(value: string | undefined): string[] {
+  if (!value) {
+    return []
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0)
+}
+
+const MULTI_TENANT_SUFFIXES = new Set<string>([
+  ...DEFAULT_MULTI_TENANT_SUFFIXES,
+  ...parseEnvList(process.env.WEBAUTHN_MULTI_TENANT_SUFFIXES),
+])
+
+const ALLOWED_RP_DOMAINS = new Set<string>(parseEnvList(process.env.WEBAUTHN_ALLOWED_RP_DOMAINS))
+
+let cachedPrimaryRegistrableDomain: string | null | undefined
+
+function getPrimaryRegistrableDomain(): string | null {
+  if (cachedPrimaryRegistrableDomain !== undefined) {
+    return cachedPrimaryRegistrableDomain
+  }
+
+  try {
+    const host = new URL(ORIGIN).hostname
+    cachedPrimaryRegistrableDomain = resolveRegistrableDomain(host)
+    return cachedPrimaryRegistrableDomain
+  } catch (error) {
+    console.warn("Unable to determine primary registrable domain", error)
+    cachedPrimaryRegistrableDomain = null
+    return cachedPrimaryRegistrableDomain
+  }
+}
 
 function cleanHost(value: string): string {
   if (!value) {
@@ -67,6 +120,32 @@ function resolveRegistrableDomain(hostname: string): string | null {
   return null
 }
 
+function pickRegistrableRpId(hostname: string): string | null {
+  const registrable = resolveRegistrableDomain(hostname)
+  if (!registrable || registrable === hostname) {
+    return null
+  }
+
+  if (MULTI_TENANT_SUFFIXES.has(registrable)) {
+    return null
+  }
+
+  if (ALLOWED_RP_DOMAINS.size > 0 && !ALLOWED_RP_DOMAINS.has(registrable)) {
+    return null
+  }
+
+  if (SHARE_RP_ID_ACROSS_SUBDOMAINS) {
+    return registrable
+  }
+
+  const primaryRegistrable = getPrimaryRegistrableDomain()
+  if (primaryRegistrable && registrable === primaryRegistrable) {
+    return registrable
+  }
+
+  return null
+}
+
 function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): string {
   if (process.env.WEBAUTHN_RP_ID) {
     return process.env.WEBAUTHN_RP_ID
@@ -75,7 +154,7 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
   if (rpIdHint) {
     const sanitized = cleanHost(rpIdHint)
     if (sanitized) {
-      const registrable = resolveRegistrableDomain(sanitized)
+      const registrable = pickRegistrableRpId(sanitized)
       if (registrable) {
         return registrable
       }
@@ -88,7 +167,7 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
     if (normalized) {
       try {
         const host = new URL(normalized).hostname
-        const registrable = resolveRegistrableDomain(host)
+        const registrable = pickRegistrableRpId(host)
         if (registrable) {
           return registrable
         }
@@ -101,7 +180,7 @@ function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): s
 
   try {
     const host = new URL(getAppUrl()).hostname
-    const registrable = resolveRegistrableDomain(host)
+    const registrable = pickRegistrableRpId(host)
     if (registrable) {
       return registrable
     }
