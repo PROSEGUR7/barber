@@ -32,6 +32,16 @@ type EmployeeSummaryRow = {
   services: string[] | null
 }
 
+type EmployeeBasicRow = {
+  id: number
+  user_id: number
+  nombre: string
+  correo: string
+  telefono: string | null
+  estado: string | null
+  fecha_ingreso: Date | null
+}
+
 function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
   const services = Array.isArray(row.services)
     ? row.services.filter((service): service is string => typeof service === "string" && service.trim().length > 0)
@@ -107,8 +117,44 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
     ORDER BY e.nombre ASC
   `
 
-  const result = await pool.query<EmployeeSummaryRow>(query, parameters)
-  return result.rows.map(mapEmployeeRow)
+  try {
+    const result = await pool.query<EmployeeSummaryRow>(query, parameters)
+    return result.rows.map(mapEmployeeRow)
+  } catch (error) {
+    console.warn("Falling back to basic employee query", { filter, error })
+
+    const fallbackQuery = `
+      SELECT
+        e.id,
+        e.user_id,
+        e.nombre,
+        e.telefono,
+        e.estado,
+        e.fecha_ingreso,
+        u.correo
+      FROM tenant_base.empleados e
+      INNER JOIN tenant_base.users u ON u.id = e.user_id
+      ${whereClause}
+      ORDER BY e.nombre ASC
+    `
+
+    const fallbackResult = await pool.query<EmployeeBasicRow>(fallbackQuery, parameters)
+    return fallbackResult.rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      name: row.nombre,
+      email: row.correo,
+      phone: row.telefono,
+      status: row.estado,
+      joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
+      totalAppointments: 0,
+      upcomingAppointments: 0,
+      completedAppointments: 0,
+      totalRevenue: 0,
+      services: [],
+      rating: null,
+    }))
+  }
 }
 
 export async function getEmployeeByUserId(userId: number): Promise<EmployeeSummary | null> {
@@ -143,12 +189,16 @@ export async function registerEmployee(input: {
   }
 
   if (input.phone) {
-    await pool.query(
-      `UPDATE tenant_base.empleados
-         SET telefono = $1
-       WHERE user_id = $2`,
-      [input.phone, user.id],
-    )
+    try {
+      await pool.query(
+        `UPDATE tenant_base.empleados
+           SET telefono = $1
+         WHERE user_id = $2`,
+        [input.phone, user.id],
+      )
+    } catch (error) {
+      console.warn("Failed to update employee phone", { userId: user.id, error })
+    }
   }
 
   const employee = await getEmployeeByUserId(user.id)
