@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { format, startOfDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import {
+  CalendarX,
   Clock,
   DollarSign,
   RefreshCcw,
@@ -31,6 +32,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import {
   Dialog,
   DialogContent,
@@ -432,14 +434,27 @@ export default function AppointmentsPage() {
     }
 
     if (appointments[scope].length === 0) {
+      const emptyCopy =
+        scope === "upcoming"
+          ? {
+              title: "No tienes citas próximas",
+              description: "Agenda tu siguiente visita en minutos para asegurar tu lugar.",
+            }
+          : {
+              title: "Sin historial disponible",
+              description: "Aquí verás las citas completadas o canceladas cuando existan registros.",
+            }
+
       return (
-        <Card className="border-dashed">
-          <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            {scope === "upcoming"
-              ? "No tienes citas próximas. Agenda tu siguiente visita en minutos."
-              : "Aún no registramos historial de citas en tu cuenta."}
-          </CardContent>
-        </Card>
+        <Empty className="border border-dashed border-border/60 bg-muted/40">
+          <EmptyMedia variant="icon">
+            <CalendarX className="size-6" />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>{emptyCopy.title}</EmptyTitle>
+            <EmptyDescription>{emptyCopy.description}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )
     }
 

@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react"
 import { format, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
-import { Clock, DollarSign, Scissors } from "lucide-react"
+import { CalendarX, Clock, DollarSign, Scissors, Users } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
@@ -336,7 +337,19 @@ export default function BookingPage() {
     }
 
     if (services.length === 0) {
-      return <p className="text-sm text-muted-foreground">Aún no hay servicios disponibles.</p>
+      return (
+        <Empty className="border border-dashed border-border/60 bg-muted/40">
+          <EmptyMedia variant="icon">
+            <Scissors className="size-6" />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>Sin servicios disponibles</EmptyTitle>
+            <EmptyDescription>
+              Aún no publicamos servicios para reservar. Vuelve más tarde o contáctanos para más información.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
     }
 
     return services.map((service) => {
@@ -405,7 +418,19 @@ export default function BookingPage() {
     }
 
     if (barbers.length === 0) {
-      return <p className="text-sm text-muted-foreground">No hay barberos asociados a este servicio.</p>
+      return (
+        <Empty className="border border-dashed border-border/60 bg-muted/40">
+          <EmptyMedia variant="icon">
+            <Users className="size-6" />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>Sin profesionales asignados</EmptyTitle>
+            <EmptyDescription>
+              Todavía no tenemos barberos disponibles para este servicio. Elige otro o vuelve más tarde.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
     }
 
     return barbers.map((barber) => {
@@ -465,7 +490,19 @@ export default function BookingPage() {
     }
 
     if (slots.length === 0) {
-      return <p className="text-sm text-muted-foreground">No hay horarios disponibles para esta fecha.</p>
+      return (
+        <Empty className="border border-dashed border-border/60 bg-muted/40">
+          <EmptyMedia variant="icon">
+            <CalendarX className="size-6" />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>Sin horarios disponibles</EmptyTitle>
+            <EmptyDescription>
+              No encontramos horarios para la fecha seleccionada. Prueba con otra fecha u horario cercano.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
     }
 
     return slots.map((slot) => {

@@ -3,9 +3,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
-import { useState } from "react"
-import { Clock, User, DollarSign, CheckCircle, XCircle, CalendarIcon } from "lucide-react"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useState } from "react"
+import { CalendarIcon, CheckCircle, Clock, DollarSign, User, XCircle } from "lucide-react"
 
 interface Appointment {
   id: number
@@ -177,9 +178,18 @@ export default function BarberDashboard() {
                 <TabsContent value="today" className="space-y-4 mt-4">
                   {todayAppointments.length === 0 ? (
                     <Card>
-                      <CardContent className="py-12 text-center">
-                        <CalendarIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                        <p className="text-muted-foreground">No hay citas para hoy</p>
+                      <CardContent className="py-12">
+                        <Empty className="border-0 bg-transparent p-0">
+                          <EmptyMedia variant="icon">
+                            <CalendarIcon className="size-6" />
+                          </EmptyMedia>
+                          <EmptyHeader>
+                            <EmptyTitle>Sin citas para hoy</EmptyTitle>
+                            <EmptyDescription>
+                              Cuando tus clientes agenden una visita, la verás en esta sección.
+                            </EmptyDescription>
+                          </EmptyHeader>
+                        </Empty>
                       </CardContent>
                     </Card>
                   ) : (
@@ -256,18 +266,36 @@ export default function BarberDashboard() {
 
                 <TabsContent value="upcoming" className="mt-4">
                   <Card>
-                    <CardContent className="py-12 text-center">
-                      <CalendarIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                      <p className="text-muted-foreground">No hay citas próximas</p>
+                    <CardContent className="py-12">
+                      <Empty className="border-0 bg-transparent p-0">
+                        <EmptyMedia variant="icon">
+                          <CalendarIcon className="size-6" />
+                        </EmptyMedia>
+                        <EmptyHeader>
+                          <EmptyTitle>Sin citas próximas</EmptyTitle>
+                          <EmptyDescription>
+                            Agenda nuevas citas para mantener tu agenda activa.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
                     </CardContent>
                   </Card>
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-4">
                   <Card>
-                    <CardContent className="py-12 text-center">
-                      <CalendarIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                      <p className="text-muted-foreground">No hay historial de citas</p>
+                    <CardContent className="py-12">
+                      <Empty className="border-0 bg-transparent p-0">
+                        <EmptyMedia variant="icon">
+                          <CalendarIcon className="size-6" />
+                        </EmptyMedia>
+                        <EmptyHeader>
+                          <EmptyTitle>Sin historial registrado</EmptyTitle>
+                          <EmptyDescription>
+                            Aquí aparecerán las citas completadas o canceladas.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
                     </CardContent>
                   </Card>
                 </TabsContent>
