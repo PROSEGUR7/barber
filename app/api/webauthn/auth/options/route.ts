@@ -32,8 +32,11 @@ export async function POST(request: Request) {
     const preferPlatform = shouldPreferPlatformAuthenticator(request.headers.get("user-agent"))
 
     const options = await generatePasskeyAuthenticationOptions(email, {
-      userVerification: preferPlatform ? "required" : "preferred",
-      preferPlatformAuthenticator: preferPlatform,
+      overrides: {
+        userVerification: preferPlatform ? "required" : "preferred",
+        preferPlatformAuthenticator: preferPlatform,
+      },
+      requestOrigin: request.headers.get("origin"),
     })
 
     return NextResponse.json({ options })

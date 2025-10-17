@@ -31,16 +31,16 @@ export async function POST(request: Request) {
 
     const preferPlatform = shouldPreferPlatformAuthenticator(request.headers.get("user-agent"))
 
-    const options = await generatePasskeyRegistrationOptions(
-      userId,
-      preferPlatform
+    const options = await generatePasskeyRegistrationOptions(userId, {
+      overrides: preferPlatform
         ? {
             authenticatorAttachment: "platform",
             residentKey: "preferred",
             userVerification: "required",
           }
         : undefined,
-    )
+      requestOrigin: request.headers.get("origin"),
+    })
 
     return NextResponse.json({ options })
   } catch (error) {

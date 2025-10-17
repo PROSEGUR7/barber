@@ -30,8 +30,31 @@ function getAppUrl() {
 }
 
 const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "BarberPro"
-const RP_ID = process.env.WEBAUTHN_RP_ID ?? new URL(getAppUrl()).hostname
 const ORIGIN = getAppUrl()
+
+function resolveRpId(requestOrigin?: string | null): string {
+  if (process.env.WEBAUTHN_RP_ID) {
+    return process.env.WEBAUTHN_RP_ID
+  }
+
+  if (requestOrigin) {
+    const normalized = normalizeOrigin(requestOrigin)
+    if (normalized) {
+      try {
+        return new URL(normalized).hostname
+      } catch (error) {
+        console.warn("Failed to resolve RP ID from request origin", normalized, error)
+      }
+    }
+  }
+
+  try {
+    return new URL(getAppUrl()).hostname
+  } catch (error) {
+    console.warn("Falling back to localhost RP ID", error)
+    return "localhost"
+  }
+}
 
 function parseAllowedOrigins() {
   const configured = process.env.WEBAUTHN_ALLOWED_ORIGINS ?? ""
@@ -145,6 +168,16 @@ type RegistrationOptionsOverrides = {
 type AuthenticationOptionsOverrides = {
   userVerification?: UserVerificationPreference
   preferPlatformAuthenticator?: boolean
+}
+
+type RegistrationOptionsParams = {
+  overrides?: RegistrationOptionsOverrides
+  requestOrigin?: string | null
+}
+
+type AuthenticationOptionsParams = {
+  overrides?: AuthenticationOptionsOverrides
+  requestOrigin?: string | null
 }
 
 async function upsertChallenge(userId: number, challengeType: ChallengeType, challenge: string) {
@@ -311,7 +344,7 @@ function mapPasskeysToAllowCredentials(passkeys: PasskeyRow[], preferPlatform?: 
 
 export async function generatePasskeyRegistrationOptions(
   userId: number,
-  overrides?: RegistrationOptionsOverrides,
+  params?: RegistrationOptionsParams,
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
   await ensureTables()
 
@@ -321,6 +354,9 @@ export async function generatePasskeyRegistrationOptions(
   }
 
   const existingPasskeys = await getPasskeysForUser(user.id)
+
+  const overrides = params?.overrides
+  const rpID = resolveRpId(params?.requestOrigin)
 
   const authenticatorSelection: AuthenticatorSelectionCriteria = {
     residentKey: (overrides?.residentKey ?? "preferred") as AuthenticatorSelectionCriteria["residentKey"],
@@ -333,7 +369,7 @@ export async function generatePasskeyRegistrationOptions(
 
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
-    rpID: RP_ID,
+    rpID,
     userID: Buffer.from(String(user.id), "utf8"),
     userName: user.email,
     userDisplayName: user.email,
@@ -373,11 +409,13 @@ export async function verifyPasskeyRegistration({
     console.debug("[WebAuthn] Registration expected origins", expectedOrigins)
   }
 
+  const expectedRPID = resolveRpId(requestOrigin)
+
   const verification = await verifyRegistrationResponse({
     response: credential,
     expectedChallenge,
     expectedOrigin: expectedOrigins,
-    expectedRPID: RP_ID,
+    expectedRPID,
     requireUserVerification: true,
   })
 
@@ -407,7 +445,7 @@ export async function verifyPasskeyRegistration({
 
 export async function generatePasskeyAuthenticationOptions(
   email: string,
-  overrides?: AuthenticationOptionsOverrides,
+  params?: AuthenticationOptionsParams,
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
   await ensureTables()
 
@@ -421,8 +459,11 @@ export async function generatePasskeyAuthenticationOptions(
     throw new Error("NO_PASSKEYS")
   }
 
+  const overrides = params?.overrides
+  const rpID = resolveRpId(params?.requestOrigin)
+
   const options = await generateAuthenticationOptions({
-    rpID: RP_ID,
+    rpID,
     userVerification: overrides?.userVerification ?? "preferred",
     allowCredentials: mapPasskeysToAllowCredentials(passkeys, overrides?.preferPlatformAuthenticator),
   })
@@ -470,11 +511,13 @@ export async function verifyPasskeyAuthentication({
     console.debug("[WebAuthn] Authentication expected origins", expectedOrigins)
   }
 
+  const expectedRPID = resolveRpId(requestOrigin)
+
   const verification = await verifyAuthenticationResponse({
     response: credential,
     expectedChallenge,
     expectedOrigin: expectedOrigins,
-    expectedRPID: RP_ID,
+    expectedRPID,
     requireUserVerification: true,
     credential: authenticator,
   })
