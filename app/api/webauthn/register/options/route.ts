@@ -7,12 +7,40 @@ const bodySchema = z.object({
   userId: z.coerce.number().int().positive(),
 })
 
+function shouldPreferPlatformAuthenticator(userAgent: string | null): boolean {
+  if (!userAgent) {
+    return false
+  }
+
+  const ua = userAgent.toLowerCase()
+  if (ua.includes("iphone") || ua.includes("ipod") || ua.includes("android")) {
+    return true
+  }
+
+  if (ua.includes("ipad") || (ua.includes("macintosh") && ua.includes("mobile"))) {
+    return true
+  }
+
+  return false
+}
+
 export async function POST(request: Request) {
   try {
     const json = await request.json()
     const { userId } = bodySchema.parse(json)
 
-    const options = await generatePasskeyRegistrationOptions(userId)
+    const preferPlatform = shouldPreferPlatformAuthenticator(request.headers.get("user-agent"))
+
+    const options = await generatePasskeyRegistrationOptions(
+      userId,
+      preferPlatform
+        ? {
+            authenticatorAttachment: "platform",
+            residentKey: "preferred",
+            userVerification: "required",
+          }
+        : undefined,
+    )
 
     return NextResponse.json({ options })
   } catch (error) {

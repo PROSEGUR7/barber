@@ -7,6 +7,7 @@ import {
 import { isoBase64URL } from "@simplewebauthn/server/helpers"
 import type {
   AuthenticationResponseJSON,
+  AuthenticatorSelectionCriteria,
   AuthenticatorTransport,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
@@ -129,6 +130,21 @@ type ChallengeRow = {
   challenge_type: ChallengeType
   challenge: string
   expires_at: Date
+}
+
+type ResidentKeyPreference = "discouraged" | "preferred" | "required"
+type UserVerificationPreference = "required" | "preferred" | "discouraged"
+type AuthenticatorAttachmentPreference = "platform" | "cross-platform"
+
+type RegistrationOptionsOverrides = {
+  authenticatorAttachment?: AuthenticatorAttachmentPreference
+  residentKey?: ResidentKeyPreference
+  userVerification?: UserVerificationPreference
+}
+
+type AuthenticationOptionsOverrides = {
+  userVerification?: UserVerificationPreference
+  preferPlatformAuthenticator?: boolean
 }
 
 async function upsertChallenge(userId: number, challengeType: ChallengeType, challenge: string) {
@@ -268,15 +284,35 @@ function sanitizeTransports(transports: (string | null)[] | null | undefined): A
   )
 }
 
-function mapPasskeysToAllowCredentials(passkeys: PasskeyRow[]) {
-  return passkeys.map((passkey) => ({
+function mapPasskeysToAllowCredentials(passkeys: PasskeyRow[], preferPlatform?: boolean) {
+  const mapped = passkeys.map((passkey) => ({
     id: isoBase64URL.fromBuffer(new Uint8Array(passkey.credential_id)),
     type: "public-key" as const,
     transports: sanitizeTransports(passkey.transports)?.map((transport) => transport as AuthenticatorTransport),
   }))
+
+  if (preferPlatform) {
+    const platformCredentials = mapped.filter((credential) => {
+      const transports = credential.transports
+      if (!transports || transports.length === 0) {
+        return false
+      }
+
+      return transports.some((transport) => transport === "internal" || transport === "hybrid")
+    })
+
+    if (platformCredentials.length > 0) {
+      return platformCredentials
+    }
+  }
+
+  return mapped
 }
 
-export async function generatePasskeyRegistrationOptions(userId: number): Promise<PublicKeyCredentialCreationOptionsJSON> {
+export async function generatePasskeyRegistrationOptions(
+  userId: number,
+  overrides?: RegistrationOptionsOverrides,
+): Promise<PublicKeyCredentialCreationOptionsJSON> {
   await ensureTables()
 
   const user = await findUserById(userId)
@@ -286,17 +322,23 @@ export async function generatePasskeyRegistrationOptions(userId: number): Promis
 
   const existingPasskeys = await getPasskeysForUser(user.id)
 
+  const authenticatorSelection: AuthenticatorSelectionCriteria = {
+    residentKey: (overrides?.residentKey ?? "preferred") as AuthenticatorSelectionCriteria["residentKey"],
+    userVerification: (overrides?.userVerification ?? "preferred") as AuthenticatorSelectionCriteria["userVerification"],
+  }
+
+  if (overrides?.authenticatorAttachment) {
+    authenticatorSelection.authenticatorAttachment = overrides.authenticatorAttachment
+  }
+
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: RP_ID,
-  userID: Buffer.from(String(user.id), "utf8"),
+    userID: Buffer.from(String(user.id), "utf8"),
     userName: user.email,
     userDisplayName: user.email,
     attestationType: "none",
-    authenticatorSelection: {
-      residentKey: "preferred",
-      userVerification: "preferred",
-    },
+    authenticatorSelection,
     excludeCredentials: mapPasskeysToExcludeCredentials(existingPasskeys),
   })
 
@@ -363,7 +405,10 @@ export async function verifyPasskeyRegistration({
   }
 }
 
-export async function generatePasskeyAuthenticationOptions(email: string): Promise<PublicKeyCredentialRequestOptionsJSON> {
+export async function generatePasskeyAuthenticationOptions(
+  email: string,
+  overrides?: AuthenticationOptionsOverrides,
+): Promise<PublicKeyCredentialRequestOptionsJSON> {
   await ensureTables()
 
   const userRecord = await findUserByEmail(email)
@@ -378,8 +423,8 @@ export async function generatePasskeyAuthenticationOptions(email: string): Promi
 
   const options = await generateAuthenticationOptions({
     rpID: RP_ID,
-    userVerification: "preferred",
-    allowCredentials: mapPasskeysToAllowCredentials(passkeys),
+    userVerification: overrides?.userVerification ?? "preferred",
+    allowCredentials: mapPasskeysToAllowCredentials(passkeys, overrides?.preferPlatformAuthenticator),
   })
 
   await upsertChallenge(userRecord.id, "authentication", options.challenge)

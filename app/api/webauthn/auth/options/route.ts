@@ -7,12 +7,34 @@ const bodySchema = z.object({
   email: z.string().email(),
 })
 
+function shouldPreferPlatformAuthenticator(userAgent: string | null): boolean {
+  if (!userAgent) {
+    return false
+  }
+
+  const ua = userAgent.toLowerCase()
+  if (ua.includes("iphone") || ua.includes("ipod") || ua.includes("android")) {
+    return true
+  }
+
+  if (ua.includes("ipad") || (ua.includes("macintosh") && ua.includes("mobile"))) {
+    return true
+  }
+
+  return false
+}
+
 export async function POST(request: Request) {
   try {
     const json = await request.json()
     const { email } = bodySchema.parse(json)
 
-    const options = await generatePasskeyAuthenticationOptions(email)
+    const preferPlatform = shouldPreferPlatformAuthenticator(request.headers.get("user-agent"))
+
+    const options = await generatePasskeyAuthenticationOptions(email, {
+      userVerification: preferPlatform ? "required" : "preferred",
+      preferPlatformAuthenticator: preferPlatform,
+    })
 
     return NextResponse.json({ options })
   } catch (error) {
