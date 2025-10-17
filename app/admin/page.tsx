@@ -1,7 +1,7 @@
 "use client"
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { CalendarCheck2, CalendarClock, DollarSign, Plus, Users } from "lucide-react"
+import { CalendarCheck2, CalendarClock, DollarSign, Plus, UserCircle, Users } from "lucide-react"
 
 import { AdminClientsTable, AdminEmployeesTable } from "@/components/admin"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -124,6 +124,39 @@ export default function AdminDashboard() {
     [],
   )
 
+  const loadClients = useCallback(
+    async (signal?: AbortSignal) => {
+      setAreClientsLoading(true)
+      setClientsError(null)
+
+      try {
+        const response = await fetch("/api/admin/clients", { signal, cache: "no-store" })
+        const data: ClientsResponse = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudieron cargar los clientes")
+        }
+
+        if (!signal?.aborted) {
+          const list = Array.isArray(data.clients) ? data.clients : []
+          setClients(sortClients(list))
+        }
+      } catch (err) {
+        if (signal?.aborted) {
+          return
+        }
+
+        console.error("Error fetching clients", err)
+        setClientsError("No se pudieron cargar los clientes.")
+      } finally {
+        if (!signal?.aborted) {
+          setAreClientsLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     const controller = new AbortController()
     void loadEmployees(controller.signal)
@@ -132,15 +165,32 @@ export default function AdminDashboard() {
   }, [loadEmployees])
 
   useEffect(() => {
+    const controller = new AbortController()
+    void loadClients(controller.signal)
+
+    return () => controller.abort()
+  }, [loadClients])
+
+  useEffect(() => {
     if (!isEmployeeRegisterOpen) {
       resetEmployeeForm()
       setIsEmployeeSubmitting(false)
     }
   }, [isEmployeeRegisterOpen, resetEmployeeForm])
 
+  useEffect(() => {
+    if (!isClientRegisterOpen) {
+      resetClientForm()
+      setIsClientSubmitting(false)
+    }
+  }, [isClientRegisterOpen, resetClientForm])
+
+  const isDashboardLoading = areEmployeesLoading || areClientsLoading
+
   const metrics = useMemo(() => {
     const totals = {
       totalEmployees: employees.length,
+      totalClients: clients.length,
       totalRevenue: 0,
       totalAppointments: 0,
       upcomingAppointments: 0,
@@ -155,13 +205,18 @@ export default function AdminDashboard() {
     }
 
     return totals
-  }, [employees])
+  }, [clients, employees])
 
   const shouldShowEmployeesErrorCard = Boolean(employeesError) && !areEmployeesLoading && employees.length === 0
+  const shouldShowClientsErrorCard = Boolean(clientsError) && !areClientsLoading && clients.length === 0
 
   const handleEmployeesReload = useCallback(() => {
     void loadEmployees()
   }, [loadEmployees])
+
+  const handleClientsReload = useCallback(() => {
+    void loadClients()
+  }, [loadClients])
 
   const handleEmployeeSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -246,20 +301,103 @@ export default function AdminDashboard() {
     }
   }
 
+  const handleClientSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setClientFormError(null)
+
+    const sanitizedName = clientFormName.trim()
+    const sanitizedEmail = clientFormEmail.trim().toLowerCase()
+    const sanitizedPhone = clientFormPhone.trim()
+
+    if (sanitizedName.length < 2) {
+      setClientFormError("Ingresa un nombre válido.")
+      return
+    }
+
+    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
+      setClientFormError("Ingresa un correo válido.")
+      return
+    }
+
+    if (!sanitizedPhone) {
+      setClientFormError("Ingresa un teléfono válido.")
+      return
+    }
+
+    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
+      setClientFormError("El teléfono debe tener entre 7 y 20 caracteres.")
+      return
+    }
+
+    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
+      setClientFormError("El teléfono solo puede tener números y símbolos + -.")
+      return
+    }
+
+    if (clientFormPassword.length < 8) {
+      setClientFormError("La contraseña debe tener al menos 8 caracteres.")
+      return
+    }
+
+    setIsClientSubmitting(true)
+
+    try {
+      const response = await fetch("/api/admin/clients", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: sanitizedName,
+          email: sanitizedEmail,
+          password: clientFormPassword,
+          phone: sanitizedPhone,
+        }),
+      })
+
+      const data: CreateClientResponse = await response.json().catch(() => ({} as CreateClientResponse))
+
+      if (!response.ok || !data.client) {
+        setClientFormError(data.error ?? "No se pudo crear el cliente.")
+        return
+      }
+
+      setClients((previous) => {
+        const next = previous.filter((item) => item.id !== data.client!.id)
+        next.push(data.client!)
+        return sortClients(next)
+      })
+
+      setClientsError(null)
+      resetClientForm()
+      setIsClientRegisterOpen(false)
+
+      toast({
+        title: "Cliente registrado",
+        description: "El nuevo cliente ya puede gestionar sus reservas.",
+      })
+    } catch (err) {
+      console.error("Error creating client", err)
+      setClientFormError("Error de conexión con el servidor.")
+    } finally {
+      setIsClientSubmitting(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Panel de administración</h1>
           <p className="text-muted-foreground">
-            Monitorea el rendimiento del equipo y registra nuevos empleados.
+            Monitorea el rendimiento del equipo, la base de clientes y registra nuevos perfiles.
           </p>
         </header>
 
-        {areEmployeesLoading ? (
+        {isDashboardLoading ? (
           <StatsSkeleton />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total de empleados</CardTitle>
@@ -268,6 +406,16 @@ export default function AdminDashboard() {
               <CardContent>
                 <div className="text-3xl font-bold">{formatNumber(metrics.totalEmployees)}</div>
                 <p className="text-xs text-muted-foreground">Equipo activo en el sistema</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total de clientes</CardTitle>
+                <UserCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{formatNumber(metrics.totalClients)}</div>
+                <p className="text-xs text-muted-foreground">Clientes registrados en la plataforma</p>
               </CardContent>
             </Card>
             <Card>
@@ -305,7 +453,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        <section className="space-y-4">
+    <section id="empleados" className="scroll-mt-24 space-y-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1">
               <h2 className="text-2xl font-semibold">Gestión de empleados</h2>
@@ -449,6 +597,170 @@ export default function AdminDashboard() {
             </>
           )}
         </section>
+
+        <section id="clientes" className="scroll-mt-24 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-2xl font-semibold">Gestión de clientes</h2>
+              <p className="text-muted-foreground">Revisa historial de citas, clasificaciones y registra nuevos clientes.</p>
+            </div>
+            <Sheet open={isClientRegisterOpen} onOpenChange={setIsClientRegisterOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Registrar cliente
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+                <form onSubmit={handleClientSubmit} className="flex h-full flex-col">
+                  <SheetHeader className="border-b px-6 py-4 text-left">
+                    <SheetTitle>Registrar nuevo cliente</SheetTitle>
+                    <SheetDescription>
+                      Crea un acceso para un cliente. Podrá actualizar sus datos después.
+                    </SheetDescription>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-y-auto px-6 py-4">
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="client-name">Nombre completo</FieldLabel>
+                        <Input
+                          id="client-name"
+                          value={clientFormName}
+                          onChange={(event) => {
+                            setClientFormName(event.target.value)
+                            setClientFormError(null)
+                          }}
+                          placeholder="Ej. Andrea Gómez"
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="client-email">Correo electrónico</FieldLabel>
+                        <Input
+                          id="client-email"
+                          type="email"
+                          value={clientFormEmail}
+                          onChange={(event) => {
+                            setClientFormEmail(event.target.value)
+                            setClientFormError(null)
+                          }}
+                          placeholder="cliente@correo.com"
+                          required
+                        />
+                        <FieldDescription>El cliente usará este correo para iniciar sesión.</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="client-phone">Teléfono</FieldLabel>
+                        <Input
+                          id="client-phone"
+                          type="tel"
+                          value={clientFormPhone}
+                          onChange={(event) => {
+                            setClientFormPhone(event.target.value)
+                            setClientFormError(null)
+                          }}
+                          placeholder="Ej. 3109876543"
+                          required
+                        />
+                        <FieldDescription>Solo números, espacios o símbolos + - (mínimo 7 caracteres).</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="client-password">Contraseña temporal</FieldLabel>
+                        <Input
+                          id="client-password"
+                          type="password"
+                          value={clientFormPassword}
+                          onChange={(event) => {
+                            setClientFormPassword(event.target.value)
+                            setClientFormError(null)
+                          }}
+                          placeholder="Mínimo 8 caracteres"
+                          minLength={8}
+                          required
+                        />
+                        <FieldDescription>Se recomienda cambiarla tras el primer inicio de sesión.</FieldDescription>
+                      </Field>
+                    </FieldGroup>
+                  </div>
+                  <SheetFooter className="border-t px-6 py-4">
+                    {clientFormError && <p className="text-sm text-destructive">{clientFormError}</p>}
+                    <Button type="submit" className="w-full" disabled={isClientSubmitting}>
+                      {isClientSubmitting ? "Registrando..." : "Registrar cliente"}
+                    </Button>
+                  </SheetFooter>
+                </form>
+              </SheetContent>
+            </Sheet>
+          </div>
+
+          {shouldShowClientsErrorCard ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>No pudimos cargar a los clientes</CardTitle>
+                <CardDescription>Intenta nuevamente para obtener la lista actualizada de clientes.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                <Button onClick={handleClientsReload}>Reintentar</Button>
+              </CardContent>
+            </Card>
+          ) : areClientsLoading ? (
+            <ClientsTableSkeleton />
+          ) : clients.length === 0 ? (
+            <Empty className="border border-dashed">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <UserCircle className="h-5 w-5" />
+                </EmptyMedia>
+                <EmptyTitle>Sin clientes registrados</EmptyTitle>
+                <EmptyDescription>Registra el primer cliente para gestionar reservas y seguimientos.</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button onClick={() => setIsClientRegisterOpen(true)} variant="outline">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Registrar cliente
+                </Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <>
+              {clientsError && (
+                <Alert variant="destructive">
+                  <AlertTitle>Error al actualizar la lista</AlertTitle>
+                  <AlertDescription>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <span>{clientsError}</span>
+                      <Button variant="outline" onClick={handleClientsReload}>
+                        Reintentar
+                      </Button>
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+              <AdminClientsTable clients={clients} />
+            </>
+          )}
+        </section>
+
+        <PlaceholderSection
+          id="citas"
+          title="Agendamientos"
+          description="Monitorea y administra las reservas pendientes y completadas."
+        />
+        <PlaceholderSection
+          id="servicios"
+          title="Servicios"
+          description="Configura los servicios ofrecidos y sus tarifas."
+        />
+        <PlaceholderSection
+          id="pagos"
+          title="Pagos y facturación"
+          description="Supervisa los pagos recibidos y las facturas generadas."
+        />
+        <PlaceholderSection
+          id="ajustes"
+          title="Ajustes y configuración"
+          description="Personaliza parámetros generales del panel administrativo."
+        />
       </main>
     </div>
   )
@@ -456,8 +768,8 @@ export default function AdminDashboard() {
 
 function StatsSkeleton() {
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {Array.from({ length: 4 }).map((_, index) => (
+  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
+      {Array.from({ length: 5 }).map((_, index) => (
         <Card key={index}>
           <CardHeader className="space-y-2">
             <Skeleton className="h-4 w-32" />
@@ -469,6 +781,42 @@ function StatsSkeleton() {
         </Card>
       ))}
     </div>
+  )
+}
+
+function ClientsTableSkeleton() {
+  return (
+    <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
+      <CardHeader className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-44" />
+            <Skeleton className="h-3 w-64" />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Skeleton className="h-9 w-full sm:w-64" />
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-32" />
+            <Skeleton className="h-9 w-28" />
+            <Skeleton className="h-9 w-28" />
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-border/60">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div
+              key={index}
+              className="border-border/60 bg-muted/20 px-4 py-5"
+            >
+              <Skeleton className="h-6 w-full" />
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -505,5 +853,29 @@ function EmployeesTableSkeleton() {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function PlaceholderSection({
+  id,
+  title,
+  description,
+}: {
+  id: string
+  title: string
+  description: string
+}) {
+  return (
+    <section id={id} className="scroll-mt-24 space-y-4">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold">{title}</h2>
+        <p className="text-muted-foreground">{description}</p>
+      </div>
+      <Card className="border border-dashed">
+        <CardContent className="py-12 text-center text-sm text-muted-foreground">
+          Estamos trabajando en esta sección. Pronto verás información detallada aquí.
+        </CardContent>
+      </Card>
+    </section>
   )
 }
