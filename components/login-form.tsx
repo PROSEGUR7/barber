@@ -156,7 +156,7 @@ export function LoginForm({
         return
       }
 
-      const credential = await startAuthentication(optionsData.options)
+  const credential = await startAuthentication({ optionsJSON: optionsData.options })
 
       const verifyResponse = await fetch("/api/webauthn/auth/verify", {
         method: "POST",
@@ -248,7 +248,7 @@ export function LoginForm({
         return false
       }
 
-      const credential = await startRegistration(optionsData.options)
+  const credential = await startRegistration({ optionsJSON: optionsData.options })
 
       const verifyResponse = await fetch("/api/webauthn/register/verify", {
         method: "POST",

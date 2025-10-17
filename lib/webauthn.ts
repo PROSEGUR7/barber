@@ -390,7 +390,7 @@ export async function generatePasskeyRegistrationOptions(
     authenticatorSelection.authenticatorAttachment = overrides.authenticatorAttachment
   }
 
-  const options = await generateRegistrationOptions({
+  const baseOptions = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID,
     userID: Buffer.from(String(user.id), "utf8"),
@@ -401,6 +401,12 @@ export async function generatePasskeyRegistrationOptions(
     excludeCredentials: mapPasskeysToExcludeCredentials(existingPasskeys),
   })
 
+  const options: PublicKeyCredentialCreationOptionsJSON & { rpId?: string } = {
+    ...baseOptions,
+    rpId: (baseOptions as { rpId?: string }).rpId ?? rpID,
+  }
+
+  // Ensure the RP ID returned to the client is explicit for debugging and clients that expect it
   await upsertChallenge(user.id, "registration", options.challenge)
 
   return options
@@ -487,11 +493,16 @@ export async function generatePasskeyAuthenticationOptions(
   const overrides = params?.overrides
   const rpID = resolveRpId(params?.requestOrigin, params?.rpIdHint)
 
-  const options = await generateAuthenticationOptions({
+  const baseOptions = await generateAuthenticationOptions({
     rpID,
     userVerification: overrides?.userVerification ?? "preferred",
     allowCredentials: mapPasskeysToAllowCredentials(passkeys, overrides?.preferPlatformAuthenticator),
   })
+
+  const options: PublicKeyCredentialRequestOptionsJSON & { rpId?: string } = {
+    ...baseOptions,
+    rpId: (baseOptions as { rpId?: string }).rpId ?? rpID,
+  }
 
   await upsertChallenge(userRecord.id, "authentication", options.challenge)
 
