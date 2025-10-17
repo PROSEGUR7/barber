@@ -222,7 +222,7 @@ export async function getAppointmentsForUser(options: {
        INNER JOIN tenant_base.empleados e ON e.id = a.empleado_id
       WHERE a.cliente_id = $1
         AND a.fecha_cita ${dateComparator} now()
-        AND ($2::text[] IS NULL OR a.estado = ANY($2::text[]))
+        AND ($2::text[] IS NULL OR a.estado::text = ANY($2::text[]))
       ORDER BY a.fecha_cita ${orderDirection}
       LIMIT $3`,
     [userId, statusArray, limit],

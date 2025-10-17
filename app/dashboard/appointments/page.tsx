@@ -32,7 +32,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import {
   Dialog,
   DialogContent,
@@ -424,12 +424,30 @@ export default function AppointmentsPage() {
     }
 
     if (loadError[scope]) {
+      const onRetry = () => {
+        fetchAppointments(scope, statusFilter[scope])
+      }
+
       return (
-        <Card className="border-destructive/30 bg-destructive/10">
-          <CardContent className="py-6 text-sm text-destructive">
-            {loadError[scope]}
-          </CardContent>
-        </Card>
+        <Empty className="border border-destructive/40 bg-destructive/10 text-destructive">
+          <EmptyMedia variant="icon">
+            <XCircle className="size-6" />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>No se pudieron cargar las citas</EmptyTitle>
+            <EmptyDescription>{loadError[scope]}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-destructive/40 text-destructive hover:border-destructive hover:bg-destructive/10"
+              onClick={onRetry}
+            >
+              <RefreshCcw className="mr-2 size-4" /> Intentar de nuevo
+            </Button>
+          </EmptyContent>
+        </Empty>
       )
     }
 
