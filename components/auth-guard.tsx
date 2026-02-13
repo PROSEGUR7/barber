@@ -15,29 +15,46 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const router = useRouter()
+  const [isMounted, setIsMounted] = useState(false)
   const [isAuthorized, setIsAuthorized] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isMounted) {
+      return
+    }
+
     const userRole = localStorage.getItem("userRole") as UserRole | null
 
     if (!userRole) {
+      setIsAuthorized(false)
+      setIsLoading(false)
       router.push("/login")
       return
     }
 
     if (!allowedRoles.includes(userRole)) {
+      setIsAuthorized(false)
+      setIsLoading(false)
       router.push("/login")
       return
     }
 
     setIsAuthorized(true)
     setIsLoading(false)
-  }, [router, allowedRoles])
+  }, [isMounted, router, allowedRoles])
+
+  if (!isMounted) {
+    return null
+  }
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" suppressHydrationWarning>
         <Spinner className="h-8 w-8" />
       </div>
     )

@@ -1,5 +1,5 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import { Analytics } from "@vercel/analytics/next"
@@ -13,7 +13,6 @@ export const metadata: Metadata = {
   generator: "v0.app",
   applicationName: "BarberPro",
   manifest: "/manifest.webmanifest",
-  themeColor: "#111827",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -26,10 +25,12 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/icons/icon-192x192.png" }],
   },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-  },
+}
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#111827",
 }
 
 export default function RootLayout({
@@ -38,7 +39,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="es">
+    <html lang="es" suppressHydrationWarning>
       <body
         suppressHydrationWarning
         className={`font-sans ${GeistSans.variable} ${GeistMono.variable} antialiased`}

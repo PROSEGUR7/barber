@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server"
 import { ZodError, z } from "zod"
-import {
-  AppUserRole,
-  MissingProfileDataError,
-  UserAlreadyExistsError,
-  createUser,
-} from "@/lib/auth"
+import type { AppUserRole } from "@/lib/auth"
 
 const registerSchema = z.object({
   email: z
@@ -28,7 +23,25 @@ const registerSchema = z.object({
 })
 
 export async function POST(request: Request) {
+  let missingProfileDataErrorCtor: (new (...args: any[]) => Error) | null = null
+  let userAlreadyExistsErrorCtor: (new (...args: any[]) => Error) | null = null
+
   try {
+    if (!process.env.DATABASE_URL) {
+      return NextResponse.json(
+        {
+          error:
+            "Falta configurar DATABASE_URL en las variables de entorno para poder registrar usuarios.",
+        },
+        { status: 500 },
+      )
+    }
+
+    const authModule = await import("@/lib/auth")
+    const createUser = authModule.createUser
+    missingProfileDataErrorCtor = authModule.MissingProfileDataError
+    userAlreadyExistsErrorCtor = authModule.UserAlreadyExistsError
+
     const json = await request.json()
     const { email, password, role, name, phone } = registerSchema.parse(json)
 
@@ -57,14 +70,20 @@ export async function POST(request: Request) {
       )
     }
 
-    if (error instanceof UserAlreadyExistsError) {
+    if (
+      userAlreadyExistsErrorCtor &&
+      error instanceof userAlreadyExistsErrorCtor
+    ) {
       return NextResponse.json(
         { error: "Ya existe una cuenta con este correo" },
         { status: 409 },
       )
     }
 
-    if (error instanceof MissingProfileDataError) {
+    if (
+      missingProfileDataErrorCtor &&
+      error instanceof missingProfileDataErrorCtor
+    ) {
       return NextResponse.json(
         { error: "Faltan datos del perfil requeridos para este tipo de cuenta" },
         { status: 400 },
