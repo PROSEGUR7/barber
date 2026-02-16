@@ -1,12 +1,13 @@
 "use client"
 
-import { ChevronsUpDown, LogOut, Mail, Moon, Settings, Sun } from "lucide-react"
+import { ChevronsUpDown, LogOut, Moon, Settings, Sun } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useTheme } from "next-themes"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -22,6 +23,14 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar()
   const router = useRouter()
+  const { setTheme, resolvedTheme } = useTheme()
+
+  const isLight = resolvedTheme !== "dark"
+  const isDark = resolvedTheme === "dark"
+
+  const handleGoToSettings = () => {
+    router.push("/profile")
+  }
 
   const handleLogout = () => {
     try {
@@ -66,23 +75,19 @@ export function NavUser({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <Mail className="text-muted-foreground" />
-              <span>Bandeja de entrada</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={handleGoToSettings}>
               <Settings className="text-muted-foreground" />
               <span>Configuración</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuCheckboxItem checked={isLight} onCheckedChange={() => setTheme("light")}>
               <Sun className="text-muted-foreground" />
               <span>Claro</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem checked={isDark} onCheckedChange={() => setTheme("dark")}>
               <Moon className="text-muted-foreground" />
               <span>Oscuro</span>
-            </DropdownMenuItem>
+            </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="text-muted-foreground" />

@@ -33,6 +33,11 @@ type CreateEmployeeResponse = EmployeesResponse & {
   employee?: EmployeeSummary
 }
 
+type EmployeeResponse = {
+  employee?: EmployeeSummary
+  error?: string
+}
+
 function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
@@ -51,6 +56,19 @@ export default function AdminEmployeesPage() {
   const [formPassword, setFormPassword] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const [profileEmployee, setProfileEmployee] = useState<EmployeeSummary | null>(null)
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
+
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [editingEmployee, setEditingEmployee] = useState<EmployeeSummary | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editEmail, setEditEmail] = useState("")
+  const [editPhone, setEditPhone] = useState("")
+  const [editError, setEditError] = useState<string | null>(null)
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false)
+
+  const [isDeletingEmployeeId, setIsDeletingEmployeeId] = useState<number | null>(null)
 
   const resetForm = useCallback(() => {
     setFormName("")
@@ -106,6 +124,17 @@ export default function AdminEmployeesPage() {
       setIsSubmitting(false)
     }
   }, [isRegisterOpen, resetForm])
+
+  useEffect(() => {
+    if (!isEditOpen) {
+      setEditingEmployee(null)
+      setEditName("")
+      setEditEmail("")
+      setEditPhone("")
+      setEditError(null)
+      setIsEditSubmitting(false)
+    }
+  }, [isEditOpen])
 
   const metrics = useMemo(() => {
     const totals = {
@@ -213,6 +242,155 @@ export default function AdminEmployeesPage() {
       setIsSubmitting(false)
     }
   }
+
+  const handleViewProfile = useCallback((employee: EmployeeSummary) => {
+    setProfileEmployee(employee)
+    setIsProfileOpen(true)
+  }, [])
+
+  const handleOpenEdit = useCallback((employee: EmployeeSummary) => {
+    setEditingEmployee(employee)
+    setEditName(employee.name)
+    setEditEmail(employee.email)
+    setEditPhone(employee.phone ?? "")
+    setEditError(null)
+    setIsEditOpen(true)
+  }, [])
+
+  const handleEditSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setEditError(null)
+
+    if (!editingEmployee) {
+      setEditError("No hay empleado seleccionado para editar.")
+      return
+    }
+
+    const sanitizedName = editName.trim()
+    const sanitizedEmail = editEmail.trim().toLowerCase()
+    const sanitizedPhone = editPhone.trim()
+
+    if (sanitizedName.length < 2) {
+      setEditError("Ingresa un nombre válido.")
+      return
+    }
+
+    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
+      setEditError("Ingresa un correo válido.")
+      return
+    }
+
+    if (!sanitizedPhone) {
+      setEditError("Ingresa un teléfono válido.")
+      return
+    }
+
+    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
+      setEditError("El teléfono debe tener entre 7 y 20 caracteres.")
+      return
+    }
+
+    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
+      setEditError("El teléfono solo puede tener números y símbolos + -.")
+      return
+    }
+
+    setIsEditSubmitting(true)
+
+    try {
+      const response = await fetch(`/api/admin/employees/${editingEmployee.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: sanitizedName,
+          email: sanitizedEmail,
+          phone: sanitizedPhone,
+        }),
+      })
+
+      const data: EmployeeResponse = await response.json().catch(() => ({} as EmployeeResponse))
+
+      if (!response.ok || !data.employee) {
+        setEditError(data.error ?? "No se pudo actualizar el empleado.")
+        return
+      }
+
+      setEmployees((previous) => {
+        const next = previous.filter((item) => item.id !== data.employee!.id)
+        next.push(data.employee!)
+        return sortEmployees(next)
+      })
+
+      setEmployeesError(null)
+      setIsEditOpen(false)
+
+      if (profileEmployee?.id === data.employee.id) {
+        setProfileEmployee(data.employee)
+      }
+
+      toast({
+        title: "Empleado actualizado",
+        description: `${data.employee.name} fue actualizado correctamente.`,
+      })
+    } catch (error) {
+      console.error("Error updating employee", error)
+      setEditError("Error de conexión con el servidor.")
+    } finally {
+      setIsEditSubmitting(false)
+    }
+  }
+
+  const handleDeleteEmployee = useCallback(
+    async (employee: EmployeeSummary) => {
+      const confirmed = window.confirm(`¿Seguro que deseas eliminar a ${employee.name}?`)
+      if (!confirmed) {
+        return
+      }
+
+      setIsDeletingEmployeeId(employee.id)
+
+      try {
+        const response = await fetch(`/api/admin/employees/${employee.id}`, {
+          method: "DELETE",
+        })
+
+        const data = (await response.json().catch(() => ({}))) as { error?: string }
+
+        if (!response.ok) {
+          toast({
+            title: "No se pudo eliminar",
+            description: data.error ?? "El empleado no pudo eliminarse.",
+            variant: "destructive",
+          })
+          return
+        }
+
+        setEmployees((previous) => previous.filter((item) => item.id !== employee.id))
+
+        if (profileEmployee?.id === employee.id) {
+          setIsProfileOpen(false)
+          setProfileEmployee(null)
+        }
+
+        toast({
+          title: "Empleado eliminado",
+          description: `${employee.name} fue eliminado del sistema.`,
+        })
+      } catch (error) {
+        console.error("Error deleting employee", error)
+        toast({
+          title: "Error de conexión",
+          description: "No fue posible eliminar el empleado.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsDeletingEmployeeId(null)
+      }
+    },
+    [profileEmployee?.id, toast],
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -350,6 +528,119 @@ export default function AdminEmployeesPage() {
                 </form>
               </SheetContent>
             </Sheet>
+
+            <Sheet open={isEditOpen} onOpenChange={setIsEditOpen}>
+              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+                <form onSubmit={handleEditSubmit} className="flex h-full flex-col">
+                  <SheetHeader className="border-b px-6 py-4 text-left">
+                    <SheetTitle>Editar empleado</SheetTitle>
+                    <SheetDescription>Actualiza la información principal del empleado seleccionado.</SheetDescription>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-y-auto px-6 py-4">
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="edit-employee-name">Nombre completo</FieldLabel>
+                        <Input
+                          id="edit-employee-name"
+                          value={editName}
+                          onChange={(event) => {
+                            setEditName(event.target.value)
+                            setEditError(null)
+                          }}
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="edit-employee-email">Correo electrónico</FieldLabel>
+                        <Input
+                          id="edit-employee-email"
+                          type="email"
+                          value={editEmail}
+                          onChange={(event) => {
+                            setEditEmail(event.target.value)
+                            setEditError(null)
+                          }}
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="edit-employee-phone">Teléfono</FieldLabel>
+                        <Input
+                          id="edit-employee-phone"
+                          type="tel"
+                          value={editPhone}
+                          onChange={(event) => {
+                            setEditPhone(event.target.value)
+                            setEditError(null)
+                          }}
+                          required
+                        />
+                      </Field>
+                    </FieldGroup>
+                  </div>
+                  <SheetFooter className="border-t px-6 py-4">
+                    {editError && <p className="text-sm text-destructive">{editError}</p>}
+                    <Button type="submit" className="w-full" disabled={isEditSubmitting}>
+                      {isEditSubmitting ? "Guardando cambios..." : "Guardar cambios"}
+                    </Button>
+                  </SheetFooter>
+                </form>
+              </SheetContent>
+            </Sheet>
+
+            <Sheet open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+              <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+                <div className="flex h-full flex-col">
+                  <SheetHeader className="border-b px-6 py-4 text-left">
+                    <SheetTitle>Perfil de empleado</SheetTitle>
+                    <SheetDescription>Consulta la información y métricas principales del perfil.</SheetDescription>
+                  </SheetHeader>
+                  <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+                    <Card>
+                      <CardHeader className="space-y-1">
+                        <CardTitle>{profileEmployee?.name ?? "Sin nombre"}</CardTitle>
+                        <CardDescription>{profileEmployee?.email ?? "Sin correo"}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-2 text-sm text-muted-foreground">
+                        <p>Teléfono: {profileEmployee?.phone ?? "Sin teléfono"}</p>
+                        <p>Estado: {profileEmployee?.status ?? "Sin estado"}</p>
+                      </CardContent>
+                    </Card>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Card>
+                        <CardHeader className="space-y-1">
+                          <CardTitle className="text-sm font-medium text-muted-foreground">Citas totales</CardTitle>
+                          <CardDescription className="text-2xl font-bold text-foreground">
+                            {formatNumber(profileEmployee?.totalAppointments ?? 0)}
+                          </CardDescription>
+                        </CardHeader>
+                      </Card>
+                      <Card>
+                        <CardHeader className="space-y-1">
+                          <CardTitle className="text-sm font-medium text-muted-foreground">Ingresos</CardTitle>
+                          <CardDescription className="text-2xl font-bold text-foreground">
+                            {formatCurrency(profileEmployee?.totalRevenue ?? 0)}
+                          </CardDescription>
+                        </CardHeader>
+                      </Card>
+                    </div>
+                  </div>
+                  <SheetFooter className="border-t px-6 py-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (profileEmployee) {
+                          handleOpenEdit(profileEmployee)
+                        }
+                      }}
+                    >
+                      Editar empleado
+                    </Button>
+                  </SheetFooter>
+                </div>
+              </SheetContent>
+            </Sheet>
           </div>
 
           {shouldShowErrorCard ? (
@@ -397,7 +688,13 @@ export default function AdminEmployeesPage() {
                   </AlertDescription>
                 </Alert>
               )}
-              <AdminEmployeesTable employees={employees} />
+              <AdminEmployeesTable
+                employees={employees}
+                onViewProfile={handleViewProfile}
+                onEditEmployee={handleOpenEdit}
+                onDeleteEmployee={handleDeleteEmployee}
+                deletingEmployeeId={isDeletingEmployeeId}
+              />
             </>
           )}
         </section>

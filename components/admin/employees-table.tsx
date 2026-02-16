@@ -85,8 +85,16 @@ const COLUMN_LABELS: Record<string, string> = {
 
 export function AdminEmployeesTable({
   employees,
+  onViewProfile,
+  onEditEmployee,
+  onDeleteEmployee,
+  deletingEmployeeId,
 }: {
   employees: EmployeeSummary[]
+  onViewProfile: (employee: EmployeeSummary) => void
+  onEditEmployee: (employee: EmployeeSummary) => void
+  onDeleteEmployee: (employee: EmployeeSummary) => void
+  deletingEmployeeId?: number | null
 }) {
   const { toast } = useToast()
   const [sorting, setSorting] = useState<SortingState>([
@@ -144,16 +152,6 @@ export function AdminEmployeesTable({
       return employee.status?.toLowerCase() === statusFilter
     })
   }, [employees, searchTerm, statusFilter])
-
-  const handleUnavailableAction = useCallback(
-    (action: string, employeeName: string) => {
-      toast({
-        title: `${action} aún no disponible`,
-        description: `Pronto podrás gestionar esta acción para ${employeeName}.`,
-      })
-    },
-    [toast],
-  )
 
   const columns = useMemo<ColumnDef<EmployeeSummary, unknown>[]>(
     () => [
@@ -312,32 +310,23 @@ export function AdminEmployeesTable({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Acciones rápidas</DropdownMenuLabel>
               <DropdownMenuItem
-                onClick={() =>
-                  handleUnavailableAction('Ver perfil', row.original.name)
-                }
+                onClick={() => onViewProfile(row.original)}
               >
                 Ver perfil
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() =>
-                  handleUnavailableAction('Editar empleado', row.original.name)
-                }
+                onClick={() => onEditEmployee(row.original)}
               >
                 Editar
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
-                onClick={() =>
-                  handleUnavailableAction(
-                    'Eliminar empleado',
-                    row.original.name,
-                  )
-                }
+                disabled={deletingEmployeeId === row.original.id}
+                onClick={() => onDeleteEmployee(row.original)}
               >
-                Eliminar
+                {deletingEmployeeId === row.original.id ? 'Eliminando...' : 'Eliminar'}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -347,7 +336,7 @@ export function AdminEmployeesTable({
         size: 56,
       },
     ],
-    [handleUnavailableAction],
+    [deletingEmployeeId, onDeleteEmployee, onEditEmployee, onViewProfile],
   )
 
   const table = useReactTable<EmployeeSummary>({
