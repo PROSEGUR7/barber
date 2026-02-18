@@ -92,6 +92,21 @@ export async function getBarbersForService(serviceId: number): Promise<Barber[]>
     [serviceId],
   )
 
+  if (result.rowCount === 0) {
+    const fallback = await pool.query<BarberRow>(
+      `SELECT id,
+              nombre
+         FROM tenant_base.empleados
+        WHERE LOWER(COALESCE(estado::text, 'activo')) = 'activo'
+        ORDER BY nombre ASC`,
+    )
+
+    return fallback.rows.map((row) => ({
+      id: row.id,
+      name: row.nombre,
+    }))
+  }
+
   return result.rows.map((row) => ({
     id: row.id,
     name: row.nombre,

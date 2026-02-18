@@ -63,10 +63,54 @@ export function LoginForm({
         }),
       })
 
-      const data = await response.json().catch(() => ({}))
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string
+        code?: string
+      }
 
       if (!response.ok) {
-        setError(data.error ?? "No se pudo iniciar sesión.")
+        const code = data.code
+
+        if (response.status === 404) {
+          setError(
+            "El servicio de inicio de sesión no está disponible (404). Intenta nuevamente en unos segundos.",
+          )
+          return
+        }
+
+        if (code === "EMAIL_INVALID") {
+          setError("Ingresa un correo electrónico válido.")
+          return
+        }
+
+        if (code === "EMAIL_REQUIRED") {
+          setError("Ingresa tu correo electrónico.")
+          return
+        }
+
+        if (code === "PASSWORD_REQUIRED") {
+          setError("Ingresa tu contraseña.")
+          return
+        }
+
+        if (code === "USER_NOT_FOUND") {
+          setError("No existe una cuenta con ese correo.")
+          return
+        }
+
+        if (code === "PASSWORD_INVALID") {
+          setError("La contraseña es incorrecta.")
+          return
+        }
+
+        if (code === "DATABASE_NOT_CONFIGURED") {
+          setError(
+            "El servidor no está configurado (DATABASE_URL faltante). Revisa tu .env.local.",
+          )
+          return
+        }
+
+        setError(data.error ?? `No se pudo iniciar sesión (HTTP ${response.status}).`)
         return
       }
 

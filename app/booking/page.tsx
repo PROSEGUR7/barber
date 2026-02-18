@@ -527,27 +527,25 @@ export default function BookingPage() {
 
   return (
     <div className="min-h-screen bg-muted/10">
-      <main className="container pb-16 pt-12">
+      <main className="container pb-16 pt-6 sm:pt-10">
         <section className="mx-auto flex max-w-3xl flex-col gap-3 text-center">
           <span className="mx-auto inline-flex items-center rounded-full bg-foreground text-background px-4 py-1 text-xs font-medium uppercase tracking-wider">
             Agenda tu estilo
           </span>
-          <h1 className="text-balance text-4xl font-semibold leading-tight text-foreground md:text-5xl">
-            Crea tu cita perfecta en minutos
-          </h1>
-          <p className="text-balance text-sm text-muted-foreground md:text-base">
-            Selecciona el servicio, tu barbero de confianza y el horario que mejor se adapte a tu día.
-          </p>
         </section>
 
-        <div className="mx-auto mt-12 grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)] xl:gap-12">
+        <div className="mx-auto mt-10 grid max-w-6xl gap-8 lg:mt-12 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)] xl:gap-12">
           <div className="space-y-8">
             <Card className="shadow-sm">
               <CardHeader>
                 <CardTitle>1. Selecciona un Servicio</CardTitle>
                 <CardDescription>Elige el servicio que deseas recibir</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">{renderServiceContent()}</CardContent>
+              <CardContent>
+                <div className="max-h-[270px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable] sm:max-h-[330px] lg:max-h-[300px]">
+                  <div className="space-y-3">{renderServiceContent()}</div>
+                </div>
+              </CardContent>
             </Card>
 
             <Card className="shadow-sm">
@@ -555,7 +553,11 @@ export default function BookingPage() {
                 <CardTitle>2. Elige tu Peluquero</CardTitle>
                 <CardDescription>Selecciona a quien prefieras para tu sesión</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">{renderBarbersContent()}</CardContent>
+              <CardContent>
+                <div className="max-h-[260px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable] sm:max-h-[340px] lg:max-h-[320px]">
+                  <div className="space-y-3">{renderBarbersContent()}</div>
+                </div>
+              </CardContent>
             </Card>
           </div>
 
@@ -564,11 +566,11 @@ export default function BookingPage() {
               <CardTitle>3. Fecha y Hora</CardTitle>
               <CardDescription>Selecciona cuándo quieres tu cita</CardDescription>
             </CardHeader>
-            <CardContent className="p-6">
+            <CardContent className="p-4 sm:p-6">
               <div className="overflow-hidden rounded-3xl border border-border/70 bg-background">
                 <div className="overflow-hidden rounded-2xl">
-                  <div className="grid min-h-[420px] gap-0 md:grid-cols-[minmax(0,420px)_minmax(0,200px)] md:gap-8">
-                    <div className="p-6">
+                  <div className="grid gap-0 md:min-h-[420px] md:grid-cols-[minmax(0,420px)_minmax(0,200px)] md:gap-8">
+                    <div className="p-4 sm:p-6">
                       <Calendar
                         mode="single"
                         selected={selectedDate}
@@ -577,7 +579,7 @@ export default function BookingPage() {
                         }}
                         disabled={(date) => !!today && !!date && date < today}
                         showOutsideDays={false}
-                        className="bg-transparent p-0 [--cell-size:--spacing(9)] md:[--cell-size:--spacing(11)]"
+                        className="bg-transparent p-0 [--cell-size:--spacing(8)] sm:[--cell-size:--spacing(9)] md:[--cell-size:--spacing(10)]"
                         formatters={{
                           formatWeekdayName: (date) =>
                             date.toLocaleString("es-ES", { weekday: "short" }),
@@ -585,12 +587,12 @@ export default function BookingPage() {
                       />
                     </div>
                     <div className="border-t md:border-l md:border-t-0">
-                      <div className="no-scrollbar max-h-[420px] overflow-y-auto p-6">
+                      <div className="max-h-[320px] overflow-y-auto p-4 [scrollbar-gutter:stable] sm:max-h-[420px] sm:p-6">
                         <div className="grid gap-2">{renderSlotsContent()}</div>
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-4 border-t px-6 py-5 md:flex-row">
+                  <div className="flex flex-col gap-4 border-t px-4 py-4 sm:px-6 sm:py-5 md:flex-row">
                     <div className="text-sm text-muted-foreground">
                       {selectedDate && formattedSummaryTime ? (
                         <>

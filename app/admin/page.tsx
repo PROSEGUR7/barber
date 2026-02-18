@@ -194,7 +194,9 @@ export default function AdminDashboard() {
         }
 
         console.error("Error fetching employees", error)
-        setEmployeesError("No se pudieron cargar los empleados.")
+        setEmployeesError(
+          error instanceof Error ? error.message : "No se pudieron cargar los empleados.",
+        )
       } finally {
         if (!signal?.aborted) {
           setAreEmployeesLoading(false)
@@ -227,7 +229,9 @@ export default function AdminDashboard() {
         }
 
         console.error("Error fetching clients", error)
-        setClientsError("No se pudieron cargar los clientes.")
+        setClientsError(
+          error instanceof Error ? error.message : "No se pudieron cargar los clientes.",
+        )
       } finally {
         if (!signal?.aborted) {
           setAreClientsLoading(false)

@@ -32,6 +32,13 @@ type AlertState = {
   onConfirm?: () => void
 }
 
+type RegisterErrorResponse = {
+  ok?: boolean
+  error?: string
+  code?: string
+  field?: string
+}
+
 export function RegisterForm({ className, ...props }: React.ComponentProps<"div">) {
   const router = useRouter()
   const [fullName, setFullName] = useState("")
@@ -93,10 +100,21 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
         }),
       })
 
-      const data = await response.json().catch(() => ({} as { error?: string }))
+      const data = (await response
+        .json()
+        .catch(() => ({} as RegisterErrorResponse))) as RegisterErrorResponse
 
       if (!response.ok) {
-        if (response.status === 409) {
+        const code = data.code
+
+        if (response.status === 404) {
+          setError(
+            "El servicio de registro no está disponible (404). Intenta nuevamente en unos segundos.",
+          )
+          return
+        }
+
+        if (response.status === 409 || code === "EMAIL_EXISTS") {
           setAlertState({
             open: true,
             title: "Correo ya registrado",
@@ -107,7 +125,31 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
           return
         }
 
-        setError(data.error ?? "No se pudo crear la cuenta.")
+        if (code === "EMAIL_INVALID") {
+          setError("Ingresa un correo electrónico válido.")
+          return
+        }
+
+        if (code === "PASSWORD_TOO_SHORT") {
+          setError("La contraseña debe tener al menos 8 caracteres.")
+          return
+        }
+
+        if (code === "PHONE_INVALID") {
+          setError("Ingresa un teléfono válido.")
+          return
+        }
+
+        if (code === "DATABASE_NOT_CONFIGURED") {
+          setError(
+            "El servidor no está configurado (DATABASE_URL faltante). Revisa tu .env.local.",
+          )
+          return
+        }
+
+        setError(
+          data.error ?? `No se pudo crear la cuenta (HTTP ${response.status}).`,
+        )
         return
       }
 
