@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { format, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import { CalendarX, Clock, DollarSign, Scissors, Users } from "lucide-react"
+import { useSearchParams } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -32,6 +33,7 @@ type AvailabilitySlot = {
 }
 
 export default function BookingPage() {
+  const searchParams = useSearchParams()
   const { toast } = useToast()
 
   const [services, setServices] = useState<Service[]>([])
@@ -176,6 +178,27 @@ export default function BookingPage() {
       isActive = false
     }
   }, [selectedService])
+
+  useEffect(() => {
+    if (!searchParams) {
+      return
+    }
+
+    const rawBarberId = searchParams.get("barberId")
+    if (!rawBarberId) {
+      return
+    }
+
+    const parsed = Number(rawBarberId)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return
+    }
+
+    // Only set if it's in the current list.
+    if (barbers.some((barber) => barber.id === parsed)) {
+      setSelectedBarber(parsed)
+    }
+  }, [searchParams, barbers])
 
   useEffect(() => {
     setSelectedSlot(null)

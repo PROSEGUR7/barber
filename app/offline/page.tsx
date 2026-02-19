@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "BarberPro sin conexión",
+  title: "Hair Salon sin conexión",
 }
 
 export default function OfflinePage() {

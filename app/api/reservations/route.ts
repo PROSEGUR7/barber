@@ -41,6 +41,49 @@ export async function POST(request: Request) {
       )
     }
 
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? ((error as { code?: string }).code as string)
+        : null
+
+    if (code === "INVALID_START") {
+      return NextResponse.json(
+        { error: "Fecha de inicio inválida" },
+        { status: 400 },
+      )
+    }
+
+    if (code === "SERVICE_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "El servicio seleccionado no existe o no está activo" },
+        { status: 404 },
+      )
+    }
+
+    if (code === "CLIENT_PROFILE_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "Tu cuenta no tiene perfil de cliente. Vuelve a registrarte o contacta soporte." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "CLIENT_DAILY_LIMIT") {
+      return NextResponse.json(
+        { error: "Solo puedes agendar 1 cita por día." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "SLOT_NOT_AVAILABLE" || code === "SLOT_ALREADY_TAKEN") {
+      return NextResponse.json(
+        { error: "El horario seleccionado ya no está disponible" },
+        { status: 409 },
+      )
+    }
+
     console.error("Error creating reservation", error)
 
     if (

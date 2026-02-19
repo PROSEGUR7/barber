@@ -30,7 +30,7 @@ function getAppUrl() {
   }
 }
 
-const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "BarberPro"
+const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "Hair Salon"
 const ORIGIN = getAppUrl()
 const SHARE_RP_ID_ACROSS_SUBDOMAINS = (process.env.WEBAUTHN_SHARE_RP_ID_ACROSS_SUBDOMAINS ?? "false").toLowerCase() === "true"
 

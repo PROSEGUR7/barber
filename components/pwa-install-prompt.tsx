@@ -97,7 +97,7 @@ export function PWAInstallPrompt() {
     >
       <Card className="flex w-full max-w-sm items-center gap-3 bg-background/95 px-4 py-3 shadow-lg">
         <div className="flex-1 text-sm">
-          <p className="font-medium">Instala BarberPro</p>
+          <p className="font-medium">Instala Hair Salon</p>
           {showIOSHelp ? (
             <p className="text-muted-foreground text-xs">
               Ábrelo desde Safari y toca el botón de compartir, luego selecciona “Añadir a pantalla de inicio”.

@@ -50,7 +50,7 @@ function formatDisplayName(raw: string): string {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [role, setRole] = React.useState<RoleKey>("client")
   const [userInfo, setUserInfo] = React.useState({
-    name: "Usuario BarberPro",
+    name: "Usuario Hair Salon",
     email: "",
     avatar: defaultAvatar,
     roleLabel: roleLabels.client,
@@ -68,8 +68,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const storedEmail = (localStorage.getItem("userEmail") ?? "").trim()
   const storedDisplayName = (localStorage.getItem("userDisplayName") ?? "").trim()
-    const fallbackName = storedDisplayName || (storedEmail ? storedEmail.split("@")[0] : "Usuario BarberPro")
-    const formattedName = formatDisplayName(fallbackName).trim() || "Usuario BarberPro"
+    const fallbackName = storedDisplayName || (storedEmail ? storedEmail.split("@")[0] : "Usuario Hair Salon")
+    const formattedName = formatDisplayName(fallbackName).trim() || "Usuario Hair Salon"
 
     setUserInfo((previous) => ({
       ...previous,

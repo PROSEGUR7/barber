@@ -66,6 +66,13 @@ export function LoginForm({
       const data = (await response.json().catch(() => ({}))) as {
         error?: string
         code?: string
+        user?: {
+          id?: number
+          email?: string
+          role?: string
+          hasPasskeys?: boolean
+          displayName?: string | null
+        }
       }
 
       if (!response.ok) {
@@ -356,7 +363,7 @@ export function LoginForm({
               <div className="flex flex-col items-center gap-2 text-center">
                 <h1 className="text-2xl font-bold">Bienvenido de nuevo</h1>
                 <p className="text-muted-foreground text-balance">
-                  Inicia sesión en tu cuenta de BarberPro
+                  Inicia sesión en tu cuenta de Hair Salon
                 </p>
               </div>
               <Field>

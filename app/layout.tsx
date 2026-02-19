@@ -8,16 +8,16 @@ import { PWAInstallPrompt } from "@/components/pwa-install-prompt"
 import { ThemeProvider } from "@/components/theme-provider"
 
 export const metadata: Metadata = {
-  title: "BarberPro - Estilo y Elegancia en Cada Corte",
+  title: "Hair Salon - Soluciones de IA para tu salón",
   description:
-    "Barbería profesional con más de 15 años de experiencia. Servicios de corte, afeitado, coloración y más.",
+    "Soluciones de IA para tu Hair Salon: reservas, atención al cliente y operación diaria en un solo lugar.",
   generator: "v0.app",
-  applicationName: "BarberPro",
+  applicationName: "Hair Salon",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "BarberPro",
+    title: "Hair Salon",
   },
   icons: {
     icon: [

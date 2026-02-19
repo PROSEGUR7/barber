@@ -12,10 +12,10 @@ export function Footer() {
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
                 <Scissors className="h-5 w-5 text-primary-foreground" />
               </div>
-              <span className="text-xl font-bold">BarberPro</span>
+              <span className="text-xl font-bold">Hair Salon</span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Estilo y elegancia en cada corte. Tu barbería de confianza desde 2009.
+              Tecnología y estilo para tu salón. Reservas, servicios y experiencia del cliente en un solo lugar.
             </p>
             <div className="flex gap-2">
               <Button variant="ghost" size="icon" asChild>
@@ -94,13 +94,13 @@ export function Footer() {
               <li>Av. Principal #123</li>
               <li>Ciudad, Estado 12345</li>
               <li className="pt-2">Tel: (555) 123-4567</li>
-              <li>Email: info@barberpro.com</li>
+              <li>Email: info@hairsalon.com</li>
             </ul>
           </div>
         </div>
 
         <div className="border-t mt-12 pt-8 text-center text-sm text-muted-foreground">
-          <p>&copy; {new Date().getFullYear()} BarberPro. Todos los derechos reservados.</p>
+          <p>&copy; {new Date().getFullYear()} Hair Salon. Todos los derechos reservados.</p>
         </div>
       </div>
     </footer>

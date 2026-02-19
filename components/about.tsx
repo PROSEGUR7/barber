@@ -42,8 +42,8 @@ export function About() {
               Tradición y modernidad en cada servicio
             </h2>
             <p className="text-lg text-muted-foreground leading-relaxed text-pretty">
-              En BarberPro, combinamos las técnicas clásicas de barbería con las tendencias más modernas para ofrecerte
-              una experiencia única. Nuestro equipo de expertos está comprometido con la excelencia y tu satisfacción.
+              En Hair Salon, combinamos técnicas clásicas con tendencias modernas para ofrecerte una experiencia única.
+              Nuestro equipo está comprometido con la excelencia y tu satisfacción.
             </p>
 
             <div className="space-y-3 pt-4">

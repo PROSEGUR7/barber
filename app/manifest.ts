@@ -3,10 +3,10 @@ import type { MetadataRoute } from "next"
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "BarberPro",
-    short_name: "BarberPro",
+    name: "Hair Salon",
+    short_name: "Hair Salon",
     description:
-      "Barbería profesional con servicios de corte, afeitado y reservas en línea.",
+      "Soluciones de IA para tu Hair Salon: reservas y gestión de servicios en línea.",
     start_url: "/",
     scope: "/",
     display: "standalone",

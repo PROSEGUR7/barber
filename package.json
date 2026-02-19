@@ -44,6 +44,7 @@
     "@simplewebauthn/browser": "^13.2.2",
     "@simplewebauthn/server": "^13.2.2",
     "@simplewebauthn/types": "^12.0.0",
+    "@splinetool/react-spline": "^4.1.0",
     "@tabler/icons-react": "^3.17.0",
     "@tanstack/react-table": "^8.20.4",
     "@vercel/analytics": "latest",

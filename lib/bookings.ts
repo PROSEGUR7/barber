@@ -1,4 +1,42 @@
 import { pool } from "@/lib/db"
+import { ensureMaterializedEmployeeDay } from "@/lib/availability"
+
+const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
+
+function formatDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date)
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "0000"
+  const month = parts.find((p) => p.type === "month")?.value ?? "00"
+  const day = parts.find((p) => p.type === "day")?.value ?? "00"
+  return `${year}-${month}-${day}`
+}
+
+function formatTimestampInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date)
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "0000"
+  const month = parts.find((p) => p.type === "month")?.value ?? "00"
+  const day = parts.find((p) => p.type === "day")?.value ?? "00"
+  const hour = parts.find((p) => p.type === "hour")?.value ?? "00"
+  const minute = parts.find((p) => p.type === "minute")?.value ?? "00"
+  const second = parts.find((p) => p.type === "second")?.value ?? "00"
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
 
 type ServiceRow = {
   id: number
@@ -59,6 +97,25 @@ export type Appointment = {
   }
 }
 
+async function resolveClientIdForUser(userId: number): Promise<number> {
+  const result = await pool.query<{ id: number }>(
+    `SELECT id
+       FROM tenant_base.clientes
+      WHERE user_id = $1
+      LIMIT 1`,
+    [userId],
+  )
+
+  const clientId = result.rows[0]?.id
+  if (typeof clientId !== "number") {
+    const error = new Error("CLIENT_PROFILE_NOT_FOUND")
+    ;(error as { code?: string }).code = "CLIENT_PROFILE_NOT_FOUND"
+    throw error
+  }
+
+  return clientId
+}
+
 export async function getActiveServices(): Promise<Service[]> {
   const result = await pool.query<ServiceRow>(
     `SELECT id,
@@ -117,8 +174,11 @@ export async function getAvailabilitySlots(options: {
   serviceId: number
   employeeId: number
   date: string
+  excludeAppointmentId?: number
 }): Promise<AvailabilitySlot[]> {
-  const { serviceId, employeeId, date } = options
+  const { serviceId, employeeId, date, excludeAppointmentId } = options
+
+  await ensureMaterializedEmployeeDay({ employeeId, date })
 
   const result = await pool.query<AvailabilityRow>(
     `WITH svc AS (
@@ -136,11 +196,12 @@ export async function getAvailabilitySlots(options: {
            AND DATE(he.fecha_hora_inicio) = $3::date
       ),
       ocupados AS (
-        SELECT tstzrange(a.fecha_cita, a.fecha_cita_fin, '[)') AS r
+        SELECT tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') AS r
           FROM tenant_base.agendamientos a
          WHERE a.empleado_id = $2
            AND DATE(a.fecha_cita) = $3::date
-           AND a.estado IN ('pendiente', 'confirmada')
+           AND a.estado::text IN ('pendiente')
+           AND ($4::int IS NULL OR a.id <> $4::int)
       ),
       grid AS (
         SELECT gs AS slot_ini,
@@ -150,7 +211,7 @@ export async function getAvailabilitySlots(options: {
           CROSS JOIN LATERAL generate_series(
             b.ini,
             b.fin - make_interval(mins := (SELECT duracion_min FROM svc)),
-            interval '10 min'
+            interval '30 min'
           ) AS gs
       ),
       libres AS (
@@ -159,14 +220,14 @@ export async function getAvailabilitySlots(options: {
          WHERE NOT EXISTS (
             SELECT 1
               FROM ocupados o
-             WHERE tstzrange(g.slot_ini, g.slot_fin, '[)') && o.r
+             WHERE tsrange(g.slot_ini, g.slot_fin, '[)') && o.r
           )
       )
     SELECT slot_ini, slot_fin
       FROM libres
      ORDER BY slot_ini
      LIMIT 240`,
-    [serviceId, employeeId, date],
+    [serviceId, employeeId, date, typeof excludeAppointmentId === "number" ? excludeAppointmentId : null],
   )
 
   return result.rows.map((row) => ({
@@ -183,16 +244,123 @@ export async function reserveAppointment(options: {
 }): Promise<{ appointmentId: number }>
 {
   const { userId, employeeId, serviceId, start } = options
-  const result = await pool.query<{ sp_reservar_cita: number }>(
-    `SELECT tenant_base.sp_reservar_cita($1, $2, $3, $4::timestamp) AS sp_reservar_cita`,
-    [userId, employeeId, serviceId, start],
-  )
 
-  if (result.rowCount === 0) {
-    throw new Error("No se pudo crear la cita")
+  const clientId = await resolveClientIdForUser(userId)
+
+  const startInstant = new Date(start)
+  if (Number.isNaN(startInstant.getTime())) {
+    const error = new Error("INVALID_START")
+    ;(error as { code?: string }).code = "INVALID_START"
+    throw error
   }
 
-  return { appointmentId: result.rows[0].sp_reservar_cita }
+  // Validate that the requested start matches an available slot for the employee.
+  const slotDateLocal = formatDateInTimeZone(startInstant, BOOKING_TIME_ZONE)
+  const availableSlots = await getAvailabilitySlots({
+    serviceId,
+    employeeId,
+    date: slotDateLocal,
+  })
+
+  const requestedStartISO = startInstant.toISOString()
+  const hasSlot = availableSlots.some((slot) => slot.start === requestedStartISO)
+
+  if (!hasSlot) {
+    const error = new Error("SLOT_NOT_AVAILABLE")
+    ;(error as { code?: string }).code = "SLOT_NOT_AVAILABLE"
+    throw error
+  }
+
+  // DB uses timestamp without time zone; store the start in the business time zone.
+  const startLocalTs = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
+
+  const client = await pool.connect()
+
+  try {
+    await client.query("BEGIN")
+
+    // Business rule: 1 appointment per client per day (excluding cancelled).
+    const dailyLimitResult = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+           FROM tenant_base.agendamientos a
+          WHERE a.cliente_id = $1
+            AND DATE(a.fecha_cita) = DATE($2::timestamp)
+            AND a.estado::text <> 'cancelada'
+          LIMIT 1
+       ) AS exists`,
+      [clientId, startLocalTs],
+    )
+
+    if (dailyLimitResult.rows[0]?.exists) {
+      const error = new Error("CLIENT_DAILY_LIMIT")
+      ;(error as { code?: string }).code = "CLIENT_DAILY_LIMIT"
+      throw error
+    }
+
+    const serviceResult = await client.query<{ duracion_min: number }>(
+      `SELECT duracion_min
+         FROM tenant_base.servicios
+        WHERE id = $1
+          AND estado = 'activo'
+        LIMIT 1`,
+      [serviceId],
+    )
+
+    if (serviceResult.rowCount === 0) {
+      const error = new Error("SERVICE_NOT_FOUND")
+      ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+      throw error
+    }
+
+    const durationMin = Number(serviceResult.rows[0].duracion_min)
+    if (!Number.isFinite(durationMin) || durationMin <= 0) {
+      const error = new Error("SERVICE_INVALID_DURATION")
+      ;(error as { code?: string }).code = "SERVICE_INVALID_DURATION"
+      throw error
+    }
+
+    // Prevent overlap with other active appointments.
+    const overlapResult = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+           FROM tenant_base.agendamientos a
+          WHERE a.empleado_id = $1
+            AND a.estado::text = 'pendiente'
+            AND tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
+                tsrange($2::timestamp, $2::timestamp + make_interval(mins := $3), '[)')
+          LIMIT 1
+       ) AS exists`,
+      [employeeId, startLocalTs, durationMin],
+    )
+
+    if (overlapResult.rows[0]?.exists) {
+      const error = new Error("SLOT_ALREADY_TAKEN")
+      ;(error as { code?: string }).code = "SLOT_ALREADY_TAKEN"
+      throw error
+    }
+
+    const insertResult = await client.query<{ id: number }>(
+      `INSERT INTO tenant_base.agendamientos
+        (cliente_id, empleado_id, servicio_id, fecha_cita, fecha_cita_fin, estado, notificado, creado_en)
+       VALUES
+        ($1, $2, $3, $4::timestamp, $4::timestamp + make_interval(mins := $5),
+         'pendiente'::tenant_base.estado_agendamiento_enum,
+         'no notificado'::tenant_base.notificado_enum,
+         now())
+       RETURNING id`,
+      [clientId, employeeId, serviceId, startLocalTs, durationMin],
+    )
+
+    await client.query("COMMIT")
+
+    return { appointmentId: insertResult.rows[0].id }
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 type AppointmentRow = {
@@ -207,8 +375,8 @@ type AppointmentRow = {
   empleado_nombre: string
 }
 
-const CANCELABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada"]
-const RESCHEDULABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada"]
+const CANCELABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
+const RESCHEDULABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
 
 export async function getAppointmentsForUser(options: {
   userId: number
@@ -233,14 +401,15 @@ export async function getAppointmentsForUser(options: {
             e.id  AS empleado_id,
             e.nombre AS empleado_nombre
        FROM tenant_base.agendamientos a
+       INNER JOIN tenant_base.clientes c ON c.id = a.cliente_id
        INNER JOIN tenant_base.servicios s ON s.id = a.servicio_id
        INNER JOIN tenant_base.empleados e ON e.id = a.empleado_id
-      WHERE a.cliente_id = $1
-        AND a.fecha_cita ${dateComparator} now()
+      WHERE c.user_id = $1
+        AND a.fecha_cita ${dateComparator} (now() AT TIME ZONE $4)
         AND ($2::text[] IS NULL OR a.estado::text = ANY($2::text[]))
       ORDER BY a.fecha_cita ${orderDirection}
       LIMIT $3`,
-    [userId, statusArray, limit],
+    [userId, statusArray, limit, BOOKING_TIME_ZONE],
   )
 
   return result.rows.map((row) => ({
@@ -277,7 +446,7 @@ async function ensureAppointmentOwnership(appointmentId: number, userId: number)
             fecha_cita_fin
        FROM tenant_base.agendamientos
       WHERE id = $1
-        AND cliente_id = $2
+        AND cliente_id = (SELECT id FROM tenant_base.clientes WHERE user_id = $2 LIMIT 1)
       LIMIT 1`,
     [appointmentId, userId],
   )
@@ -304,15 +473,31 @@ export async function cancelAppointment(options: {
     throw error
   }
 
-  const result = await pool.query<{ sp_cancelar_cita: boolean | null }>(
-    `SELECT tenant_base.sp_cancelar_cita($1, $2) AS sp_cancelar_cita`,
-    [userId, appointmentId],
-  )
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
 
-  if (result.rowCount === 0 || result.rows[0].sp_cancelar_cita === false) {
-    const error = new Error("APPOINTMENT_CANCEL_FAILED")
-    ;(error as { code?: string }).code = "APPOINTMENT_CANCEL_FAILED"
+    const update = await client.query(
+      `UPDATE tenant_base.agendamientos
+          SET estado = 'cancelada'::tenant_base.estado_agendamiento_enum
+        WHERE id = $1
+          AND cliente_id = (SELECT id FROM tenant_base.clientes WHERE user_id = $2 LIMIT 1)
+          AND estado::text = 'pendiente'`,
+      [appointmentId, userId],
+    )
+
+    if (update.rowCount === 0) {
+      const error = new Error("APPOINTMENT_CANCEL_FAILED")
+      ;(error as { code?: string }).code = "APPOINTMENT_CANCEL_FAILED"
+      throw error
+    }
+
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
     throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -345,12 +530,13 @@ export async function rescheduleAppointment(options: {
     return
   }
 
-  const slotDate = newStart.toISOString().slice(0, 10)
+  const slotDate = formatDateInTimeZone(newStart, BOOKING_TIME_ZONE)
 
   const availableSlots = await getAvailabilitySlots({
     serviceId: appointment.servicio_id,
     employeeId: appointment.empleado_id,
     date: slotDate,
+    excludeAppointmentId: appointmentId,
   })
 
   const hasSlot = availableSlots.some((slot) => slot.start === requestedStartISO)
@@ -361,14 +547,92 @@ export async function rescheduleAppointment(options: {
     throw error
   }
 
-  const result = await pool.query<{ sp_reprogramar_cita: boolean | null }>(
-    `SELECT tenant_base.sp_reprogramar_cita($1, $2, $3::timestamp) AS sp_reprogramar_cita`,
-    [userId, appointmentId, start],
-  )
+  const clientId = await resolveClientIdForUser(userId)
+  const newStartLocalTs = formatTimestampInTimeZone(newStart, BOOKING_TIME_ZONE)
 
-  if (result.rowCount === 0 || result.rows[0].sp_reprogramar_cita === false) {
-    const error = new Error("APPOINTMENT_RESCHEDULE_FAILED")
-    ;(error as { code?: string }).code = "APPOINTMENT_RESCHEDULE_FAILED"
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+
+    // Enforce 1 appointment per client per day (excluding this appointment).
+    const dailyLimitResult = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+           FROM tenant_base.agendamientos a
+          WHERE a.cliente_id = $1
+            AND a.id <> $2
+            AND DATE(a.fecha_cita) = DATE($3::timestamp)
+            AND a.estado::text <> 'cancelada'
+          LIMIT 1
+       ) AS exists`,
+      [clientId, appointmentId, newStartLocalTs],
+    )
+
+    if (dailyLimitResult.rows[0]?.exists) {
+      const error = new Error("CLIENT_DAILY_LIMIT")
+      ;(error as { code?: string }).code = "CLIENT_DAILY_LIMIT"
+      throw error
+    }
+
+    const serviceResult = await client.query<{ duracion_min: number }>(
+      `SELECT duracion_min
+         FROM tenant_base.servicios
+        WHERE id = $1
+          AND estado = 'activo'
+        LIMIT 1`,
+      [appointment.servicio_id],
+    )
+
+    if (serviceResult.rowCount === 0) {
+      const error = new Error("SERVICE_NOT_FOUND")
+      ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+      throw error
+    }
+
+    const durationMin = Number(serviceResult.rows[0].duracion_min)
+
+    const overlapResult = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+           FROM tenant_base.agendamientos a
+          WHERE a.empleado_id = $1
+            AND a.id <> $2
+            AND a.estado::text = 'pendiente'
+            AND tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
+                tsrange($3::timestamp, $3::timestamp + make_interval(mins := $4), '[)')
+          LIMIT 1
+       ) AS exists`,
+      [appointment.empleado_id, appointmentId, newStartLocalTs, durationMin],
+    )
+
+    if (overlapResult.rows[0]?.exists) {
+      const error = new Error("SLOT_ALREADY_TAKEN")
+      ;(error as { code?: string }).code = "SLOT_ALREADY_TAKEN"
+      throw error
+    }
+
+    const update = await client.query(
+      `UPDATE tenant_base.agendamientos
+          SET fecha_cita = $1::timestamp,
+              fecha_cita_fin = $1::timestamp + make_interval(mins := $2),
+              notificado = 'no notificado'::tenant_base.notificado_enum
+        WHERE id = $3
+          AND cliente_id = $4
+          AND estado::text = 'pendiente'`,
+      [newStartLocalTs, durationMin, appointmentId, clientId],
+    )
+
+    if (update.rowCount === 0) {
+      const error = new Error("APPOINTMENT_RESCHEDULE_FAILED")
+      ;(error as { code?: string }).code = "APPOINTMENT_RESCHEDULE_FAILED"
+      throw error
+    }
+
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
     throw error
+  } finally {
+    client.release()
   }
 }
