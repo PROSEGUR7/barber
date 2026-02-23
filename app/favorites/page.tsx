@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { CalendarClock, Phone } from "lucide-react"
+import { CalendarClock, Heart, Phone } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
@@ -25,18 +25,27 @@ import {
 } from "@/components/ui/breadcrumb"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { cn } from "@/lib/utils"
 
-type FavoriteBarber = {
+type BarberCard = {
   id: number
   name: string
   phone: string | null
   specialty: string | null
   nextAvailabilityISO: string | null
+  isFavorite: boolean
+}
+
+type Service = {
+  id: number
+  name: string
 }
 
 const getInitials = (name: string) =>
@@ -49,7 +58,10 @@ const getInitials = (name: string) =>
 
 export default function FavoritesPage() {
   const [userId, setUserId] = useState<number | null>(null)
-  const [favorites, setFavorites] = useState<FavoriteBarber[]>([])
+  const [barbers, setBarbers] = useState<BarberCard[]>([])
+  const [services, setServices] = useState<Service[]>([])
+  const [segment, setSegment] = useState<"all" | "favorites">("favorites")
+  const [selectedServiceId, setSelectedServiceId] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -67,18 +79,48 @@ export default function FavoritesPage() {
     let isActive = true
     const controller = new AbortController()
 
-    const load = async () => {
-      if (!userId) {
-        setIsLoading(false)
-        setFavorites([])
-        return
-      }
+    const loadServices = async () => {
+      try {
+        const response = await fetch("/api/services", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        })
 
+        const data = await response.json().catch(() => ({}))
+        if (!isActive) return
+
+        const items = Array.isArray(data.services) ? (data.services as { id: number; name: string }[]) : []
+        setServices(items)
+      } catch (err) {
+        if (!isActive || err instanceof DOMException) return
+        console.error("Error loading services", err)
+        setServices([])
+      }
+    }
+
+    void loadServices()
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    let isActive = true
+    const controller = new AbortController()
+
+    const load = async () => {
       setIsLoading(true)
       setError(null)
 
       try {
-        const response = await fetch(`/api/favorites?userId=${userId}`, {
+        const params = new URLSearchParams()
+        if (userId) params.set("userId", String(userId))
+        if (selectedServiceId) params.set("serviceId", String(selectedServiceId))
+
+        const response = await fetch(`/api/barbers?${params.toString()}`, {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
@@ -88,17 +130,17 @@ export default function FavoritesPage() {
         if (!isActive) return
 
         if (!response.ok) {
-          setError(data.error ?? "No se pudieron cargar los favoritos")
-          setFavorites([])
+          setError(data.error ?? "No se pudieron cargar los barberos")
+          setBarbers([])
           return
         }
 
-        setFavorites(Array.isArray(data.favorites) ? data.favorites : [])
+        setBarbers(Array.isArray(data.barbers) ? data.barbers : [])
       } catch (err) {
         if (!isActive || err instanceof DOMException) return
-        console.error("Error loading favorites", err)
-        setError("Error de conexión al cargar favoritos")
-        setFavorites([])
+        console.error("Error loading barbers", err)
+        setError("Error de conexión al cargar barberos")
+        setBarbers([])
       } finally {
         if (isActive) setIsLoading(false)
       }
@@ -110,10 +152,18 @@ export default function FavoritesPage() {
       isActive = false
       controller.abort()
     }
-  }, [userId])
+    load()
 
-  const favoritesView = useMemo(() => {
-    return favorites.map((barber) => {
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [userId, selectedServiceId])
+
+  const barbersView = useMemo(() => {
+    const filtered = segment === "favorites" ? barbers.filter((barber) => barber.isFavorite) : barbers
+
+    return filtered.map((barber) => {
       const nextAvailabilityLabel = barber.nextAvailabilityISO
         ? format(new Date(barber.nextAvailabilityISO), "EEEE d 'de' MMMM · HH:mm", { locale: es })
         : "Sin disponibilidad"
@@ -125,7 +175,40 @@ export default function FavoritesPage() {
         primaryName: barber.name.split(" ")[0] ?? barber.name,
       }
     })
-  }, [favorites])
+  }, [barbers, segment])
+
+  const toggleFavorite = async (barberId: number, nextValue: boolean) => {
+    if (!userId) {
+      return
+    }
+
+    setBarbers((prev) => prev.map((b) => (b.id === barberId ? { ...b, isFavorite: nextValue } : b)))
+
+    try {
+      const response = await fetch("/api/favorites", {
+        method: nextValue ? "POST" : "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ userId, barberId }),
+      })
+
+      if (!response.ok) {
+        setBarbers((prev) => prev.map((b) => (b.id === barberId ? { ...b, isFavorite: !nextValue } : b)))
+      }
+    } catch (err) {
+      console.error("Error toggling favorite", err)
+      setBarbers((prev) => prev.map((b) => (b.id === barberId ? { ...b, isFavorite: !nextValue } : b)))
+    }
+  }
+
+  const buildBookingHref = (barberId: number) => {
+    const params = new URLSearchParams({ barberId: String(barberId) })
+    if (selectedServiceId) {
+      params.set("serviceId", String(selectedServiceId))
+    }
+    return `/booking?${params.toString()}`
+  }
 
   return (
     <SidebarProvider>
@@ -154,6 +237,36 @@ export default function FavoritesPage() {
             <p className="text-muted-foreground text-sm">
               Guarda a tu equipo de confianza para reservar más rápido y revisar horarios disponibles.
             </p>
+          </section>
+
+          <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Tabs value={segment} onValueChange={(value) => setSegment(value as "all" | "favorites")}
+              className="w-full sm:w-auto"
+            >
+              <TabsList>
+                <TabsTrigger value="favorites">Favoritos</TabsTrigger>
+                <TabsTrigger value="all">Todos</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <div className="w-full sm:w-[320px]">
+              <Select
+                value={selectedServiceId ? String(selectedServiceId) : "all"}
+                onValueChange={(value) => setSelectedServiceId(value === "all" ? null : Number(value))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Filtrar por servicio" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los servicios</SelectItem>
+                  {services.map((service) => (
+                    <SelectItem key={service.id} value={String(service.id)}>
+                      {service.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </section>
 
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -188,23 +301,49 @@ export default function FavoritesPage() {
               </p>
             ) : null}
 
-            {!isLoading && !error && favoritesView.length === 0 ? (
+            {!isLoading && !error && barbersView.length === 0 ? (
               <p className="md:col-span-2 xl:col-span-3 rounded-xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
-                Aún no tienes barberos favoritos.
+                {segment === "favorites" ? "Aún no tienes barberos favoritos." : "No encontramos barberos para los filtros seleccionados."}
               </p>
             ) : null}
 
             {!isLoading && !error
-              ? favoritesView.map((barber) => (
+              ? barbersView.map((barber) => (
               <Card key={barber.id} className="border border-border/70 shadow-sm">
                 <CardHeader className="flex flex-col gap-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-base font-semibold text-primary">
                       {barber.initials}
                     </div>
-                    <div>
-                      <CardTitle className="text-xl">{barber.name}</CardTitle>
-                      <CardDescription>{barber.specialty ?? ""}</CardDescription>
+                    <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <CardTitle className="text-xl">
+                          <Link
+                            href={buildBookingHref(barber.id)}
+                            className="hover:underline"
+                          >
+                            {barber.name}
+                          </Link>
+                        </CardTitle>
+                        <CardDescription>{barber.specialty ?? ""}</CardDescription>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(barber.id, !barber.isFavorite)}
+                        className={cn(
+                          "inline-flex items-center justify-center rounded-md p-2 transition",
+                          "hover:bg-muted",
+                        )}
+                        aria-label={barber.isFavorite ? "Quitar de favoritos" : "Agregar a favoritos"}
+                      >
+                        <Heart
+                          className={cn(
+                            "h-5 w-5",
+                            barber.isFavorite ? "text-destructive" : "text-muted-foreground",
+                          )}
+                          fill={barber.isFavorite ? "currentColor" : "none"}
+                        />
+                      </button>
                     </div>
                   </div>
                 </CardHeader>
@@ -224,11 +363,11 @@ export default function FavoritesPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm">
-                      Ver horarios
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildBookingHref(barber.id)}>Ver horarios</Link>
                     </Button>
                     <Button asChild size="sm" variant="secondary">
-                      <Link href={`/booking?barberId=${barber.id}`}>
+                      <Link href={buildBookingHref(barber.id)}>
                         Reservar con {barber.primaryName}
                       </Link>
                     </Button>

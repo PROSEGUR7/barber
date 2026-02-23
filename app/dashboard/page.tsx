@@ -108,6 +108,10 @@ export default function Page() {
   const [isLoadingSlots, setIsLoadingSlots] = useState(false)
   const [rescheduleSlotsError, setRescheduleSlotsError] = useState<string | null>(null)
   const [isRescheduling, setIsRescheduling] = useState(false)
+  const [rescheduleLimitDialogOpen, setRescheduleLimitDialogOpen] = useState(false)
+  const [rescheduleLimitMessage, setRescheduleLimitMessage] = useState(
+    "Solo puedes reprogramar máximo 2 veces al día.",
+  )
 
   const quickLinks = useMemo(
     () => [
@@ -307,6 +311,7 @@ export default function Page() {
           serviceId: String(nextAppointment.service.id),
           barberId: String(nextAppointment.barber.id),
           date: format(rescheduleDate, "yyyy-MM-dd"),
+          excludeAppointmentId: String(nextAppointment.id),
         })
 
         const response = await fetch(`/api/availability?${params.toString()}`, {
@@ -364,9 +369,25 @@ export default function Page() {
 
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
+        const errorMessage =
+          typeof data.error === "string" && data.error.trim().length > 0
+            ? (data.error as string)
+            : "Intenta nuevamente."
+
+        const isRescheduleLimit = errorMessage.toLowerCase().includes("reprogram") && errorMessage.includes("2")
+
+        if (isRescheduleLimit) {
+          closeReschedule()
+          setRescheduleLimitMessage(errorMessage)
+          setRescheduleLimitDialogOpen(true)
+          return
+        }
+
         toast({
-          title: "No se pudo reprogramar",
-          description: data.error ?? "Intenta nuevamente.",
+          title: isRescheduleLimit
+            ? "Límite de reprogramaciones"
+            : "No se pudo reprogramar",
+          description: errorMessage,
           variant: "destructive",
         })
         return
@@ -802,6 +823,20 @@ export default function Page() {
                 </Button>
                 <Button onClick={submitReschedule} disabled={isRescheduling || !selectedRescheduleSlot}>
                   {isRescheduling ? "Guardando..." : "Reprogramar"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={rescheduleLimitDialogOpen} onOpenChange={setRescheduleLimitDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Límite de reprogramaciones</DialogTitle>
+                <DialogDescription>{rescheduleLimitMessage}</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRescheduleLimitDialogOpen(false)}>
+                  Cerrar
                 </Button>
               </DialogFooter>
             </DialogContent>

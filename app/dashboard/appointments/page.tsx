@@ -23,6 +23,16 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import {
@@ -118,6 +128,13 @@ export default function AppointmentsPage() {
     history: null,
   })
   const [cancelLoadingId, setCancelLoadingId] = useState<number | null>(null)
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
+  const [cancelAppointment, setCancelAppointment] = useState<Appointment | null>(null)
+
+  const [rescheduleLimitDialogOpen, setRescheduleLimitDialogOpen] = useState(false)
+  const [rescheduleLimitMessage, setRescheduleLimitMessage] = useState<string>(
+    "Solo puedes reprogramar máximo 2 veces al día.",
+  )
 
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false)
   const [rescheduleAppointment, setRescheduleAppointment] = useState<Appointment | null>(null)
@@ -215,8 +232,18 @@ export default function AppointmentsPage() {
     fetchAppointments("history", statusFilter.history)
   }, [userId, statusFilter, fetchAppointments])
 
-  const handleCancel = async (appointment: Appointment) => {
-    if (!userId) {
+  const openCancelDialog = (appointment: Appointment) => {
+    setCancelAppointment(appointment)
+    setCancelDialogOpen(true)
+  }
+
+  const closeCancelDialog = () => {
+    setCancelDialogOpen(false)
+    setCancelAppointment(null)
+  }
+
+  const confirmCancel = async () => {
+    if (!userId || !cancelAppointment) {
       toast({
         title: "Inicia sesión nuevamente",
         description: "No encontramos tu sesión activa. Vuelve a iniciar sesión.",
@@ -225,21 +252,10 @@ export default function AppointmentsPage() {
       return
     }
 
-    const confirmMessage = `¿Deseas cancelar la cita del ${format(
-      new Date(appointment.start),
-      "EEEE d 'de' MMMM 'a las' HH:mm",
-      { locale: es },
-    )}?`
-
-    const confirmed = window.confirm(confirmMessage)
-    if (!confirmed) {
-      return
-    }
-
-    setCancelLoadingId(appointment.id)
+    setCancelLoadingId(cancelAppointment.id)
 
     try {
-      const response = await fetch(`/api/appointments/${appointment.id}/cancel`, {
+      const response = await fetch(`/api/appointments/${cancelAppointment.id}/cancel`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -262,6 +278,7 @@ export default function AppointmentsPage() {
         title: "Cita cancelada",
         description: "Registramos la cancelación correctamente.",
       })
+      closeCancelDialog()
       refreshAll()
     } catch (error) {
       console.error("Error canceling appointment", error)
@@ -313,6 +330,7 @@ export default function AppointmentsPage() {
           serviceId: String(rescheduleAppointment.service.id),
           barberId: String(rescheduleAppointment.barber.id),
           date: format(rescheduleDate, "yyyy-MM-dd"),
+          excludeAppointmentId: String(rescheduleAppointment.id),
         })
 
         const response = await fetch(`/api/availability?${params.toString()}`, {
@@ -386,9 +404,26 @@ export default function AppointmentsPage() {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
+        const errorMessage =
+          typeof data.error === "string" && data.error.trim().length > 0
+            ? (data.error as string)
+            : "Selecciona otro horario o inténtalo más tarde."
+
+        const isRescheduleLimit = errorMessage.toLowerCase().includes("reprogram") && errorMessage.includes("2")
+
+        if (isRescheduleLimit) {
+          closeRescheduleDialog()
+
+          setRescheduleLimitMessage(errorMessage)
+          setRescheduleLimitDialogOpen(true)
+          return
+        }
+
         toast({
-          title: "No se pudo reprogramar",
-          description: data.error ?? "Selecciona otro horario o inténtalo más tarde.",
+          title: isRescheduleLimit
+            ? "Límite de reprogramaciones"
+            : "No se pudo reprogramar",
+          description: errorMessage,
           variant: "destructive",
         })
         return
@@ -551,7 +586,7 @@ export default function AppointmentsPage() {
                       size="sm"
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
-                      onClick={() => handleCancel(appointment)}
+                      onClick={() => openCancelDialog(appointment)}
                       disabled={cancelLoadingId === appointment.id}
                     >
                       {cancelLoadingId === appointment.id ? (
@@ -700,19 +735,33 @@ export default function AppointmentsPage() {
                     const startLabel = format(new Date(slot.start), "HH:mm")
                     const endLabel = format(new Date(slot.end), "HH:mm")
                     const isSelected = selectedRescheduleSlot?.start === slot.start
+                    const currentStartMs = rescheduleAppointment
+                      ? new Date(rescheduleAppointment.start).getTime()
+                      : null
+                    const slotStartMs = new Date(slot.start).getTime()
+                    const isCurrent =
+                      currentStartMs != null &&
+                      Number.isFinite(slotStartMs) &&
+                      slotStartMs === currentStartMs
 
                     return (
                       <button
                         key={slot.start}
                         type="button"
-                        onClick={() => setSelectedRescheduleSlot(slot)}
+                        onClick={() => {
+                          if (isCurrent) return
+                          setSelectedRescheduleSlot(slot)
+                        }}
                         className={cn(
                           "rounded-lg border px-3 py-2 text-sm transition",
                           "hover:border-primary hover:bg-primary/5",
                           isSelected && "border-primary bg-primary text-primary-foreground",
+                          isCurrent &&
+                            "cursor-not-allowed border-border/60 bg-muted/50 text-muted-foreground hover:border-border/60 hover:bg-muted/50",
                         )}
+                        aria-disabled={isCurrent}
                       >
-                        {startLabel} - {endLabel}
+                        {startLabel} - {endLabel}{isCurrent ? " (Actual)" : ""}
                       </button>
                     )
                   })}
@@ -731,6 +780,51 @@ export default function AppointmentsPage() {
         </DialogFooter>
       </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={cancelDialogOpen}
+        onOpenChange={(open) => (open ? setCancelDialogOpen(true) : closeCancelDialog())}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancelar cita</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancelAppointment
+                ? `¿Deseas cancelar la cita del ${format(
+                    new Date(cancelAppointment.start),
+                    "EEEE d 'de' MMMM 'a las' HH:mm",
+                    { locale: es },
+                  )}?`
+                : "¿Deseas cancelar esta cita?"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelLoadingId != null}>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={cancelLoadingId != null || cancelAppointment == null}
+              onClick={async (event) => {
+                event.preventDefault()
+                await confirmCancel()
+              }}
+            >
+              {cancelLoadingId != null ? "Cancelando..." : "Aceptar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={rescheduleLimitDialogOpen} onOpenChange={setRescheduleLimitDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Límite de reprogramaciones</AlertDialogTitle>
+            <AlertDialogDescription>{rescheduleLimitMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>Aceptar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

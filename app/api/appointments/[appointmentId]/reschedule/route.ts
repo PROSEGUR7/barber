@@ -66,7 +66,14 @@ export async function POST(
 
     if (code === "CLIENT_DAILY_LIMIT") {
       return NextResponse.json(
-        { error: "Solo puedes agendar 1 cita por día." },
+        { error: "Ya tienes el máximo de 2 citas para ese día." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "RESCHEDULE_DAILY_LIMIT") {
+      return NextResponse.json(
+        { error: "Solo puedes reprogramar máximo 2 veces al día." },
         { status: 409 },
       )
     }

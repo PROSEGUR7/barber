@@ -6,6 +6,7 @@ import { getAvailabilitySlots } from "@/lib/bookings"
 const querySchema = z.object({
   serviceId: z.coerce.number().int().positive(),
   barberId: z.coerce.number().int().positive(),
+  excludeAppointmentId: z.coerce.number().int().positive().optional(),
   date: z
     .string()
     .regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)
@@ -18,6 +19,7 @@ export async function GET(request: Request) {
     const rawParams = {
       serviceId: url.searchParams.get("serviceId"),
       barberId: url.searchParams.get("barberId"),
+      excludeAppointmentId: url.searchParams.get("excludeAppointmentId") ?? undefined,
       date: url.searchParams.get("date"),
     }
 
@@ -27,6 +29,7 @@ export async function GET(request: Request) {
       serviceId: params.serviceId,
       employeeId: params.barberId,
       date: params.date,
+      excludeAppointmentId: params.excludeAppointmentId,
     })
 
     return NextResponse.json({ slots })

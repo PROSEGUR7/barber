@@ -1,116 +1,202 @@
 "use client"
+import { useEffect, useMemo, useState } from "react"
+import { format, isSameDay, startOfDay } from "date-fns"
+import { es } from "date-fns/locale"
+import { CalendarIcon, CheckCircle, Clock, DollarSign, User, XCircle } from "lucide-react"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useState } from "react"
-import { CalendarIcon, CheckCircle, Clock, DollarSign, User, XCircle } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
 
-interface Appointment {
+type AppointmentStatus = "pendiente" | "completada" | "cancelada" | string
+
+type Appointment = {
   id: number
   clientName: string
-  service: string
-  time: string
-  duration: string
-  price: number
-  status: "pending" | "confirmed" | "completed" | "cancelled"
-  date: string
+  serviceName: string
+  start: string
+  end: string | null
+  price: number | null
+  status: AppointmentStatus
 }
 
-const mockAppointments: Appointment[] = [
-  {
-    id: 1,
-    clientName: "Carlos Rodríguez",
-    service: "Corte de Cabello",
-    time: "09:30",
-    duration: "30 min",
-    price: 2300,
-    status: "confirmed",
-    date: "2024-12-20",
-  },
-  {
-    id: 2,
-    clientName: "Miguel Ángel Torres",
-    service: "Corte + Barba",
-    time: "10:30",
-    duration: "45 min",
-    price: 3500,
-    status: "confirmed",
-    date: "2024-12-20",
-  },
-  {
-    id: 3,
-    clientName: "José Luis Martínez",
-    service: "Afeitado Clásico",
-    time: "14:00",
-    duration: "30 min",
-    price: 1800,
-    status: "pending",
-    date: "2024-12-20",
-  },
-  {
-    id: 4,
-    clientName: "Roberto Sánchez",
-    service: "Coloración",
-    time: "15:30",
-    duration: "60 min",
-    price: 4500,
-    status: "confirmed",
-    date: "2024-12-20",
-  },
-  {
-    id: 5,
-    clientName: "Fernando López",
-    service: "Corte de Cabello",
-    time: "17:00",
-    duration: "30 min",
-    price: 2300,
-    status: "pending",
-    date: "2024-12-20",
-  },
-]
-
 export default function BarberDashboard() {
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date())
-  const [appointments, setAppointments] = useState<Appointment[]>(mockAppointments)
+  const { toast } = useToast()
+  const [userId, setUserId] = useState<number | null>(null)
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
+  const [activeTab, setActiveTab] = useState<"today" | "upcoming" | "history">("today")
 
-  const todayAppointments = appointments.filter((apt) => apt.date === "2024-12-20")
-  const pendingCount = todayAppointments.filter((apt) => apt.status === "pending").length
-  const confirmedCount = todayAppointments.filter((apt) => apt.status === "confirmed").length
-  const completedCount = todayAppointments.filter((apt) => apt.status === "completed").length
-  const totalEarnings = todayAppointments
-    .filter((apt) => apt.status === "completed")
-    .reduce((sum, apt) => sum + apt.price, 0)
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [updatingId, setUpdatingId] = useState<number | null>(null)
 
-  const handleStatusChange = (id: number, newStatus: Appointment["status"]) => {
-    setAppointments(appointments.map((apt) => (apt.id === id ? { ...apt, status: newStatus } : apt)))
-  }
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("userId")
+      const parsed = stored ? Number.parseInt(stored, 10) : NaN
+      setUserId(Number.isFinite(parsed) ? parsed : null)
+    } catch {
+      setUserId(null)
+    }
+  }, [])
 
-  const getStatusColor = (status: Appointment["status"]) => {
-    switch (status) {
-      case "pending":
-        return "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
-      case "confirmed":
-        return "bg-blue-500/10 text-blue-500 border-blue-500/20"
-      case "completed":
-        return "bg-green-500/10 text-green-500 border-green-500/20"
-      case "cancelled":
-        return "bg-red-500/10 text-red-500 border-red-500/20"
+  const loadAppointments = async () => {
+    if (!userId) {
+      setAppointments([])
+      setError("No encontramos tu sesión activa. Vuelve a iniciar sesión.")
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const params = new URLSearchParams({
+        userId: String(userId),
+        scope: activeTab,
+      })
+
+      if (activeTab === "today") {
+        params.set("date", format(startOfDay(selectedDate), "yyyy-MM-dd"))
+      }
+
+      const response = await fetch(`/api/barber/appointments?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setAppointments([])
+        setError(data.error ?? "No se pudieron cargar las citas")
+        return
+      }
+
+      const items = Array.isArray(data.appointments) ? (data.appointments as any[]) : []
+      setAppointments(
+        items.map((item) => ({
+          id: Number(item.id),
+          clientName: String(item.clientName ?? "Cliente"),
+          serviceName: String(item.serviceName ?? "Servicio"),
+          start: String(item.start),
+          end: item.end ? String(item.end) : null,
+          price: item.price != null && Number.isFinite(Number(item.price)) ? Number(item.price) : null,
+          status: String(item.status ?? "pendiente"),
+        })),
+      )
+    } catch (err) {
+      console.error("Error loading barber appointments", err)
+      setAppointments([])
+      setError("Error de conexión al cargar las citas")
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const getStatusText = (status: Appointment["status"]) => {
+  useEffect(() => {
+    void loadAppointments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, activeTab, selectedDate])
+
+  const updateStatus = async (appointmentId: number, status: "cancelada" | "completada") => {
+    if (!userId) return
+    setUpdatingId(appointmentId)
+    try {
+      const response = await fetch(`/api/barber/appointments/${appointmentId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, status }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast({
+          title: "No se pudo actualizar",
+          description: data.error ?? "Intenta nuevamente.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({
+        title: "Actualizado",
+        description: "La cita se actualizó correctamente.",
+      })
+      await loadAppointments()
+    } catch (err) {
+      console.error("Error updating appointment status", err)
+      toast({
+        title: "Error de conexión",
+        description: "No pudimos comunicar con el servidor.",
+        variant: "destructive",
+      })
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
+  const selectedDayAppointments = useMemo(() => {
+    const target = startOfDay(selectedDate)
+    return appointments.filter((apt) => isSameDay(new Date(apt.start), target))
+  }, [appointments, selectedDate])
+
+  const pendingCount = selectedDayAppointments.filter((apt) => apt.status === "pendiente").length
+  const completedCount = selectedDayAppointments.filter((apt) => apt.status === "completada").length
+
+  const totalEarnings = selectedDayAppointments
+    .filter((apt) => apt.status === "completada")
+    .reduce((sum, apt) => sum + (apt.price ?? 0), 0)
+
+  const daySummary = useMemo(() => {
+    const nonCancelled = selectedDayAppointments.filter((apt) => apt.status !== "cancelada")
+    const starts = nonCancelled.map((apt) => new Date(apt.start).getTime()).filter(Number.isFinite)
+    const ends = nonCancelled
+      .map((apt) => (apt.end ? new Date(apt.end).getTime() : null))
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+
+    const first = starts.length ? new Date(Math.min(...starts)) : null
+    const last = ends.length ? new Date(Math.max(...ends)) : null
+    const totalMinutes = nonCancelled.reduce((acc, apt) => {
+      const startMs = new Date(apt.start).getTime()
+      const endMs = apt.end ? new Date(apt.end).getTime() : NaN
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return acc
+      return acc + Math.max(0, Math.round((endMs - startMs) / 60000))
+    }, 0)
+
+    const estimated = nonCancelled.reduce((acc, apt) => acc + (apt.price ?? 0), 0)
+
+    return { first, last, totalMinutes, estimated }
+  }, [selectedDayAppointments])
+
+  const getStatusColor = (status: AppointmentStatus) => {
     switch (status) {
-      case "pending":
+      case "pendiente":
+        return "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
+      case "completada":
+        return "bg-green-500/10 text-green-500 border-green-500/20"
+      case "cancelada":
+        return "bg-red-500/10 text-red-500 border-red-500/20"
+      default:
+        return "bg-muted text-foreground border-border"
+    }
+  }
+
+  const getStatusText = (status: AppointmentStatus) => {
+    switch (status) {
+      case "pendiente":
         return "Pendiente"
-      case "confirmed":
-        return "Confirmada"
-      case "completed":
+      case "completada":
         return "Completada"
-      case "cancelled":
+      case "cancelada":
         return "Cancelada"
+      default:
+        return status
     }
   }
 
@@ -123,11 +209,11 @@ export default function BarberDashboard() {
           </div>
 
           {/* Stats */}
-          <div className="grid md:grid-cols-4 gap-4 mb-8">
+          <div className="grid md:grid-cols-3 gap-4 mb-8">
             <Card>
               <CardHeader className="pb-3">
                 <CardDescription>Citas Hoy</CardDescription>
-                <CardTitle className="text-3xl">{todayAppointments.length}</CardTitle>
+                <CardTitle className="text-3xl">{selectedDayAppointments.length}</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-xs text-muted-foreground">Total de citas programadas</p>
@@ -140,17 +226,7 @@ export default function BarberDashboard() {
                 <CardTitle className="text-3xl text-yellow-500">{pendingCount}</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-xs text-muted-foreground">Por confirmar</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardDescription>Confirmadas</CardDescription>
-                <CardTitle className="text-3xl text-blue-500">{confirmedCount}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">Listas para atender</p>
+                <p className="text-xs text-muted-foreground">Por atender</p>
               </CardContent>
             </Card>
 
@@ -165,10 +241,10 @@ export default function BarberDashboard() {
             </Card>
           </div>
 
-          <div className="grid lg:grid-cols-3 gap-6">
+          <div className="grid lg:grid-cols-3 gap-6" id="mis-citas">
             {/* Appointments List */}
             <div className="lg:col-span-2">
-              <Tabs defaultValue="today" className="w-full">
+              <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="w-full">
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="today">Hoy</TabsTrigger>
                   <TabsTrigger value="upcoming">Próximas</TabsTrigger>
@@ -176,7 +252,23 @@ export default function BarberDashboard() {
                 </TabsList>
 
                 <TabsContent value="today" className="space-y-4 mt-4">
-                  {todayAppointments.length === 0 ? (
+                  {isLoading ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <div className="space-y-3">
+                          {Array.from({ length: 3 }).map((_, idx) => (
+                            <Skeleton key={idx} className="h-20 w-full" />
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : error ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <p className="text-sm text-destructive">{error}</p>
+                      </CardContent>
+                    </Card>
+                  ) : selectedDayAppointments.length === 0 ? (
                     <Card>
                       <CardContent className="py-12">
                         <Empty className="border-0 bg-transparent p-0">
@@ -193,7 +285,7 @@ export default function BarberDashboard() {
                       </CardContent>
                     </Card>
                   ) : (
-                    todayAppointments.map((appointment) => (
+                    selectedDayAppointments.map((appointment) => (
                       <Card key={appointment.id}>
                         <CardContent className="p-6">
                           <div className="flex items-start justify-between mb-4">
@@ -203,14 +295,18 @@ export default function BarberDashboard() {
                               </div>
                               <div>
                                 <h3 className="font-semibold text-lg mb-1">{appointment.clientName}</h3>
-                                <p className="text-sm text-muted-foreground mb-2">{appointment.service}</p>
+                                <p className="text-sm text-muted-foreground mb-2">{appointment.serviceName}</p>
                                 <div className="flex items-center gap-4 text-sm">
                                   <span className="flex items-center gap-1">
                                     <Clock className="h-4 w-4 text-muted-foreground" />
-                                    {appointment.time} ({appointment.duration})
+                                    {format(new Date(appointment.start), "HH:mm", { locale: es })}
+                                    {appointment.end
+                                      ? ` (${format(new Date(appointment.end), "HH:mm", { locale: es })})`
+                                      : ""}
                                   </span>
                                   <span className="flex items-center gap-1">
-                                    <DollarSign className="h-4 w-4 text-muted-foreground" />${appointment.price}
+                                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                                    {appointment.price != null ? `$${appointment.price}` : "-"}
                                   </span>
                                 </div>
                               </div>
@@ -221,40 +317,37 @@ export default function BarberDashboard() {
                           </div>
 
                           <div className="flex gap-2">
-                            {appointment.status === "pending" && (
+                            {appointment.status === "pendiente" && (
                               <>
                                 <Button
                                   size="sm"
-                                  onClick={() => handleStatusChange(appointment.id, "confirmed")}
+                                  onClick={() => updateStatus(appointment.id, "completada")}
                                   className="flex-1"
+                                  disabled={updatingId === appointment.id}
                                 >
                                   <CheckCircle className="h-4 w-4 mr-2" />
-                                  Confirmar
+                                  Marcar como Completada
                                 </Button>
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => handleStatusChange(appointment.id, "cancelled")}
+                                  onClick={() => updateStatus(appointment.id, "cancelada")}
                                   className="flex-1"
+                                  disabled={updatingId === appointment.id}
                                 >
                                   <XCircle className="h-4 w-4 mr-2" />
                                   Cancelar
                                 </Button>
                               </>
                             )}
-                            {appointment.status === "confirmed" && (
-                              <Button
-                                size="sm"
-                                onClick={() => handleStatusChange(appointment.id, "completed")}
-                                className="w-full"
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                Marcar como Completada
-                              </Button>
-                            )}
-                            {appointment.status === "completed" && (
+                            {appointment.status === "completada" && (
                               <div className="w-full text-center py-2 text-sm text-green-500 font-medium">
                                 Cita completada exitosamente
+                              </div>
+                            )}
+                            {appointment.status === "cancelada" && (
+                              <div className="w-full text-center py-2 text-sm text-red-500 font-medium">
+                                Cita cancelada
                               </div>
                             )}
                           </div>
@@ -265,39 +358,125 @@ export default function BarberDashboard() {
                 </TabsContent>
 
                 <TabsContent value="upcoming" className="mt-4">
-                  <Card>
-                    <CardContent className="py-12">
-                      <Empty className="border-0 bg-transparent p-0">
-                        <EmptyMedia variant="icon">
-                          <CalendarIcon className="size-6" />
-                        </EmptyMedia>
-                        <EmptyHeader>
-                          <EmptyTitle>Sin citas próximas</EmptyTitle>
-                          <EmptyDescription>
-                            Agenda nuevas citas para mantener tu agenda activa.
-                          </EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    </CardContent>
-                  </Card>
+                  {isLoading ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <div className="space-y-3">
+                          {Array.from({ length: 3 }).map((_, idx) => (
+                            <Skeleton key={idx} className="h-20 w-full" />
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : error ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <p className="text-sm text-destructive">{error}</p>
+                      </CardContent>
+                    </Card>
+                  ) : appointments.length === 0 ? (
+                    <Card>
+                      <CardContent className="py-12">
+                        <Empty className="border-0 bg-transparent p-0">
+                          <EmptyMedia variant="icon">
+                            <CalendarIcon className="size-6" />
+                          </EmptyMedia>
+                          <EmptyHeader>
+                            <EmptyTitle>Sin citas próximas</EmptyTitle>
+                            <EmptyDescription>
+                              Cuando existan nuevas reservas, aparecerán aquí.
+                            </EmptyDescription>
+                          </EmptyHeader>
+                        </Empty>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="space-y-4">
+                      {appointments.map((appointment) => (
+                        <Card key={appointment.id}>
+                          <CardContent className="p-6">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-start gap-4">
+                                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                                  <User className="h-6 w-6 text-primary" />
+                                </div>
+                                <div>
+                                  <h3 className="font-semibold text-lg mb-1">{appointment.clientName}</h3>
+                                  <p className="text-sm text-muted-foreground mb-2">{appointment.serviceName}</p>
+                                  <div className="flex items-center gap-4 text-sm">
+                                    <span className="flex items-center gap-1">
+                                      <Clock className="h-4 w-4 text-muted-foreground" />
+                                      {format(new Date(appointment.start), "EEEE d 'de' MMMM · HH:mm", { locale: es })}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <Badge variant="outline" className={getStatusColor(appointment.status)}>
+                                {getStatusText(appointment.status)}
+                              </Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-4">
-                  <Card>
-                    <CardContent className="py-12">
-                      <Empty className="border-0 bg-transparent p-0">
-                        <EmptyMedia variant="icon">
-                          <CalendarIcon className="size-6" />
-                        </EmptyMedia>
-                        <EmptyHeader>
-                          <EmptyTitle>Sin historial registrado</EmptyTitle>
-                          <EmptyDescription>
-                            Aquí aparecerán las citas completadas o canceladas.
-                          </EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    </CardContent>
-                  </Card>
+                  {isLoading ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <div className="space-y-3">
+                          {Array.from({ length: 3 }).map((_, idx) => (
+                            <Skeleton key={idx} className="h-20 w-full" />
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : error ? (
+                    <Card>
+                      <CardContent className="py-6">
+                        <p className="text-sm text-destructive">{error}</p>
+                      </CardContent>
+                    </Card>
+                  ) : appointments.length === 0 ? (
+                    <Card>
+                      <CardContent className="py-12">
+                        <Empty className="border-0 bg-transparent p-0">
+                          <EmptyMedia variant="icon">
+                            <CalendarIcon className="size-6" />
+                          </EmptyMedia>
+                          <EmptyHeader>
+                            <EmptyTitle>Sin historial registrado</EmptyTitle>
+                            <EmptyDescription>
+                              Aquí aparecerán las citas completadas o canceladas.
+                            </EmptyDescription>
+                          </EmptyHeader>
+                        </Empty>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="space-y-4">
+                      {appointments.map((appointment) => (
+                        <Card key={appointment.id}>
+                          <CardContent className="p-6">
+                            <div className="flex items-start justify-between mb-2">
+                              <div>
+                                <h3 className="font-semibold">{appointment.clientName}</h3>
+                                <p className="text-sm text-muted-foreground">{appointment.serviceName}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {format(new Date(appointment.start), "EEEE d 'de' MMMM · HH:mm", { locale: es })}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className={getStatusColor(appointment.status)}>
+                                {getStatusText(appointment.status)}
+                              </Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
             </div>
@@ -321,20 +500,28 @@ export default function BarberDashboard() {
                 <CardContent className="space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Primera cita</span>
-                    <span className="font-semibold">09:30</span>
+                    <span className="font-semibold">
+                      {daySummary.first ? format(daySummary.first, "HH:mm", { locale: es }) : "-"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Última cita</span>
-                    <span className="font-semibold">17:00</span>
+                    <span className="font-semibold">
+                      {daySummary.last ? format(daySummary.last, "HH:mm", { locale: es }) : "-"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Tiempo total</span>
-                    <span className="font-semibold">3h 15min</span>
+                    <span className="font-semibold">
+                      {daySummary.totalMinutes > 0
+                        ? `${Math.floor(daySummary.totalMinutes / 60)}h ${daySummary.totalMinutes % 60}min`
+                        : "-"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between pt-4 border-t">
                     <span className="text-sm font-medium">Ingresos estimados</span>
                     <span className="font-bold text-lg text-primary">
-                      ${todayAppointments.reduce((sum, apt) => sum + apt.price, 0)}
+                      ${daySummary.estimated}
                     </span>
                   </div>
                 </CardContent>

@@ -1,12 +1,23 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { format, startOfToday } from "date-fns"
+import { addMinutes, format, isSameDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import { CalendarX, Clock, DollarSign, Scissors, Users } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -36,6 +47,8 @@ export default function BookingPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
 
+  const [now, setNow] = useState(() => new Date())
+
   const [services, setServices] = useState<Service[]>([])
   const [servicesError, setServicesError] = useState<string | null>(null)
   const [isLoadingServices, setIsLoadingServices] = useState(true)
@@ -48,7 +61,7 @@ export default function BookingPage() {
   const [isLoadingSlots, setIsLoadingSlots] = useState(false)
   const [slotsError, setSlotsError] = useState<string | null>(null)
 
-  const [selectedService, setSelectedService] = useState<number | null>(null)
+  const [selectedServices, setSelectedServices] = useState<number[]>([])
   const [selectedBarber, setSelectedBarber] = useState<number | null>(null)
   const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlot | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date | undefined>()
@@ -56,6 +69,17 @@ export default function BookingPage() {
   const [userId, setUserId] = useState<number | null>(null)
   const [isBooking, setIsBooking] = useState(false)
   const [slotsRefreshKey, setSlotsRefreshKey] = useState(0)
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(new Date())
+    }, 30_000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     const start = startOfToday()
@@ -130,7 +154,7 @@ export default function BookingPage() {
     setBarbersError(null)
     setSlotsError(null)
 
-    if (!selectedService) {
+    if (selectedServices.length === 0) {
       setIsLoadingBarbers(false)
       return
     }
@@ -140,24 +164,45 @@ export default function BookingPage() {
 
     const fetchBarbers = async () => {
       try {
-        const response = await fetch(`/api/services/${selectedService}/barbers`, {
-          method: "GET",
-          cache: "no-store",
-        })
+        const responses = await Promise.all(
+          selectedServices.map((serviceId) =>
+            fetch(`/api/services/${serviceId}/barbers`, {
+              method: "GET",
+              cache: "no-store",
+            }),
+          ),
+        )
 
-        const data = await response.json().catch(() => ({}))
+        const payloads = await Promise.all(responses.map((response) => response.json().catch(() => ({}))))
 
-        if (!isActive) {
-          return
-        }
+        if (!isActive) return
 
-        if (!response.ok) {
+        const firstErrorIndex = responses.findIndex((response) => !response.ok)
+        if (firstErrorIndex !== -1) {
+          const data = payloads[firstErrorIndex]
           setBarbersError(data.error ?? "No se pudieron cargar los profesionales")
           setBarbers([])
           return
         }
 
-        setBarbers(Array.isArray(data.barbers) ? data.barbers : [])
+        const lists = payloads.map((data) => (Array.isArray(data.barbers) ? (data.barbers as Barber[]) : []))
+
+        if (lists.length === 0) {
+          setBarbers([])
+          return
+        }
+
+        const idsInAll = new Set<number>(lists[0].map((barber) => barber.id))
+        for (const list of lists.slice(1)) {
+          const ids = new Set<number>(list.map((barber) => barber.id))
+          for (const id of Array.from(idsInAll)) {
+            if (!ids.has(id)) {
+              idsInAll.delete(id)
+            }
+          }
+        }
+
+        setBarbers(lists[0].filter((barber) => idsInAll.has(barber.id)))
       } catch (error) {
         if (!isActive) {
           return
@@ -177,11 +222,24 @@ export default function BookingPage() {
     return () => {
       isActive = false
     }
-  }, [selectedService])
+  }, [selectedServices])
 
   useEffect(() => {
     if (!searchParams) {
       return
+    }
+
+    const rawServiceId = searchParams.get("serviceId")
+    if (rawServiceId) {
+      const parsedServiceId = Number(rawServiceId)
+      if (
+        Number.isFinite(parsedServiceId) &&
+        parsedServiceId > 0 &&
+        selectedServices.length === 0 &&
+        services.some((service) => service.id === parsedServiceId)
+      ) {
+        setSelectedServices([parsedServiceId])
+      }
     }
 
     const rawBarberId = searchParams.get("barberId")
@@ -198,14 +256,14 @@ export default function BookingPage() {
     if (barbers.some((barber) => barber.id === parsed)) {
       setSelectedBarber(parsed)
     }
-  }, [searchParams, barbers])
+  }, [searchParams, barbers, services, selectedServices.length])
 
   useEffect(() => {
     setSelectedSlot(null)
     setSlots([])
     setSlotsError(null)
 
-    if (!selectedService || !selectedBarber || !selectedDate) {
+    if (selectedServices.length === 0 || !selectedBarber || !selectedDate) {
       setIsLoadingSlots(false)
       return
     }
@@ -217,31 +275,68 @@ export default function BookingPage() {
 
     const fetchSlots = async () => {
       try {
-        const query = new URLSearchParams({
-          serviceId: String(selectedService),
-          barberId: String(selectedBarber),
-          date: format(selectedDate, "yyyy-MM-dd"),
-        })
+        const dateParam = format(selectedDate, "yyyy-MM-dd")
 
-        const response = await fetch(`/api/availability?${query.toString()}`, {
-          method: "GET",
-          cache: "no-store",
-          signal: controller.signal,
-        })
+        const responses = await Promise.all(
+          selectedServices.map((serviceId) => {
+            const query = new URLSearchParams({
+              serviceId: String(serviceId),
+              barberId: String(selectedBarber),
+              date: dateParam,
+            })
 
-        const data = await response.json().catch(() => ({}))
+            return fetch(`/api/availability?${query.toString()}`, {
+              method: "GET",
+              cache: "no-store",
+              signal: controller.signal,
+            })
+          }),
+        )
 
-        if (!isActive) {
-          return
-        }
+        const payloads = await Promise.all(responses.map((response) => response.json().catch(() => ({}))))
 
-        if (!response.ok) {
+        if (!isActive) return
+
+        const firstErrorIndex = responses.findIndex((response) => !response.ok)
+        if (firstErrorIndex !== -1) {
+          const data = payloads[firstErrorIndex]
           setSlotsError(data.error ?? "No se pudo obtener la disponibilidad")
           setSlots([])
           return
         }
 
-        setSlots(Array.isArray(data.slots) ? data.slots : [])
+        const slotLists = payloads.map((data) => (Array.isArray(data.slots) ? (data.slots as AvailabilitySlot[]) : []))
+
+        if (selectedServices.length === 1) {
+          setSlots(slotLists[0])
+          return
+        }
+
+        const durations = selectedServices.map((id) => services.find((svc) => svc.id === id)?.durationMin ?? 0)
+        const totalDuration = durations.reduce((acc, value) => acc + value, 0)
+
+        if (!totalDuration || !Number.isFinite(totalDuration)) {
+          setSlotsError("No pudimos calcular la duración total del servicio")
+          setSlots([])
+          return
+        }
+
+        // Conservative check: ensure the full window is available by verifying the start exists and
+        // (when durations are 30-min multiples) intermediate starts exist as well.
+        const allStarts = slotLists.map((list) => new Set(list.map((slot) => slot.start)))
+        const chainable = slotLists[0].filter((slot) => {
+          let cursor = new Date(slot.start)
+          for (let index = 0; index < durations.length; index += 1) {
+            const cursorIso = cursor.toISOString()
+            if (!allStarts[index]?.has(cursorIso)) {
+              return false
+            }
+            cursor = addMinutes(cursor, durations[index] ?? 0)
+          }
+          return true
+        })
+
+        setSlots(chainable)
       } catch (error) {
         if (!isActive || error instanceof DOMException) {
           return
@@ -262,7 +357,40 @@ export default function BookingPage() {
       isActive = false
       controller.abort()
     }
-  }, [selectedService, selectedBarber, selectedDate, slotsRefreshKey])
+  }, [selectedServices, selectedBarber, selectedDate, slotsRefreshKey, services])
+
+  const selectedServicesMeta = useMemo(() => {
+    const selected = services.filter((service) => selectedServices.includes(service.id))
+    const totalDuration = selected.reduce((acc, service) => acc + (service.durationMin ?? 0), 0)
+    return {
+      selected,
+      totalDuration,
+    }
+  }, [services, selectedServices])
+
+  const visibleSlots = useMemo(() => {
+    if (!selectedDate) return []
+    if (slots.length === 0) return []
+
+    if (!isSameDay(selectedDate, now)) {
+      return slots
+    }
+
+    const nowTime = now.getTime()
+    return slots.filter((slot) => {
+      const slotStart = new Date(slot.start)
+      return Number.isFinite(slotStart.getTime()) && slotStart.getTime() > nowTime
+    })
+  }, [slots, selectedDate, now])
+
+  useEffect(() => {
+    if (!selectedSlot) return
+
+    const stillVisible = visibleSlots.some((slot) => slot.start === selectedSlot.start)
+    if (!stillVisible) {
+      setSelectedSlot(null)
+    }
+  }, [visibleSlots, selectedSlot])
 
   const formattedSummaryDate = useMemo(() => {
     if (!selectedDate) return null
@@ -271,8 +399,16 @@ export default function BookingPage() {
 
   const formattedSummaryTime = useMemo(() => {
     if (!selectedSlot) return null
-    return format(new Date(selectedSlot.start), "HH:mm")
-  }, [selectedSlot])
+    const startInstant = new Date(selectedSlot.start)
+    const startLabel = format(startInstant, "HH:mm")
+
+    if (selectedServicesMeta.totalDuration > 0 && selectedServices.length > 1) {
+      const endInstant = addMinutes(startInstant, selectedServicesMeta.totalDuration)
+      return `${startLabel} - ${format(endInstant, "HH:mm")}`
+    }
+
+    return startLabel
+  }, [selectedSlot, selectedServicesMeta.totalDuration, selectedServices.length])
 
   const currencyFormatter = useMemo(
     () =>
@@ -284,9 +420,33 @@ export default function BookingPage() {
     [],
   )
 
-  const handleBooking = async () => {
-    if (!selectedService || !selectedBarber || !selectedSlot) {
-      return
+  const selectedServicesTotal = useMemo(() => {
+    const normalizedPrices = selectedServicesMeta.selected.map((service) => {
+      const value = service.price as unknown
+      if (typeof value === "number" && Number.isFinite(value)) return value
+      if (typeof value === "string") {
+        const parsed = Number(value)
+        return Number.isFinite(parsed) ? parsed : null
+      }
+      return null
+    })
+
+    if (normalizedPrices.some((value) => value == null)) {
+      return null
+    }
+
+    return (normalizedPrices as number[]).reduce((acc, value) => acc + value, 0)
+  }, [selectedServicesMeta.selected])
+
+  const selectedBarberName = useMemo(() => {
+    if (!selectedBarber) return null
+    const barber = barbers.find((item) => item.id === selectedBarber)
+    return barber?.name ?? null
+  }, [barbers, selectedBarber])
+
+  const handleBooking = async (): Promise<boolean> => {
+    if (selectedServices.length === 0 || !selectedBarber || !selectedSlot) {
+      return false
     }
 
     if (!userId) {
@@ -295,7 +455,7 @@ export default function BookingPage() {
         description: "No encontramos tu sesión activa. Vuelve a iniciar sesión para agendar.",
         variant: "destructive",
       })
-      return
+      return false
     }
 
     setIsBooking(true)
@@ -308,8 +468,8 @@ export default function BookingPage() {
         },
         body: JSON.stringify({
           userId,
-          serviceId: selectedService,
           barberId: selectedBarber,
+          serviceIds: selectedServices,
           start: selectedSlot.start,
         }),
       })
@@ -317,21 +477,39 @@ export default function BookingPage() {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
+        const errorMessage =
+          typeof data.error === "string" && data.error.trim().length > 0
+            ? (data.error as string)
+            : "Intenta con otro horario o vuelve a intentarlo más tarde."
+
         toast({
-          title: "No se pudo agendar la cita",
-          description: data.error ?? "Intenta con otro horario o vuelve a intentarlo más tarde.",
+          title: errorMessage.includes("máximo de 2")
+            ? "Límite diario alcanzado"
+            : "No se pudo agendar la cita",
+          description: errorMessage,
           variant: "destructive",
         })
-        return
+        return false
       }
 
+      const startInstant = new Date(selectedSlot.start)
+      const endInstant =
+        selectedServicesMeta.totalDuration > 0
+          ? addMinutes(startInstant, selectedServicesMeta.totalDuration)
+          : null
+
       toast({
-        title: "Cita reservada",
-        description: "Tu cita quedó agendada. Te enviaremos la confirmación por correo.",
+        title: "Cita reservada con éxito",
+        description: endInstant
+          ? `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${format(startInstant, "HH:mm")} a ${format(endInstant, "HH:mm")}.`
+          : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${format(startInstant, "HH:mm")}.`,
       })
+
+      setIsConfirmOpen(false)
 
       setSelectedSlot(null)
       setSlotsRefreshKey((value) => value + 1)
+      return true
     } catch (error) {
       console.error("Error creating reservation", error)
       toast({
@@ -339,6 +517,7 @@ export default function BookingPage() {
         description: "No pudimos comunicar con el servidor. Intenta nuevamente en unos segundos.",
         variant: "destructive",
       })
+      return false
     } finally {
       setIsBooking(false)
     }
@@ -376,7 +555,7 @@ export default function BookingPage() {
     }
 
     return services.map((service) => {
-      const isSelected = selectedService === service.id
+      const isSelected = selectedServices.includes(service.id)
 
       const displayPrice = service.price != null ? currencyFormatter.format(service.price) : "Consultar"
       const durationLabel = service.durationMin ? `${service.durationMin} min` : "Sin duración"
@@ -385,7 +564,24 @@ export default function BookingPage() {
         <button
           key={service.id}
           type="button"
-          onClick={() => setSelectedService(service.id)}
+          onClick={() => {
+            setSelectedServices((current) => {
+              if (current.includes(service.id)) {
+                return current.filter((id) => id !== service.id)
+              }
+
+              if (current.length >= 2) {
+                toast({
+                  title: "Máximo 2 servicios",
+                  description: "Por ahora solo puedes seleccionar hasta 2 servicios por reserva.",
+                  variant: "destructive",
+                })
+                return current
+              }
+
+              return [...current, service.id]
+            })
+          }}
           className={cn(
             "group flex w-full items-start gap-3 rounded-2xl border bg-card/80 p-4 text-left transition-all",
             "hover:border-foreground/20 hover:shadow-sm",
@@ -422,7 +618,7 @@ export default function BookingPage() {
   }
 
   const renderBarbersContent = () => {
-    if (!selectedService) {
+    if (selectedServices.length === 0) {
       return <p className="text-sm text-muted-foreground">Selecciona primero un servicio para ver los barberos disponibles.</p>
     }
 
@@ -490,7 +686,7 @@ export default function BookingPage() {
   }
 
   const renderSlotsContent = () => {
-    if (!selectedService || !selectedBarber) {
+    if (selectedServices.length === 0 || !selectedBarber) {
       return <p className="text-sm text-muted-foreground">Selecciona un servicio y barbero para ver los horarios.</p>
     }
 
@@ -512,7 +708,7 @@ export default function BookingPage() {
       )
     }
 
-    if (slots.length === 0) {
+    if (visibleSlots.length === 0) {
       return (
         <Empty className="border border-dashed border-border/60 bg-muted/40">
           <EmptyMedia variant="icon">
@@ -528,7 +724,7 @@ export default function BookingPage() {
       )
     }
 
-    return slots.map((slot) => {
+    return visibleSlots.map((slot) => {
       const isSelected = selectedSlot?.start === slot.start
       const startLabel = format(new Date(slot.start), "HH:mm")
 
@@ -546,7 +742,7 @@ export default function BookingPage() {
   }
 
   const isContinueDisabled =
-    !selectedService || !selectedBarber || !selectedSlot || !selectedDate || isBooking
+    selectedServices.length === 0 || !selectedBarber || !selectedSlot || !selectedDate || isBooking
 
   return (
     <div className="min-h-screen bg-muted/10">
@@ -627,15 +823,69 @@ export default function BookingPage() {
                         <>Selecciona una fecha y hora para tu cita.</>
                       )}
                     </div>
-                    <Button
-                      type="button"
-                      disabled={isContinueDisabled}
-                      onClick={handleBooking}
-                      className="w-full md:ml-auto md:w-auto"
-                      variant="outline"
-                    >
-                      {isBooking ? "Reservando..." : "Continuar"}
-                    </Button>
+                    <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          type="button"
+                          disabled={isContinueDisabled}
+                          className="w-full md:ml-auto md:w-auto"
+                          variant="outline"
+                        >
+                          {isBooking ? "Reservando..." : "Continuar"}
+                        </Button>
+                      </AlertDialogTrigger>
+
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Confirmar reserva</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Verifica los datos antes de confirmar tu cita.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+
+                        <div className="space-y-2 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Servicios:</span>{" "}
+                            <span className="font-medium">
+                              {selectedServicesMeta.selected.map((svc) => svc.name).join(", ")}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Total:</span>{" "}
+                            <span className="font-medium">
+                              {selectedServicesTotal == null
+                                ? "Consultar"
+                                : currencyFormatter.format(selectedServicesTotal)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Peluquero:</span>{" "}
+                            <span className="font-medium">{selectedBarberName ?? "-"}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Fecha:</span>{" "}
+                            <span className="font-medium">{formattedSummaryDate ?? "-"}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Hora:</span>{" "}
+                            <span className="font-medium">{formattedSummaryTime ?? "-"}</span>
+                          </div>
+                        </div>
+
+                        <AlertDialogFooter>
+                          <AlertDialogCancel disabled={isBooking}>Cancelar</AlertDialogCancel>
+                          <AlertDialogAction
+                            disabled={isContinueDisabled}
+                            onClick={async (event) => {
+                              event.preventDefault()
+                              await handleBooking()
+                            }}
+                          >
+                            Confirmar
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 </div>
               </div>

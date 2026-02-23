@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { reserveAppointment } from "@/lib/bookings"
+import { reserveAppointments } from "@/lib/bookings"
 
-const reservationSchema = z.object({
+const reservationSchema = z
+  .object({
   userId: z.coerce.number().int().positive(),
-  serviceId: z.coerce.number().int().positive(),
+  serviceId: z.coerce.number().int().positive().optional(),
+  serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(2).optional(),
   barberId: z.coerce.number().int().positive(),
   start: z
     .string()
@@ -13,16 +15,34 @@ const reservationSchema = z.object({
       message: "Fecha de inicio inválida",
     }),
 })
+  .superRefine((value, ctx) => {
+    const hasSingle = typeof value.serviceId === "number"
+    const hasMulti = Array.isArray(value.serviceIds) && value.serviceIds.length > 0
+
+    if (!hasSingle && !hasMulti) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Selecciona al menos un servicio" })
+    }
+
+    if (hasSingle && hasMulti) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Envía serviceId o serviceIds, no ambos" })
+    }
+  })
 
 export async function POST(request: Request) {
   try {
     const json = await request.json()
-    const { userId, serviceId, barberId, start } = reservationSchema.parse(json)
+    const { userId, serviceId, serviceIds, barberId, start } = reservationSchema.parse(json)
 
-    const appointment = await reserveAppointment({
+    const resolvedServiceIds = Array.isArray(serviceIds)
+      ? serviceIds
+      : typeof serviceId === "number"
+        ? [serviceId]
+        : []
+
+    const appointment = await reserveAppointments({
       userId,
       employeeId: barberId,
-      serviceId,
+      serviceIds: resolvedServiceIds,
       start,
     })
 
@@ -56,10 +76,24 @@ export async function POST(request: Request) {
       )
     }
 
+    if (code === "START_IN_PAST") {
+      return NextResponse.json(
+        { error: "No puedes agendar una cita en un horario que ya pasó" },
+        { status: 409 },
+      )
+    }
+
     if (code === "SERVICE_NOT_FOUND") {
       return NextResponse.json(
         { error: "El servicio seleccionado no existe o no está activo" },
         { status: 404 },
+      )
+    }
+
+    if (code === "SERVICE_SELECTION_LIMIT") {
+      return NextResponse.json(
+        { error: "Solo puedes seleccionar hasta 2 servicios por reserva." },
+        { status: 400 },
       )
     }
 
@@ -71,8 +105,25 @@ export async function POST(request: Request) {
     }
 
     if (code === "CLIENT_DAILY_LIMIT") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as { meta?: { maxPerDay?: number; existingCount?: number } }).meta ?? null)
+          : null
+
+      const maxPerDay = typeof meta?.maxPerDay === "number" ? meta.maxPerDay : 2
+      const existingCount = typeof meta?.existingCount === "number" ? meta.existingCount : null
+
       return NextResponse.json(
-        { error: "Solo puedes agendar 1 cita por día." },
+        {
+          error:
+            existingCount != null
+              ? `No se puede agendar: ya tienes ${existingCount} cita(s) programada(s) para ese día. Máximo ${maxPerDay}.`
+              : `Ya alcanzaste el máximo de ${maxPerDay} citas para ese día.`,
+        },
         { status: 409 },
       )
     }

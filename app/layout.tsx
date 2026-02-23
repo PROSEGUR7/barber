@@ -7,6 +7,8 @@ import "./globals.css"
 import { PWAInstallPrompt } from "@/components/pwa-install-prompt"
 import { ThemeProvider } from "@/components/theme-provider"
 
+export const dynamic = "force-dynamic"
+
 export const metadata: Metadata = {
   title: "Hair Salon - Soluciones de IA para tu salón",
   description:

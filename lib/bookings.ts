@@ -175,18 +175,30 @@ export async function getAvailabilitySlots(options: {
   employeeId: number
   date: string
   excludeAppointmentId?: number
+  durationMinOverride?: number
 }): Promise<AvailabilitySlot[]> {
-  const { serviceId, employeeId, date, excludeAppointmentId } = options
+  const { serviceId, employeeId, date, excludeAppointmentId, durationMinOverride } = options
 
   await ensureMaterializedEmployeeDay({ employeeId, date })
 
   const result = await pool.query<AvailabilityRow>(
     `WITH svc AS (
-        SELECT duracion_min
-          FROM tenant_base.servicios
-         WHERE id = $1
-           AND estado = 'activo'
-         LIMIT 1
+        SELECT COALESCE(
+                 $5::int,
+                 (SELECT duracion_min
+                    FROM tenant_base.servicios
+                   WHERE id = $1
+                     AND estado = 'activo'
+                   LIMIT 1)
+               ) AS duracion_min
+        WHERE COALESCE(
+                 $5::int,
+                 (SELECT duracion_min
+                    FROM tenant_base.servicios
+                   WHERE id = $1
+                     AND estado = 'activo'
+                   LIMIT 1)
+               ) IS NOT NULL
       ),
       bloques AS (
         SELECT he.fecha_hora_inicio AS ini,
@@ -227,13 +239,30 @@ export async function getAvailabilitySlots(options: {
       FROM libres
      ORDER BY slot_ini
      LIMIT 240`,
-    [serviceId, employeeId, date, typeof excludeAppointmentId === "number" ? excludeAppointmentId : null],
+    [
+      serviceId,
+      employeeId,
+      date,
+      typeof excludeAppointmentId === "number" ? excludeAppointmentId : null,
+      typeof durationMinOverride === "number" ? durationMinOverride : null,
+    ],
   )
 
-  return result.rows.map((row) => ({
+  const mapped = result.rows.map((row) => ({
     start: row.slot_ini.toISOString(),
     end: row.slot_fin.toISOString(),
   }))
+
+  const todayLocal = formatDateInTimeZone(new Date(), BOOKING_TIME_ZONE)
+  if (date !== todayLocal) {
+    return mapped
+  }
+
+  const now = Date.now()
+  return mapped.filter((slot) => {
+    const slotStart = new Date(slot.start).getTime()
+    return Number.isFinite(slotStart) && slotStart > now
+  })
 }
 
 export async function reserveAppointment(options: {
@@ -243,7 +272,36 @@ export async function reserveAppointment(options: {
   start: string
 }): Promise<{ appointmentId: number }>
 {
-  const { userId, employeeId, serviceId, start } = options
+  const result = await reserveAppointments({
+    userId: options.userId,
+    employeeId: options.employeeId,
+    serviceIds: [options.serviceId],
+    start: options.start,
+  })
+
+  return { appointmentId: result.appointmentIds[0] }
+}
+
+export async function reserveAppointments(options: {
+  userId: number
+  employeeId: number
+  serviceIds: number[]
+  start: string
+}): Promise<{ appointmentIds: number[] }>
+{
+  const { userId, employeeId, serviceIds, start } = options
+
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    const error = new Error("SERVICE_NOT_FOUND")
+    ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+    throw error
+  }
+
+  if (serviceIds.length > 2) {
+    const error = new Error("SERVICE_SELECTION_LIMIT")
+    ;(error as { code?: string }).code = "SERVICE_SELECTION_LIMIT"
+    throw error
+  }
 
   const clientId = await resolveClientIdForUser(userId)
 
@@ -254,73 +312,97 @@ export async function reserveAppointment(options: {
     throw error
   }
 
-  // Validate that the requested start matches an available slot for the employee.
-  const slotDateLocal = formatDateInTimeZone(startInstant, BOOKING_TIME_ZONE)
-  const availableSlots = await getAvailabilitySlots({
-    serviceId,
-    employeeId,
-    date: slotDateLocal,
-  })
-
-  const requestedStartISO = startInstant.toISOString()
-  const hasSlot = availableSlots.some((slot) => slot.start === requestedStartISO)
-
-  if (!hasSlot) {
-    const error = new Error("SLOT_NOT_AVAILABLE")
-    ;(error as { code?: string }).code = "SLOT_NOT_AVAILABLE"
+  if (startInstant.getTime() <= Date.now()) {
+    const error = new Error("START_IN_PAST")
+    ;(error as { code?: string }).code = "START_IN_PAST"
     throw error
   }
 
-  // DB uses timestamp without time zone; store the start in the business time zone.
-  const startLocalTs = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
+  const slotDateLocal = formatDateInTimeZone(startInstant, BOOKING_TIME_ZONE)
+
+  await ensureMaterializedEmployeeDay({ employeeId, date: slotDateLocal })
 
   const client = await pool.connect()
 
   try {
     await client.query("BEGIN")
 
-    // Business rule: 1 appointment per client per day (excluding cancelled).
-    const dailyLimitResult = await client.query<{ exists: boolean }>(
-      `SELECT EXISTS(
-         SELECT 1
-           FROM tenant_base.agendamientos a
-          WHERE a.cliente_id = $1
-            AND DATE(a.fecha_cita) = DATE($2::timestamp)
-            AND a.estado::text <> 'cancelada'
-          LIMIT 1
-       ) AS exists`,
+    const startLocalTs = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
+
+    // Business rule: max 2 appointments per client per day (excluding cancelled).
+    const dailyCountResult = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM tenant_base.agendamientos a
+        WHERE a.cliente_id = $1
+          AND DATE(a.fecha_cita) = DATE($2::timestamp)
+          AND a.estado::text <> 'cancelada'`,
       [clientId, startLocalTs],
     )
 
-    if (dailyLimitResult.rows[0]?.exists) {
+    const existingCount = Number(dailyCountResult.rows[0]?.count ?? 0)
+    const maxPerDay = 2
+    if (!Number.isFinite(existingCount)) {
       const error = new Error("CLIENT_DAILY_LIMIT")
       ;(error as { code?: string }).code = "CLIENT_DAILY_LIMIT"
       throw error
     }
 
-    const serviceResult = await client.query<{ duracion_min: number }>(
-      `SELECT duracion_min
+    if (existingCount + 1 > maxPerDay) {
+      const error = new Error("CLIENT_DAILY_LIMIT")
+      ;(error as { code?: string }).code = "CLIENT_DAILY_LIMIT"
+      ;(error as { meta?: unknown }).meta = { maxPerDay, existingCount }
+      throw error
+    }
+
+    const durationsResult = await client.query<{ id: number; duracion_min: number }>(
+      `SELECT id, duracion_min
          FROM tenant_base.servicios
-        WHERE id = $1
-          AND estado = 'activo'
-        LIMIT 1`,
-      [serviceId],
+        WHERE id = ANY($1::int[])
+          AND estado = 'activo'`,
+      [serviceIds],
     )
 
-    if (serviceResult.rowCount === 0) {
+    if (durationsResult.rowCount !== serviceIds.length) {
       const error = new Error("SERVICE_NOT_FOUND")
       ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
       throw error
     }
 
-    const durationMin = Number(serviceResult.rows[0].duracion_min)
-    if (!Number.isFinite(durationMin) || durationMin <= 0) {
-      const error = new Error("SERVICE_INVALID_DURATION")
-      ;(error as { code?: string }).code = "SERVICE_INVALID_DURATION"
+    const durationById = new Map<number, number>()
+    for (const row of durationsResult.rows) {
+      durationById.set(Number(row.id), Number(row.duracion_min))
+    }
+
+    const totalDurationMin = serviceIds.reduce((acc, serviceId) => {
+      const durationMin = Number(durationById.get(serviceId))
+      if (!Number.isFinite(durationMin) || durationMin <= 0) {
+        const error = new Error("SERVICE_INVALID_DURATION")
+        ;(error as { code?: string }).code = "SERVICE_INVALID_DURATION"
+        throw error
+      }
+      return acc + durationMin
+    }, 0)
+
+    const primaryServiceId = serviceIds[0]
+
+    const availableSlots = await getAvailabilitySlots({
+      serviceId: primaryServiceId,
+      employeeId,
+      date: slotDateLocal,
+      durationMinOverride: totalDurationMin,
+    })
+
+    const requestedStartISO = startInstant.toISOString()
+    const hasSlot = availableSlots.some((slot) => slot.start === requestedStartISO)
+
+    if (!hasSlot) {
+      const error = new Error("SLOT_NOT_AVAILABLE")
+      ;(error as { code?: string }).code = "SLOT_NOT_AVAILABLE"
       throw error
     }
 
-    // Prevent overlap with other active appointments.
+    const startLocalForInsert = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
+
     const overlapResult = await client.query<{ exists: boolean }>(
       `SELECT EXISTS(
          SELECT 1
@@ -331,7 +413,7 @@ export async function reserveAppointment(options: {
                 tsrange($2::timestamp, $2::timestamp + make_interval(mins := $3), '[)')
           LIMIT 1
        ) AS exists`,
-      [employeeId, startLocalTs, durationMin],
+      [employeeId, startLocalForInsert, totalDurationMin],
     )
 
     if (overlapResult.rows[0]?.exists) {
@@ -349,12 +431,17 @@ export async function reserveAppointment(options: {
          'no notificado'::tenant_base.notificado_enum,
          now())
        RETURNING id`,
-      [clientId, employeeId, serviceId, startLocalTs, durationMin],
+      [clientId, employeeId, primaryServiceId, startLocalForInsert, totalDurationMin],
     )
+
+    const insertedId = insertResult.rows[0]?.id
+    if (typeof insertedId !== "number") {
+      throw new Error("INSERT_FAILED")
+    }
 
     await client.query("COMMIT")
 
-    return { appointmentId: insertResult.rows[0].id }
+    return { appointmentIds: [insertedId] }
   } catch (error) {
     await client.query("ROLLBACK")
     throw error
@@ -377,6 +464,28 @@ type AppointmentRow = {
 
 const CANCELABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
 const RESCHEDULABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
+
+let hasEnsuredRescheduleAuditTable = false
+
+async function ensureRescheduleAuditTable(client: { query: (sql: string) => Promise<unknown> }) {
+  if (hasEnsuredRescheduleAuditTable) {
+    return
+  }
+
+  await client.query(`CREATE TABLE IF NOT EXISTS tenant_base.agendamientos_reprogramaciones (
+    id BIGSERIAL PRIMARY KEY,
+    cliente_id INTEGER NOT NULL REFERENCES tenant_base.clientes(id) ON DELETE CASCADE,
+    agendamiento_id INTEGER NOT NULL REFERENCES tenant_base.agendamientos(id) ON DELETE CASCADE,
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+  );`)
+
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS agendamientos_reprogramaciones_cliente_creado_idx
+       ON tenant_base.agendamientos_reprogramaciones (cliente_id, creado_en);`,
+  )
+
+  hasEnsuredRescheduleAuditTable = true
+}
 
 export async function getAppointmentsForUser(options: {
   userId: number
@@ -554,23 +663,44 @@ export async function rescheduleAppointment(options: {
   try {
     await client.query("BEGIN")
 
-    // Enforce 1 appointment per client per day (excluding this appointment).
-    const dailyLimitResult = await client.query<{ exists: boolean }>(
-      `SELECT EXISTS(
-         SELECT 1
-           FROM tenant_base.agendamientos a
-          WHERE a.cliente_id = $1
-            AND a.id <> $2
-            AND DATE(a.fecha_cita) = DATE($3::timestamp)
-            AND a.estado::text <> 'cancelada'
-          LIMIT 1
-       ) AS exists`,
+    await ensureRescheduleAuditTable(client)
+
+    const rescheduleCountResult = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM tenant_base.agendamientos_reprogramaciones r
+        WHERE r.cliente_id = $1
+          AND (r.creado_en AT TIME ZONE $2)::date = (now() AT TIME ZONE $2)::date`,
+      [clientId, BOOKING_TIME_ZONE],
+    )
+
+    const reschedulesToday = Number(rescheduleCountResult.rows[0]?.count ?? 0)
+    const maxReschedulesPerDay = 2
+
+    if (Number.isFinite(reschedulesToday) && reschedulesToday >= maxReschedulesPerDay) {
+      const error = new Error("RESCHEDULE_DAILY_LIMIT")
+      ;(error as { code?: string }).code = "RESCHEDULE_DAILY_LIMIT"
+      ;(error as { meta?: unknown }).meta = { maxReschedulesPerDay, reschedulesToday }
+      throw error
+    }
+
+    // Enforce max 2 appointments per client per day (excluding this appointment).
+    const dailyCountResult = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM tenant_base.agendamientos a
+        WHERE a.cliente_id = $1
+          AND a.id <> $2
+          AND DATE(a.fecha_cita) = DATE($3::timestamp)
+          AND a.estado::text <> 'cancelada'`,
       [clientId, appointmentId, newStartLocalTs],
     )
 
-    if (dailyLimitResult.rows[0]?.exists) {
+    const existingCount = Number(dailyCountResult.rows[0]?.count ?? 0)
+    const maxPerDay = 2
+
+    if (Number.isFinite(existingCount) && existingCount >= maxPerDay) {
       const error = new Error("CLIENT_DAILY_LIMIT")
       ;(error as { code?: string }).code = "CLIENT_DAILY_LIMIT"
+      ;(error as { meta?: unknown }).meta = { maxPerDay, existingCount }
       throw error
     }
 
@@ -627,6 +757,12 @@ export async function rescheduleAppointment(options: {
       ;(error as { code?: string }).code = "APPOINTMENT_RESCHEDULE_FAILED"
       throw error
     }
+
+    await client.query(
+      `INSERT INTO tenant_base.agendamientos_reprogramaciones (cliente_id, agendamiento_id)
+       VALUES ($1, $2)`,
+      [clientId, appointmentId],
+    )
 
     await client.query("COMMIT")
   } catch (error) {

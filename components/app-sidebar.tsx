@@ -101,10 +101,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     const barberNav = [
       { title: "Dashboard / Mi Agenda", url: "/barber", icon: Home },
-      { title: "Mis Citas", url: "/barber#mis-citas", icon: ClipboardList },
-      { title: "Mi Disponibilidad", url: "/barber#disponibilidad", icon: Clock },
-      { title: "Mis Servicios", url: "/barber#servicios", icon: Scissors },
-      { title: "Mis Ganancias", url: "/barber#ganancias", icon: TrendingUp },
+      { title: "Mis Citas", url: "/barber/appointments", icon: ClipboardList },
+      { title: "Mi Disponibilidad", url: "/barber/availability", icon: Clock },
+      { title: "Mis Servicios", url: "/barber/services", icon: Scissors },
+      { title: "Mis Ganancias", url: "/barber/earnings", icon: TrendingUp },
     ]
 
     const adminNav = [

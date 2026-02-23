@@ -33,6 +33,7 @@ type ExceptionRow = {
   tipo: "off" | "custom"
   hora_inicio: string | null
   hora_fin: string | null
+  nota: string | null
 }
 
 function isMissingTableError(error: unknown): boolean {
@@ -174,7 +175,7 @@ export async function listAvailabilityExceptions(options: {
 
   try {
     const result = await pool.query<ExceptionRow>(
-      `SELECT fecha::text as fecha, tipo, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin
+      `SELECT fecha::text as fecha, tipo, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin, nota::text as nota
          FROM tenant_base.empleados_disponibilidad_excepciones
         WHERE empleado_id = $1
           AND fecha BETWEEN $2::date AND $3::date
@@ -184,7 +185,7 @@ export async function listAvailabilityExceptions(options: {
 
     return result.rows.map((row) => {
       if (row.tipo === "off") {
-        return { type: "off", date: row.fecha }
+        return { type: "off", date: row.fecha, note: row.nota ?? undefined }
       }
 
       return {
@@ -192,6 +193,7 @@ export async function listAvailabilityExceptions(options: {
         date: row.fecha,
         startTime: (row.hora_inicio ?? "00:00").slice(0, 5),
         endTime: (row.hora_fin ?? "00:00").slice(0, 5),
+        note: row.nota ?? undefined,
       }
     })
   } catch (error) {

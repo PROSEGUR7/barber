@@ -15,6 +15,9 @@ const withPWA = withPWAInit({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Avoid dev/build overwriting each other on Windows when both are run.
+  // Dev will write to .next-dev, prod build/start will use .next.
+  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   eslint: {
     ignoreDuringBuilds: true,
   },
