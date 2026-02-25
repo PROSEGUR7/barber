@@ -1,8 +1,29 @@
 import { NextResponse } from "next/server"
 
 import { pool } from "@/lib/db"
+import { ensureMetaWebhookTables } from "@/lib/meta-chat"
 
 export const runtime = "nodejs"
+
+type MetaMessage = {
+  id?: string
+  from?: string
+  timestamp?: string
+  type?: string
+  text?: { body?: string }
+  image?: { id?: string; mime_type?: string; caption?: string }
+  audio?: { id?: string; mime_type?: string }
+  document?: { id?: string; mime_type?: string; caption?: string; filename?: string }
+  video?: { id?: string; mime_type?: string; caption?: string }
+}
+
+type MetaStatus = {
+  id?: string
+  status?: string
+  timestamp?: string
+  recipient_id?: string
+  errors?: Array<{ message?: string }>
+}
 
 type MetaWebhookBody = {
   object?: string
@@ -21,57 +42,11 @@ type MetaWebhookBody = {
           }
           wa_id?: string
         }>
-        messages?: Array<{
-          id?: string
-          from?: string
-          timestamp?: string
-          type?: string
-          text?: {
-            body?: string
-          }
-        }>
+        messages?: MetaMessage[]
+        statuses?: MetaStatus[]
       }
     }>
   }>
-}
-
-async function ensureMetaWebhookTables() {
-  await pool.query("SELECT pg_advisory_lock(hashtext('tenant_base.meta_webhook_messages_ddl'))")
-
-  try {
-    await pool.query(`
-      CREATE SEQUENCE IF NOT EXISTS tenant_base.meta_webhook_messages_id_seq
-    `)
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tenant_base.meta_webhook_messages (
-      id BIGINT PRIMARY KEY DEFAULT nextval('tenant_base.meta_webhook_messages_id_seq'::regclass),
-      wamid TEXT UNIQUE,
-      phone_number_id TEXT,
-      display_phone_number TEXT,
-      wa_id TEXT,
-      contact_name TEXT,
-      direction TEXT NOT NULL,
-      message_type TEXT,
-      message_text TEXT,
-      sent_at TIMESTAMPTZ,
-      raw_payload JSONB NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `)
-
-    await pool.query(`
-      ALTER SEQUENCE tenant_base.meta_webhook_messages_id_seq
-      OWNED BY tenant_base.meta_webhook_messages.id
-    `)
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS meta_webhook_messages_wa_id_sent_idx
-      ON tenant_base.meta_webhook_messages (wa_id, sent_at DESC, id DESC)
-  `)
-  } finally {
-    await pool.query("SELECT pg_advisory_unlock(hashtext('tenant_base.meta_webhook_messages_ddl'))")
-  }
 }
 
 function parseUnixTimestampToIso(value: string | undefined): string | null {
@@ -85,6 +60,70 @@ function parseUnixTimestampToIso(value: string | undefined): string | null {
   }
 
   return new Date(parsed * 1000).toISOString()
+}
+
+function getMessagePayload(message: MetaMessage): {
+  text: string | null
+  mediaId: string | null
+  mediaMimeType: string | null
+  mediaCaption: string | null
+  mediaFilename: string | null
+  type: string
+} {
+  const type = message.type?.trim() || "text"
+
+  if (type === "image") {
+    return {
+      text: message.image?.caption?.trim() || null,
+      mediaId: message.image?.id?.trim() || null,
+      mediaMimeType: message.image?.mime_type?.trim() || null,
+      mediaCaption: message.image?.caption?.trim() || null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  if (type === "audio") {
+    return {
+      text: null,
+      mediaId: message.audio?.id?.trim() || null,
+      mediaMimeType: message.audio?.mime_type?.trim() || null,
+      mediaCaption: null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  if (type === "document") {
+    return {
+      text: message.document?.caption?.trim() || null,
+      mediaId: message.document?.id?.trim() || null,
+      mediaMimeType: message.document?.mime_type?.trim() || null,
+      mediaCaption: message.document?.caption?.trim() || null,
+      mediaFilename: message.document?.filename?.trim() || null,
+      type,
+    }
+  }
+
+  if (type === "video") {
+    return {
+      text: message.video?.caption?.trim() || null,
+      mediaId: message.video?.id?.trim() || null,
+      mediaMimeType: message.video?.mime_type?.trim() || null,
+      mediaCaption: message.video?.caption?.trim() || null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  return {
+    text: message.text?.body?.trim() || null,
+    mediaId: null,
+    mediaMimeType: null,
+    mediaCaption: null,
+    mediaFilename: null,
+    type,
+  }
 }
 
 export async function GET(request: Request) {
@@ -131,8 +170,9 @@ export async function POST(request: Request) {
 
     await ensureMetaWebhookTables()
 
-    let storedMessages = 0
     const entries = Array.isArray(payload.entry) ? payload.entry : []
+    let storedMessages = 0
+    let updatedStatuses = 0
 
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : []
@@ -146,12 +186,13 @@ export async function POST(request: Request) {
         const metadata = value?.metadata
         const contact = value?.contacts?.[0]
         const messages = Array.isArray(value?.messages) ? value.messages : []
+        const statuses = Array.isArray(value?.statuses) ? value.statuses : []
 
         for (const message of messages) {
           const waId = message.from?.trim() || contact?.wa_id?.trim() || null
           const contactName = contact?.profile?.name?.trim() || null
-          const textBody = message.text?.body?.trim() || ""
           const sentAt = parseUnixTimestampToIso(message.timestamp)
+          const normalized = getMessagePayload(message)
 
           await pool.query(
             `INSERT INTO tenant_base.meta_webhook_messages (
@@ -163,20 +204,39 @@ export async function POST(request: Request) {
                direction,
                message_type,
                message_text,
+               media_id,
+               media_mime_type,
+               media_caption,
+               media_filename,
                sent_at,
-               raw_payload
+               raw_payload,
+               updated_at
              )
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (wamid) DO NOTHING`,
+             VALUES ($1,$2,$3,$4,$5,'inbound',$6,$7,$8,$9,$10,$11,$12,$13::jsonb,NOW())
+             ON CONFLICT (wamid) DO UPDATE
+            SET wa_id = COALESCE(EXCLUDED.wa_id, tenant_base.meta_webhook_messages.wa_id),
+              contact_name = COALESCE(EXCLUDED.contact_name, tenant_base.meta_webhook_messages.contact_name),
+              message_type = COALESCE(EXCLUDED.message_type, tenant_base.meta_webhook_messages.message_type),
+              message_text = COALESCE(EXCLUDED.message_text, tenant_base.meta_webhook_messages.message_text),
+              media_id = COALESCE(EXCLUDED.media_id, tenant_base.meta_webhook_messages.media_id),
+              media_mime_type = COALESCE(EXCLUDED.media_mime_type, tenant_base.meta_webhook_messages.media_mime_type),
+              media_caption = COALESCE(EXCLUDED.media_caption, tenant_base.meta_webhook_messages.media_caption),
+              media_filename = COALESCE(EXCLUDED.media_filename, tenant_base.meta_webhook_messages.media_filename),
+              sent_at = COALESCE(EXCLUDED.sent_at, tenant_base.meta_webhook_messages.sent_at),
+              raw_payload = EXCLUDED.raw_payload,
+              updated_at = NOW()`,
             [
               message.id?.trim() || null,
               metadata?.phone_number_id?.trim() || null,
               metadata?.display_phone_number?.trim() || null,
               waId,
               contactName,
-              "inbound",
-              message.type?.trim() || null,
-              textBody.length > 0 ? textBody : null,
+              normalized.type,
+              normalized.text,
+              normalized.mediaId,
+              normalized.mediaMimeType,
+              normalized.mediaCaption,
+              normalized.mediaFilename,
               sentAt,
               JSON.stringify(payload),
             ],
@@ -184,24 +244,53 @@ export async function POST(request: Request) {
 
           storedMessages += 1
         }
-      }
-    }
 
-    console.log("Meta webhook event received", {
-      object: payload.object,
-      entries: entries.length,
-      storedMessages,
-    })
+        for (const status of statuses) {
+          const wamid = status.id?.trim()
+          if (!wamid) {
+            continue
+          }
 
-    return NextResponse.json({ ok: true, storedMessages }, { status: 200 })
-  } catch (error) {
-    console.error("Meta webhook parse error", error)
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "No se pudo procesar el webhook de Meta.",
-      },
-      { status: 400 },
-    )
-  }
+           const statusValue = status.status?.trim() || null
+           const statusError = status.errors?.[0]?.message?.trim() || null
+           const readAt = statusValue === "read" ? parseUnixTimestampToIso(status.timestamp) : null
+
+           await pool.query(
+             `UPDATE tenant_base.meta_webhook_messages
+                 SET message_status = COALESCE($2, message_status),
+                     status_error = COALESCE($3, status_error),
+                     read_at = COALESCE($4::timestamptz, read_at),
+                     updated_at = NOW()
+              WHERE wamid = $1`,
+             [
+              wamid,
+               statusValue,
+               statusError,
+               readAt,
+             ],
+           )
+
+           updatedStatuses += 1
+         }
+       }
+     }
+
+     console.log("Meta webhook event received", {
+       object: payload.object,
+       entries: entries.length,
+       storedMessages,
+       updatedStatuses,
+     })
+
+     return NextResponse.json({ ok: true, storedMessages, updatedStatuses }, { status: 200 })
+   } catch (error) {
+     console.error("Meta webhook parse error", error)
+     return NextResponse.json(
+       {
+         ok: false,
+         error: "No se pudo procesar el webhook de Meta.",
+       },
+       { status: 400 },
+     )
+   }
 }

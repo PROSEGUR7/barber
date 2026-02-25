@@ -34,6 +34,23 @@ const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "Hair Salon"
 const ORIGIN = getAppUrl()
 const SHARE_RP_ID_ACROSS_SUBDOMAINS = (process.env.WEBAUTHN_SHARE_RP_ID_ACROSS_SUBDOMAINS ?? "false").toLowerCase() === "true"
 
+function getConfiguredRpId(): string | null {
+  const configured = process.env.WEBAUTHN_RP_ID?.trim()
+  if (!configured) {
+    return null
+  }
+
+  const sanitized = cleanHost(configured)
+  const isLocalhostLike = sanitized === "localhost" || sanitized === "127.0.0.1"
+
+  if (process.env.NODE_ENV === "production" && isLocalhostLike) {
+    console.warn("Ignoring WEBAUTHN_RP_ID=localhost in production; using request origin host instead")
+    return null
+  }
+
+  return sanitized
+}
+
 const DEFAULT_MULTI_TENANT_SUFFIXES = [
   "azurewebsites.net",
   "cloudfront.net",
@@ -147,8 +164,9 @@ function pickRegistrableRpId(hostname: string): string | null {
 }
 
 function resolveRpId(requestOrigin?: string | null, rpIdHint?: string | null): string {
-  if (process.env.WEBAUTHN_RP_ID) {
-    return process.env.WEBAUTHN_RP_ID
+  const configuredRpId = getConfiguredRpId()
+  if (configuredRpId) {
+    return configuredRpId
   }
 
   if (rpIdHint) {

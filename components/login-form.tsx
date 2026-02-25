@@ -282,7 +282,9 @@ export function LoginForm({
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setError("La autenticación fue cancelada.")
+        setError(
+          "La autenticación fue cancelada o no hay una llave válida para este dominio. Inicia con contraseña y registra la llave nuevamente en producción.",
+        )
       } else if (err instanceof Error) {
         console.error("Passkey login error", err)
         setError(err.message)
