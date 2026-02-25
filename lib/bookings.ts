@@ -208,7 +208,7 @@ export async function getAvailabilitySlots(options: {
            AND DATE(he.fecha_hora_inicio) = $3::date
       ),
       ocupados AS (
-        SELECT tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') AS r
+        SELECT tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') AS r
           FROM tenant_base.agendamientos a
          WHERE a.empleado_id = $2
            AND DATE(a.fecha_cita) = $3::date
@@ -232,7 +232,7 @@ export async function getAvailabilitySlots(options: {
          WHERE NOT EXISTS (
             SELECT 1
               FROM ocupados o
-             WHERE tsrange(g.slot_ini, g.slot_fin, '[)') && o.r
+             WHERE tstzrange(g.slot_ini, g.slot_fin, '[)') && o.r
           )
       )
     SELECT slot_ini, slot_fin
@@ -334,7 +334,7 @@ export async function reserveAppointments(options: {
       `SELECT COUNT(*)::int AS count
          FROM tenant_base.agendamientos a
         WHERE a.cliente_id = $1
-          AND DATE(a.fecha_cita) = DATE($2::timestamp)
+          AND DATE(a.fecha_cita) = DATE($2::timestamptz)
           AND a.estado::text <> 'cancelada'`,
       [clientId, startLocalTs],
     )
@@ -409,8 +409,8 @@ export async function reserveAppointments(options: {
            FROM tenant_base.agendamientos a
           WHERE a.empleado_id = $1
             AND a.estado::text = 'pendiente'
-            AND tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
-                tsrange($2::timestamp, $2::timestamp + make_interval(mins := $3), '[)')
+            AND tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
+              tstzrange($2::timestamptz, $2::timestamptz + make_interval(mins := $3), '[)')
           LIMIT 1
        ) AS exists`,
       [employeeId, startLocalForInsert, totalDurationMin],
@@ -426,7 +426,7 @@ export async function reserveAppointments(options: {
       `INSERT INTO tenant_base.agendamientos
         (cliente_id, empleado_id, servicio_id, fecha_cita, fecha_cita_fin, estado, notificado, creado_en)
        VALUES
-        ($1, $2, $3, $4::timestamp, $4::timestamp + make_interval(mins := $5),
+        ($1, $2, $3, $4::timestamptz, $4::timestamptz + make_interval(mins := $5),
          'pendiente'::tenant_base.estado_agendamiento_enum,
          'no notificado'::tenant_base.notificado_enum,
          now())
@@ -689,7 +689,7 @@ export async function rescheduleAppointment(options: {
          FROM tenant_base.agendamientos a
         WHERE a.cliente_id = $1
           AND a.id <> $2
-          AND DATE(a.fecha_cita) = DATE($3::timestamp)
+          AND DATE(a.fecha_cita) = DATE($3::timestamptz)
           AND a.estado::text <> 'cancelada'`,
       [clientId, appointmentId, newStartLocalTs],
     )
@@ -728,8 +728,8 @@ export async function rescheduleAppointment(options: {
           WHERE a.empleado_id = $1
             AND a.id <> $2
             AND a.estado::text = 'pendiente'
-            AND tsrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
-                tsrange($3::timestamp, $3::timestamp + make_interval(mins := $4), '[)')
+            AND tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
+              tstzrange($3::timestamptz, $3::timestamptz + make_interval(mins := $4), '[)')
           LIMIT 1
        ) AS exists`,
       [appointment.empleado_id, appointmentId, newStartLocalTs, durationMin],
@@ -743,8 +743,8 @@ export async function rescheduleAppointment(options: {
 
     const update = await client.query(
       `UPDATE tenant_base.agendamientos
-          SET fecha_cita = $1::timestamp,
-              fecha_cita_fin = $1::timestamp + make_interval(mins := $2),
+            SET fecha_cita = $1::timestamptz,
+              fecha_cita_fin = $1::timestamptz + make_interval(mins := $2),
               notificado = 'no notificado'::tenant_base.notificado_enum
         WHERE id = $3
           AND cliente_id = $4

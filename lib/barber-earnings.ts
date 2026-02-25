@@ -94,8 +94,8 @@ export async function getBarberEarnings(options: {
      FROM tenant_base.agendamientos a
      LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
     WHERE a.empleado_id = $1
-      AND a.fecha_cita >= $2::timestamp
-      AND a.fecha_cita <= $3::timestamp`,
+      AND a.fecha_cita >= $2::timestamptz
+      AND a.fecha_cita <= $3::timestamptz`,
     [employeeId, `${options.fromDate} 00:00:00`, `${options.toDate} 23:59:59`],
   )
 
@@ -127,8 +127,8 @@ export async function getMonthlyEarningsForBarber(options: {
        FROM tenant_base.agendamientos a
        LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
       WHERE a.empleado_id = $1
-        AND a.fecha_cita >= $2::timestamp
-        AND a.fecha_cita <= $3::timestamp
+        AND a.fecha_cita >= $2::timestamptz
+        AND a.fecha_cita <= $3::timestamptz
       GROUP BY 1
       ORDER BY 1 ASC`,
     [employeeId, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
@@ -169,8 +169,8 @@ export async function getTopClientsForBarber(options: {
        LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
       WHERE a.empleado_id = $1
         AND a.estado::text = 'completada'
-        AND a.fecha_cita >= $2::timestamp
-        AND a.fecha_cita <= $3::timestamp
+        AND a.fecha_cita >= $2::timestamptz
+        AND a.fecha_cita <= $3::timestamptz
       GROUP BY c.id, c.nombre
       ORDER BY COUNT(*) DESC, SUM(COALESCE(s.precio, 0)) DESC
       LIMIT $4`,

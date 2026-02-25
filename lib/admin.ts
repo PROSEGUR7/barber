@@ -901,12 +901,12 @@ export async function getAdminAppointments(options?: {
 
   if (options?.fromDate) {
     parameters.push(options.fromDate)
-    conditions.push(`a.fecha_cita >= $${parameters.length}::timestamp`)
+    conditions.push(`a.fecha_cita >= $${parameters.length}::timestamptz`)
   }
 
   if (options?.toDate) {
     parameters.push(options.toDate)
-    conditions.push(`a.fecha_cita <= $${parameters.length}::timestamp`)
+    conditions.push(`a.fecha_cita <= $${parameters.length}::timestamptz`)
   }
 
   const limit =
