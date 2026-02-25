@@ -156,8 +156,7 @@ export default function AdminConversacionesPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Badge>Todos</Badge>
-                  <Badge variant="outline">No leídos</Badge>
+                  <Badge>Webhook en vivo</Badge>
                 </div>
               </div>
 
@@ -172,7 +171,7 @@ export default function AdminConversacionesPage() {
                         </div>
                       ))}
                     </div>
-                  ) : (
+                  ) : filteredChats.length > 0 ? (
                     filteredChats.map((chat) => (
                       <button
                         key={chat.id}
@@ -206,6 +205,10 @@ export default function AdminConversacionesPage() {
                         </div>
                       </button>
                     ))
+                  ) : (
+                    <div className="p-4 text-sm text-muted-foreground">
+                      Aún no llegan mensajes al webhook. Envía un WhatsApp al número conectado para verlos aquí.
+                    </div>
                   )}
                 </div>
               </ScrollArea>
