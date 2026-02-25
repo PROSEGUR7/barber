@@ -7,6 +7,7 @@ import { AdminEmployeesTable } from "@/components/admin"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -21,7 +22,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { useToast } from "@/hooks/use-toast"
-import type { EmployeeSummary } from "@/lib/admin"
+import type { EmployeeSummary, ServiceSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type EmployeesResponse = {
@@ -38,7 +39,16 @@ type EmployeeResponse = {
   error?: string
 }
 
+type ServicesCatalogResponse = {
+  services?: ServiceSummary[]
+  error?: string
+}
+
 function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
+}
+
+function sortServices(list: ServiceSummary[]): ServiceSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
 
@@ -48,6 +58,8 @@ export default function AdminEmployeesPage() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
   const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
   const [employeesError, setEmployeesError] = useState<string | null>(null)
+  const [servicesCatalog, setServicesCatalog] = useState<ServiceSummary[]>([])
+  const [areServicesLoading, setAreServicesLoading] = useState(true)
 
   const [isRegisterOpen, setIsRegisterOpen] = useState(false)
   const [formName, setFormName] = useState("")
@@ -65,6 +77,7 @@ export default function AdminEmployeesPage() {
   const [editName, setEditName] = useState("")
   const [editEmail, setEditEmail] = useState("")
   const [editPhone, setEditPhone] = useState("")
+  const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([])
   const [editError, setEditError] = useState<string | null>(null)
   const [isEditSubmitting, setIsEditSubmitting] = useState(false)
 
@@ -111,12 +124,44 @@ export default function AdminEmployeesPage() {
     [],
   )
 
+  const loadServicesCatalog = useCallback(
+    async (signal?: AbortSignal) => {
+      setAreServicesLoading(true)
+
+      try {
+        const response = await fetch("/api/admin/services", { signal, cache: "no-store" })
+        const data: ServicesCatalogResponse = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudieron cargar los servicios")
+        }
+
+        if (!signal?.aborted) {
+          const list = Array.isArray(data.services) ? data.services : []
+          setServicesCatalog(sortServices(list))
+        }
+      } catch (error) {
+        if (signal?.aborted) {
+          return
+        }
+
+        console.error("Error fetching services catalog", error)
+      } finally {
+        if (!signal?.aborted) {
+          setAreServicesLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     const controller = new AbortController()
     void loadEmployees(controller.signal)
+    void loadServicesCatalog(controller.signal)
 
     return () => controller.abort()
-  }, [loadEmployees])
+  }, [loadEmployees, loadServicesCatalog])
 
   useEffect(() => {
     if (!isRegisterOpen) {
@@ -131,6 +176,7 @@ export default function AdminEmployeesPage() {
       setEditName("")
       setEditEmail("")
       setEditPhone("")
+      setSelectedServiceIds([])
       setEditError(null)
       setIsEditSubmitting(false)
     }
@@ -253,8 +299,24 @@ export default function AdminEmployeesPage() {
     setEditName(employee.name)
     setEditEmail(employee.email)
     setEditPhone(employee.phone ?? "")
+    setSelectedServiceIds(employee.serviceIds)
     setEditError(null)
     setIsEditOpen(true)
+  }, [])
+
+  const handleToggleService = useCallback((serviceId: number, checked: boolean) => {
+    setSelectedServiceIds((previous) => {
+      if (checked) {
+        if (previous.includes(serviceId)) {
+          return previous
+        }
+
+        return [...previous, serviceId]
+      }
+
+      return previous.filter((id) => id !== serviceId)
+    })
+    setEditError(null)
   }, [])
 
   const handleEditSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -307,6 +369,7 @@ export default function AdminEmployeesPage() {
           name: sanitizedName,
           email: sanitizedEmail,
           phone: sanitizedPhone,
+          serviceIds: selectedServiceIds,
         }),
       })
 
@@ -575,6 +638,30 @@ export default function AdminEmployeesPage() {
                           }}
                           required
                         />
+                      </Field>
+                      <Field>
+                        <FieldLabel>Servicios asignados</FieldLabel>
+                        <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border p-3">
+                          {areServicesLoading ? (
+                            <p className="text-sm text-muted-foreground">Cargando servicios...</p>
+                          ) : servicesCatalog.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No hay servicios disponibles.</p>
+                          ) : (
+                            servicesCatalog.map((service) => (
+                              <label key={service.id} className="flex items-start gap-3 rounded-sm py-1 text-sm">
+                                <Checkbox
+                                  checked={selectedServiceIds.includes(service.id)}
+                                  onCheckedChange={(checked) => handleToggleService(service.id, Boolean(checked))}
+                                />
+                                <span className="leading-tight">
+                                  <span className="block font-medium">{service.name}</span>
+                                  <span className="text-xs text-muted-foreground">{formatCurrency(service.price)}</span>
+                                </span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        <FieldDescription>Selecciona los servicios que este empleado puede realizar.</FieldDescription>
                       </Field>
                     </FieldGroup>
                   </div>

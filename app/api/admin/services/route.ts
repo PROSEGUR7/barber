@@ -1,21 +1,16 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { getEmployeesWithStats, registerEmployee } from "@/lib/admin"
-import { UserAlreadyExistsError } from "@/lib/auth"
+import { createService, getServicesCatalog } from "@/lib/admin"
 
 export const runtime = "nodejs"
 
-const createEmployeeSchema = z.object({
+const serviceSchema = z.object({
   name: z.string().trim().min(2),
-  email: z.string().trim().email(),
-  password: z.string().min(8),
-  phone: z
-    .string()
-    .trim()
-    .min(7)
-    .max(20)
-    .regex(/^[0-9+\-\s]+$/),
+  description: z.string().trim().nullable().optional(),
+  price: z.coerce.number().min(0),
+  durationMin: z.coerce.number().int().min(5).max(600),
+  status: z.enum(["activo", "inactivo"]).default("activo"),
 })
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
@@ -30,8 +25,8 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
 
 export async function GET() {
   try {
-    const employees = await getEmployeesWithStats()
-    return NextResponse.json({ ok: true, employees }, { status: 200 })
+    const services = await getServicesCatalog()
+    return NextResponse.json({ ok: true, services }, { status: 200 })
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
       return jsonError(503, {
@@ -40,10 +35,10 @@ export async function GET() {
       })
     }
 
-    console.error("Admin employees API error", error)
+    console.error("Admin services API error", error)
     return jsonError(500, {
       code: "SERVER_ERROR",
-      error: "No se pudieron cargar los empleados.",
+      error: "No se pudieron cargar los servicios.",
     })
   }
 }
@@ -60,31 +55,25 @@ export async function POST(request: Request) {
     })
   }
 
-  const parsed = createEmployeeSchema.safeParse(payload)
+  const parsed = serviceSchema.safeParse(payload)
   if (!parsed.success) {
     return jsonError(400, {
       code: "INVALID_PAYLOAD",
-      error: "Datos inválidos para crear el empleado.",
+      error: "Datos inválidos para crear el servicio.",
     })
   }
 
   try {
-    const employee = await registerEmployee({
+    const service = await createService({
       name: parsed.data.name,
-      email: parsed.data.email.toLowerCase(),
-      password: parsed.data.password,
-      phone: parsed.data.phone,
+      description: parsed.data.description ?? null,
+      price: parsed.data.price,
+      durationMin: parsed.data.durationMin,
+      status: parsed.data.status,
     })
 
-    return NextResponse.json({ ok: true, employee }, { status: 201 })
+    return NextResponse.json({ ok: true, service }, { status: 201 })
   } catch (error) {
-    if (error instanceof UserAlreadyExistsError) {
-      return jsonError(409, {
-        code: "USER_ALREADY_EXISTS",
-        error: "Ya existe un usuario con ese correo.",
-      })
-    }
-
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
       return jsonError(503, {
         code: "DATABASE_NOT_CONFIGURED",
@@ -92,10 +81,10 @@ export async function POST(request: Request) {
       })
     }
 
-    console.error("Admin create employee API error", error)
+    console.error("Admin create service API error", error)
     return jsonError(500, {
       code: "SERVER_ERROR",
-      error: "No se pudo crear el empleado.",
+      error: "No se pudo crear el servicio.",
     })
   }
 }

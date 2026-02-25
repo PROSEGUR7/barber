@@ -13,6 +13,7 @@ export type EmployeeSummary = {
   upcomingAppointments: number
   completedAppointments: number
   totalRevenue: number
+  serviceIds: number[]
   services: string[]
   rating: number | null
 }
@@ -135,6 +136,7 @@ type EmployeeSummaryRow = {
   active_appointments: string | null
   completed_appointments: string | null
   total_revenue: string | null
+  service_ids: number[] | null
   services: string[] | null
 }
 
@@ -264,6 +266,10 @@ const ACTIVE_APPOINTMENT_STATES_SQL = ACTIVE_APPOINTMENT_STATES.map((state) => `
 const COMPLETED_APPOINTMENT_STATES_SQL = COMPLETED_APPOINTMENT_STATES.map((state) => `'${state}'`).join(", ")
 
 function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
+  const serviceIds = Array.isArray(row.service_ids)
+    ? row.service_ids.filter((serviceId): serviceId is number => Number.isInteger(serviceId) && serviceId > 0)
+    : []
+
   const services = Array.isArray(row.services)
     ? row.services.filter((service): service is string => typeof service === "string" && service.trim().length > 0)
     : []
@@ -285,6 +291,7 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
     upcomingAppointments,
     completedAppointments,
     totalRevenue,
+    serviceIds,
     services,
     rating: null,
   }
@@ -412,34 +419,41 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
       e.estado,
       e.fecha_ingreso,
       u.correo,
-      COALESCE(COUNT(a.id), 0) AS total_appointments,
-      COALESCE(
-        COUNT(a.id) FILTER (WHERE LOWER(a.estado::text) IN (${ACTIVE_APPOINTMENT_STATES_SQL})),
-        0
-      ) AS active_appointments,
-      COALESCE(
-        COUNT(a.id) FILTER (WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})),
-        0
-      ) AS completed_appointments,
-  COALESCE(SUM(p.monto), 0) AS total_revenue,
-      COALESCE(array_agg(DISTINCT s.nombre) FILTER (WHERE s.nombre IS NOT NULL), ARRAY[]::text[]) AS services
+      COALESCE(appointments.total_appointments, 0)::text AS total_appointments,
+      COALESCE(appointments.active_appointments, 0)::text AS active_appointments,
+      COALESCE(appointments.completed_appointments, 0)::text AS completed_appointments,
+      COALESCE(revenue.total_revenue, 0)::text AS total_revenue,
+      COALESCE(assigned_services.service_ids, ARRAY[]::int[]) AS service_ids,
+      COALESCE(assigned_services.services, ARRAY[]::text[]) AS services
     FROM tenant_base.empleados e
     INNER JOIN tenant_base.users u ON u.id = e.user_id
-    LEFT JOIN tenant_base.agendamientos a ON a.empleado_id = e.id
-    LEFT JOIN tenant_base.pagos p
-      ON p.agendamiento_id = a.id
-      AND LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
-    LEFT JOIN tenant_base.empleados_servicios es ON es.empleado_id = e.id
-    LEFT JOIN tenant_base.servicios s ON s.id = es.servicio_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(a.id) AS total_appointments,
+        COUNT(a.id) FILTER (WHERE LOWER(a.estado::text) IN (${ACTIVE_APPOINTMENT_STATES_SQL})) AS active_appointments,
+        COUNT(a.id) FILTER (WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})) AS completed_appointments
+      FROM tenant_base.agendamientos a
+      WHERE a.empleado_id = e.id
+    ) appointments ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(
+          SUM(COALESCE(s.precio, 0)) FILTER (WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})),
+          0
+        ) AS total_revenue
+      FROM tenant_base.agendamientos a
+      LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+      WHERE a.empleado_id = e.id
+    ) revenue ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(array_agg(DISTINCT es.servicio_id) FILTER (WHERE es.servicio_id IS NOT NULL), ARRAY[]::int[]) AS service_ids,
+        COALESCE(array_agg(DISTINCT s.nombre) FILTER (WHERE s.nombre IS NOT NULL), ARRAY[]::text[]) AS services
+      FROM tenant_base.empleados_servicios es
+      LEFT JOIN tenant_base.servicios s ON s.id = es.servicio_id
+      WHERE es.empleado_id = e.id
+    ) assigned_services ON TRUE
     ${whereClause}
-    GROUP BY
-      e.id,
-      e.user_id,
-      e.nombre,
-      e.telefono,
-      e.estado,
-      e.fecha_ingreso,
-      u.correo
     ORDER BY e.nombre ASC
   `
 
@@ -477,6 +491,7 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
       upcomingAppointments: 0,
       completedAppointments: 0,
       totalRevenue: 0,
+      serviceIds: [],
       services: [],
       rating: null,
     }))
@@ -529,6 +544,7 @@ export async function updateEmployee(input: {
   name: string
   email: string
   phone: string
+  serviceIds?: number[]
 }): Promise<EmployeeSummary> {
   const client = await pool.connect()
 
@@ -556,6 +572,32 @@ export async function updateEmployee(input: {
         WHERE id = $1`,
       [userId, input.email],
     )
+
+    if (Array.isArray(input.serviceIds)) {
+      const uniqueServiceIds = Array.from(
+        new Set(input.serviceIds.filter((serviceId) => Number.isInteger(serviceId) && serviceId > 0)),
+      )
+
+      await client.query(
+        `DELETE FROM tenant_base.empleados_servicios
+          WHERE empleado_id = $1`,
+        [input.employeeId],
+      )
+
+      if (uniqueServiceIds.length > 0) {
+        const insertResult = await client.query(
+          `INSERT INTO tenant_base.empleados_servicios (empleado_id, servicio_id)
+            SELECT $1, s.id
+              FROM tenant_base.servicios s
+             WHERE s.id = ANY($2::int[])`,
+          [input.employeeId, uniqueServiceIds],
+        )
+
+        if (insertResult.rowCount !== uniqueServiceIds.length) {
+          throw new ServiceRecordNotFoundError()
+        }
+      }
+    }
 
     await client.query("COMMIT")
   } catch (error) {
@@ -773,12 +815,13 @@ export async function createService(input: {
   description?: string | null
   price: number
   durationMin: number
+  status?: string
 }): Promise<ServiceSummary> {
   const result = await pool.query<ServiceSummaryRow>(
-    `INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min)
-     VALUES ($1, NULLIF($2, ''), $3, $4)
+    `INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min, estado)
+     VALUES ($1, NULLIF($2, ''), $3, $4, $5)
      RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`,
-    [input.name, input.description ?? "", input.price, input.durationMin],
+    [input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
   )
 
   if (result.rowCount === 0) {
@@ -795,6 +838,7 @@ export async function updateService(
     description?: string | null
     price: number
     durationMin: number
+    status?: string
   },
 ): Promise<ServiceSummary> {
   const result = await pool.query<ServiceSummaryRow>(
@@ -802,10 +846,11 @@ export async function updateService(
         SET nombre = $2,
             descripcion = NULLIF($3, ''),
             precio = $4,
-        duracion_min = $5
+            duracion_min = $5,
+            estado = $6
       WHERE id = $1
       RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`,
-    [serviceId, input.name, input.description ?? "", input.price, input.durationMin],
+    [serviceId, input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
   )
 
   if (result.rowCount === 0) {

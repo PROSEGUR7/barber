@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Sheet,
@@ -86,6 +87,7 @@ export default function AdminServiciosPage() {
   const [formDescription, setFormDescription] = useState("")
   const [formPrice, setFormPrice] = useState("")
   const [formDurationMin, setFormDurationMin] = useState("")
+  const [formStatus, setFormStatus] = useState<"activo" | "inactivo">("activo")
   const [formError, setFormError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDeletingId, setIsDeletingId] = useState<number | null>(null)
@@ -96,6 +98,7 @@ export default function AdminServiciosPage() {
     setFormDescription("")
     setFormPrice("")
     setFormDurationMin("")
+    setFormStatus("activo")
     setFormError(null)
   }, [])
 
@@ -194,6 +197,7 @@ export default function AdminServiciosPage() {
     setFormDescription(service.description ?? "")
     setFormPrice(String(service.price))
     setFormDurationMin(String(service.durationMin))
+    setFormStatus(service.status?.trim().toLowerCase() === "inactivo" ? "inactivo" : "activo")
     setFormError(null)
     setIsFormOpen(true)
   }
@@ -239,6 +243,7 @@ export default function AdminServiciosPage() {
           description: description.length > 0 ? description : null,
           price,
           durationMin,
+          status: formStatus,
         }),
       })
 
@@ -433,6 +438,24 @@ export default function AdminServiciosPage() {
                           placeholder="Ej. 45"
                           required
                         />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="service-status">Estado</FieldLabel>
+                        <Select
+                          value={formStatus}
+                          onValueChange={(value: "activo" | "inactivo") => {
+                            setFormStatus(value)
+                            setFormError(null)
+                          }}
+                        >
+                          <SelectTrigger id="service-status">
+                            <SelectValue placeholder="Selecciona el estado" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="activo">Activo</SelectItem>
+                            <SelectItem value="inactivo">Inactivo</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </Field>
                     </FieldGroup>
                   </div>
