@@ -8,6 +8,7 @@ import {
   DollarSign,
   Heart,
   Home,
+  MessageSquare,
   Receipt,
   Scissors,
   Settings2,
@@ -110,6 +111,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const adminNav = [
       { title: "Dashboard General", url: "/admin", icon: Home },
       { title: "Agendamientos", url: "/admin/agendamientos", icon: CalendarDays },
+      { title: "Conversaciones", url: "/admin/conversaciones", icon: MessageSquare },
       { title: "Empleados", url: "/admin/empleados", icon: Users },
       { title: "Clientes", url: "/admin/clientes", icon: Users },
       { title: "Servicios", url: "/admin/servicios", icon: Scissors },
