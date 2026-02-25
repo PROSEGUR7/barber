@@ -8,6 +8,7 @@ type Body = {
   userId?: unknown
   credential?: unknown
   rpIdHint?: unknown
+  originHint?: unknown
 }
 
 function jsonError(
@@ -50,7 +51,8 @@ export async function POST(request: Request) {
   }
 
   const rpIdHint = typeof body.rpIdHint === "string" ? body.rpIdHint : null
-  const requestOrigin = request.headers.get("origin")
+  const originHint = typeof body.originHint === "string" ? body.originHint.trim() : ""
+  const requestOrigin = request.headers.get("origin") ?? (originHint || null)
 
   try {
     const result = await verifyPasskeyRegistration({

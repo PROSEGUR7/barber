@@ -28,6 +28,20 @@ export function LoginForm({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false)
 
+  const getWebAuthnHints = () => {
+    if (typeof window === "undefined") {
+      return {
+        rpIdHint: null as string | null,
+        originHint: null as string | null,
+      }
+    }
+
+    return {
+      rpIdHint: window.location.hostname,
+      originHint: window.location.origin,
+    }
+  }
+
   useEffect(() => {
     try {
       const storedEmail =
@@ -199,12 +213,14 @@ export function LoginForm({
     setIsPasskeyLoading(true)
 
     try {
+      const { rpIdHint, originHint } = getWebAuthnHints()
+
       const optionsResponse = await fetch("/api/webauthn/auth/options", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email: sanitizedEmail }),
+        body: JSON.stringify({ email: sanitizedEmail, rpIdHint, originHint }),
       })
 
       const optionsData = await optionsResponse.json().catch(() => ({}))
@@ -214,14 +230,14 @@ export function LoginForm({
         return
       }
 
-  const credential = await startAuthentication({ optionsJSON: optionsData.options })
+      const credential = await startAuthentication({ optionsJSON: optionsData.options })
 
       const verifyResponse = await fetch("/api/webauthn/auth/verify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ credential }),
+        body: JSON.stringify({ credential, rpIdHint, originHint }),
       })
 
       const verifyData = await verifyResponse.json().catch(() => ({}))
@@ -300,12 +316,14 @@ export function LoginForm({
     setError(null)
 
     try {
+      const { rpIdHint, originHint } = getWebAuthnHints()
+
       const optionsResponse = await fetch("/api/webauthn/register/options", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, rpIdHint, originHint }),
       })
 
       const optionsData = await optionsResponse.json().catch(() => ({}))
@@ -315,14 +333,14 @@ export function LoginForm({
         return false
       }
 
-  const credential = await startRegistration({ optionsJSON: optionsData.options })
+      const credential = await startRegistration({ optionsJSON: optionsData.options })
 
       const verifyResponse = await fetch("/api/webauthn/register/verify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ userId, credential }),
+        body: JSON.stringify({ userId, credential, rpIdHint, originHint }),
       })
 
       const verifyData = await verifyResponse.json().catch(() => ({}))
