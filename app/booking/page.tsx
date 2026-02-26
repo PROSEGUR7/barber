@@ -601,6 +601,11 @@ export default function BookingPage() {
             ? (data.error as string)
             : "Intenta con otro horario o vuelve a intentarlo más tarde."
 
+        if (response.status === 409) {
+          setSelectedSlot(null)
+          setSlotsRefreshKey((value) => value + 1)
+        }
+
         toast({
           title: errorMessage.includes("máximo de 2")
             ? "Límite diario alcanzado"

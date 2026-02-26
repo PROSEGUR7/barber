@@ -41,6 +41,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const enableVercelAnalytics = process.env.VERCEL === "1"
+
   return (
     <html lang="es" suppressHydrationWarning>
       <body
@@ -50,7 +52,7 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
           {children}
           <PWAInstallPrompt />
-          <Analytics />
+          {enableVercelAnalytics ? <Analytics /> : null}
         </ThemeProvider>
       </body>
     </html>
