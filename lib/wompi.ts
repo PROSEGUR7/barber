@@ -5,7 +5,7 @@ import { pool } from "@/lib/db"
 
 type ServicePriceRow = {
   id: number
-  precio: number | null
+  precio: number | string | null
 }
 
 type WompiMerchantResponse = {
@@ -84,13 +84,20 @@ async function getTotalAmountInCents(serviceIds: number[]): Promise<number> {
   let total = 0
 
   for (const row of result.rows) {
-    if (typeof row.precio !== "number" || !Number.isFinite(row.precio) || row.precio <= 0) {
+    const numericPrice =
+      typeof row.precio === "number"
+        ? row.precio
+        : typeof row.precio === "string"
+          ? Number.parseFloat(row.precio)
+          : Number.NaN
+
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
       const error = new Error("SERVICE_PRICE_INVALID")
       ;(error as { code?: string }).code = "SERVICE_PRICE_INVALID"
       throw error
     }
 
-    total += row.precio
+    total += numericPrice
   }
 
   const amountInCents = Math.round(total * 100)

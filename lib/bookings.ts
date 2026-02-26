@@ -212,7 +212,7 @@ export async function getAvailabilitySlots(options: {
           FROM tenant_base.agendamientos a
          WHERE a.empleado_id = $2
            AND DATE(a.fecha_cita) = $3::date
-           AND a.estado::text IN ('pendiente')
+           AND a.estado::text <> 'cancelada'
            AND ($4::int IS NULL OR a.id <> $4::int)
       ),
       grid AS (
@@ -408,7 +408,7 @@ export async function reserveAppointments(options: {
          SELECT 1
            FROM tenant_base.agendamientos a
           WHERE a.empleado_id = $1
-            AND a.estado::text = 'pendiente'
+            AND a.estado::text <> 'cancelada'
             AND tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
               tstzrange($2::timestamptz, $2::timestamptz + make_interval(mins := $3), '[)')
           LIMIT 1
@@ -727,7 +727,7 @@ export async function rescheduleAppointment(options: {
            FROM tenant_base.agendamientos a
           WHERE a.empleado_id = $1
             AND a.id <> $2
-            AND a.estado::text = 'pendiente'
+            AND a.estado::text <> 'cancelada'
             AND tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') &&
               tstzrange($3::timestamptz, $3::timestamptz + make_interval(mins := $4), '[)')
           LIMIT 1
