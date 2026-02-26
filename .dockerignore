@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+
+# Next.js build outputs
+.next
+.next-dev
+out
+
+# Local environment and logs
+.env
+.env.*
+*.log
+.pnpm-debug.log*
+
+# VCS and editor
+.git
+.gitignore
+.vscode
+
+# Misc
+coverage
+.DS_Store

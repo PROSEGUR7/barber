@@ -61,6 +61,8 @@ const DEFAULT_MULTI_TENANT_SUFFIXES = [
   "netlify.app",
   "onrender.com",
   "pages.dev",
+  "railway.app",
+  "up.railway.app",
   "render.com",
   "supabase.co",
   "supabase.in",
