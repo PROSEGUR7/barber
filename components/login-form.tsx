@@ -31,6 +31,12 @@ export function LoginForm({
   const [hasPlatformAuthenticator, setHasPlatformAuthenticator] = useState<boolean | null>(null)
   const [shouldSuggestPasskeySetup, setShouldSuggestPasskeySetup] = useState(false)
 
+  const showPasskeySetupPopup = () => {
+    window.alert(
+      "Aún no tienes una llave de acceso disponible para este dispositivo o dominio. Inicia sesión con tu contraseña primero y luego registra tu llave de acceso.",
+    )
+  }
+
   const getWebAuthnHints = () => {
     if (typeof window === "undefined") {
       return {
@@ -260,8 +266,16 @@ export function LoginForm({
       })
 
       const optionsData = await optionsResponse.json().catch(() => ({}))
+      const optionsCode = typeof optionsData?.code === "string" ? optionsData.code : ""
 
       if (!optionsResponse.ok) {
+        if (optionsCode === "NO_PASSKEYS") {
+          setShouldSuggestPasskeySetup(true)
+          setError(null)
+          showPasskeySetupPopup()
+          return
+        }
+
         setError(optionsData.error ?? "No se pudieron generar las opciones de llave de acceso.")
         return
       }
@@ -333,11 +347,17 @@ export function LoginForm({
           router.push("/booking")
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === "NotAllowedError") {
+      const isNotAllowedDomError = err instanceof DOMException && err.name === "NotAllowedError"
+      const message = err instanceof Error ? err.message.toLowerCase() : ""
+      const isNotAllowedMessage =
+        message.includes("notallowederror") ||
+        message.includes("timed out or was not allowed") ||
+        message.includes("no passkeys are available")
+
+      if (isNotAllowedDomError || isNotAllowedMessage) {
         setShouldSuggestPasskeySetup(true)
-        setError(
-          "No hay una llave de acceso disponible para este dominio en este dispositivo. Inicia con contraseña y registra una llave aquí.",
-        )
+        setError(null)
+        showPasskeySetupPopup()
       } else if (err instanceof Error) {
         console.error("Passkey login error", err)
         setError(err.message)
