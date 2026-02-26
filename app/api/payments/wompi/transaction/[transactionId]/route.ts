@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
 
+import { getWompiBaseUrl, reconcileWompiTransaction } from "@/lib/wompi"
+
 type Params = {
   params: Promise<{ transactionId: string }>
 }
@@ -13,18 +15,6 @@ type WompiTransactionResponse = {
     currency?: string
     payment_method_type?: string
   }
-}
-
-function getWompiBaseUrl() {
-  const configuredBaseUrl = process.env.WOMPI_API_BASE_URL?.trim()
-  if (configuredBaseUrl) {
-    return configuredBaseUrl.replace(/\/$/, "")
-  }
-
-  const publicKey = process.env.WOMPI_PUBLIC_KEY?.trim().toLowerCase() ?? ""
-  const isSandbox = publicKey.startsWith("pub_test_")
-
-  return (isSandbox ? "https://sandbox.wompi.co" : "https://production.wompi.co").replace(/\/$/, "")
 }
 
 export async function GET(_: Request, context: Params) {
@@ -49,6 +39,8 @@ export async function GET(_: Request, context: Params) {
       )
     }
 
+    const reconciliation = await reconcileWompiTransaction(payload.data)
+
     return NextResponse.json(
       {
         id: payload.data.id ?? transactionId,
@@ -57,6 +49,7 @@ export async function GET(_: Request, context: Params) {
         amountInCents: payload.data.amount_in_cents ?? null,
         currency: payload.data.currency ?? "COP",
         paymentMethodType: payload.data.payment_method_type ?? null,
+        reconciliation,
       },
       { status: 200 },
     )
