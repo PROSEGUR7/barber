@@ -28,7 +28,15 @@ export type WompiCheckoutData = {
 }
 
 function getWompiBaseUrl() {
-  return (process.env.WOMPI_API_BASE_URL ?? "https://production.wompi.co").replace(/\/$/, "")
+  const configuredBaseUrl = process.env.WOMPI_API_BASE_URL?.trim()
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/$/, "")
+  }
+
+  const publicKey = process.env.WOMPI_PUBLIC_KEY?.trim().toLowerCase() ?? ""
+  const isSandbox = publicKey.startsWith("pub_test_")
+
+  return (isSandbox ? "https://sandbox.wompi.co" : "https://production.wompi.co").replace(/\/$/, "")
 }
 
 function getRequiredWompiConfig() {

@@ -215,7 +215,8 @@ export async function POST(request: Request) {
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      (error as { code?: string }).code === "23505"
+      ((error as { code?: string }).code === "23505" ||
+        (error as { code?: string }).code === "23P01")
     ) {
       return NextResponse.json(
         { error: "El horario seleccionado ya no está disponible" },

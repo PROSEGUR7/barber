@@ -335,7 +335,7 @@ export async function reserveAppointments(options: {
          FROM tenant_base.agendamientos a
         WHERE a.cliente_id = $1
           AND DATE(a.fecha_cita) = DATE($2::timestamptz)
-          AND a.estado::text <> 'cancelada'`,
+          AND a.estado::text IN ('pendiente', 'confirmada')`,
       [clientId, startLocalTs],
     )
 
@@ -690,7 +690,7 @@ export async function rescheduleAppointment(options: {
         WHERE a.cliente_id = $1
           AND a.id <> $2
           AND DATE(a.fecha_cita) = DATE($3::timestamptz)
-          AND a.estado::text <> 'cancelada'`,
+          AND a.estado::text IN ('pendiente', 'confirmada')`,
       [clientId, appointmentId, newStartLocalTs],
     )
 
