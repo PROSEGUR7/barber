@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { reserveAppointments } from "@/lib/bookings"
+import { cancelAppointment, reserveAppointments } from "@/lib/bookings"
 import { createWompiCheckoutDataForReservation } from "@/lib/wompi"
 
 const reservationSchema = z
@@ -53,11 +53,33 @@ export async function POST(request: Request) {
     if (resolvedPaymentMethod === "wompi") {
       const firstAppointmentId = appointment.appointmentIds[0]
 
-      const wompiCheckout = await createWompiCheckoutDataForReservation({
-        userId,
-        appointmentId: firstAppointmentId,
-        serviceIds: resolvedServiceIds,
-      })
+      let wompiCheckout: Awaited<ReturnType<typeof createWompiCheckoutDataForReservation>>
+      try {
+        wompiCheckout = await createWompiCheckoutDataForReservation({
+          userId,
+          appointmentId: firstAppointmentId,
+          serviceIds: resolvedServiceIds,
+        })
+      } catch (wompiError) {
+        await Promise.all(
+          appointment.appointmentIds.map(async (appointmentId) => {
+            if (!Number.isFinite(appointmentId) || appointmentId <= 0) {
+              return
+            }
+
+            try {
+              await cancelAppointment({ appointmentId, userId })
+            } catch (cancelError) {
+              console.error("Error canceling appointment after Wompi checkout failure", {
+                appointmentId,
+                cancelError,
+              })
+            }
+          }),
+        )
+
+        throw wompiError
+      }
 
       return NextResponse.json(
         {
