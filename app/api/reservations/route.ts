@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { reserveAppointments } from "@/lib/bookings"
+import { createWompiCheckoutDataForReservation } from "@/lib/wompi"
 
 const reservationSchema = z
   .object({
@@ -9,6 +10,7 @@ const reservationSchema = z
   serviceId: z.coerce.number().int().positive().optional(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(2).optional(),
   barberId: z.coerce.number().int().positive(),
+  paymentMethod: z.enum(["cash", "wompi"]).optional(),
   start: z
     .string()
     .refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -31,13 +33,15 @@ const reservationSchema = z
 export async function POST(request: Request) {
   try {
     const json = await request.json()
-    const { userId, serviceId, serviceIds, barberId, start } = reservationSchema.parse(json)
+    const { userId, serviceId, serviceIds, barberId, paymentMethod, start } = reservationSchema.parse(json)
 
     const resolvedServiceIds = Array.isArray(serviceIds)
       ? serviceIds
       : typeof serviceId === "number"
         ? [serviceId]
         : []
+
+    const resolvedPaymentMethod = paymentMethod ?? "cash"
 
     const appointment = await reserveAppointments({
       userId,
@@ -46,9 +50,36 @@ export async function POST(request: Request) {
       start,
     })
 
+    if (resolvedPaymentMethod === "wompi") {
+      const firstAppointmentId = appointment.appointmentIds[0]
+
+      const wompiCheckout = await createWompiCheckoutDataForReservation({
+        userId,
+        appointmentId: firstAppointmentId,
+        serviceIds: resolvedServiceIds,
+      })
+
+      return NextResponse.json(
+        {
+          appointment,
+          payment: {
+            method: "wompi",
+            status: "pending",
+            wompiCheckout,
+          },
+          message: "Reserva creada. Completa el pago para confirmar tu cita.",
+        },
+        { status: 201 },
+      )
+    }
+
     return NextResponse.json(
       {
         appointment,
+        payment: {
+          method: "cash",
+          status: "pending_cash",
+        },
         message: "Cita reservada correctamente",
       },
       { status: 201 },
@@ -94,6 +125,27 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "Solo puedes seleccionar hasta 2 servicios por reserva." },
         { status: 400 },
+      )
+    }
+
+    if (code === "WOMPI_NOT_CONFIGURED") {
+      return NextResponse.json(
+        { error: "Wompi no está configurado todavía. Intenta con pago en efectivo o configura las llaves de Wompi." },
+        { status: 503 },
+      )
+    }
+
+    if (code === "WOMPI_MERCHANT_UNAVAILABLE" || code === "WOMPI_ACCEPTANCE_TOKEN_MISSING") {
+      return NextResponse.json(
+        { error: "No pudimos inicializar el checkout de Wompi. Intenta nuevamente en unos segundos." },
+        { status: 502 },
+      )
+    }
+
+    if (code === "SERVICE_PRICE_INVALID" || code === "AMOUNT_INVALID") {
+      return NextResponse.json(
+        { error: "No pudimos calcular el valor total de la reserva para pago en línea." },
+        { status: 409 },
       )
     }
 

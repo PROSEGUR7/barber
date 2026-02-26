@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { addMinutes, format, isSameDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import { CalendarX, Clock, DollarSign, Scissors, Users } from "lucide-react"
@@ -43,6 +43,19 @@ type AvailabilitySlot = {
   end: string
 }
 
+type PaymentMethod = "cash" | "wompi"
+
+type WompiCheckoutData = {
+  publicKey: string
+  currency: "COP"
+  amountInCents: number
+  reference: string
+  signatureIntegrity: string
+  redirectUrl: string
+  customerEmail: string
+  acceptanceToken: string
+}
+
 export default function BookingPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -70,6 +83,10 @@ export default function BookingPage() {
   const [isBooking, setIsBooking] = useState(false)
   const [slotsRefreshKey, setSlotsRefreshKey] = useState(0)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
+  const [wompiCheckout, setWompiCheckout] = useState<WompiCheckoutData | null>(null)
+  const [isWompiDialogOpen, setIsWompiDialogOpen] = useState(false)
+  const wompiButtonContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -259,6 +276,79 @@ export default function BookingPage() {
   }, [searchParams, barbers, services, selectedServices.length])
 
   useEffect(() => {
+    if (!searchParams) {
+      return
+    }
+
+    const provider = searchParams.get("paymentProvider")
+    const transactionId = searchParams.get("id")
+
+    if (provider !== "wompi" || !transactionId) {
+      return
+    }
+
+    let isActive = true
+
+    const loadStatus = async () => {
+      try {
+        const response = await fetch(`/api/payments/wompi/transaction/${encodeURIComponent(transactionId)}`, {
+          method: "GET",
+          cache: "no-store",
+        })
+
+        const data = await response.json().catch(() => ({}))
+        if (!isActive) {
+          return
+        }
+
+        if (!response.ok) {
+          toast({
+            title: "No pudimos validar tu pago",
+            description: "Revisa el estado en Wompi o inténtalo nuevamente.",
+            variant: "destructive",
+          })
+          return
+        }
+
+        const status = String(data.status ?? "").toUpperCase()
+
+        if (status === "APPROVED") {
+          toast({
+            title: "Pago aprobado",
+            description: "Tu pago fue confirmado con Wompi.",
+          })
+          return
+        }
+
+        if (status === "DECLINED" || status === "ERROR" || status === "VOIDED") {
+          toast({
+            title: "Pago no aprobado",
+            description: "Tu reserva quedó creada, pero el pago no fue aprobado. Puedes intentarlo de nuevo.",
+            variant: "destructive",
+          })
+          return
+        }
+
+        toast({
+          title: "Pago en proceso",
+          description: "Wompi reporta la transacción en estado pendiente."
+        })
+      } catch (error) {
+        if (!isActive) {
+          return
+        }
+        console.error("Error validating Wompi payment", error)
+      }
+    }
+
+    void loadStatus()
+
+    return () => {
+      isActive = false
+    }
+  }, [searchParams, toast])
+
+  useEffect(() => {
     setSelectedSlot(null)
     setSlots([])
     setSlotsError(null)
@@ -444,6 +534,34 @@ export default function BookingPage() {
     return barber?.name ?? null
   }, [barbers, selectedBarber])
 
+  useEffect(() => {
+    if (!isWompiDialogOpen || !wompiCheckout || !wompiButtonContainerRef.current) {
+      return
+    }
+
+    const container = wompiButtonContainerRef.current
+    container.innerHTML = ""
+
+    const script = document.createElement("script")
+    script.src = "https://checkout.wompi.co/widget.js"
+    script.async = true
+    script.setAttribute("data-render", "button")
+    script.setAttribute("data-public-key", wompiCheckout.publicKey)
+    script.setAttribute("data-currency", wompiCheckout.currency)
+    script.setAttribute("data-amount-in-cents", String(wompiCheckout.amountInCents))
+    script.setAttribute("data-reference", wompiCheckout.reference)
+    script.setAttribute("data-signature:integrity", wompiCheckout.signatureIntegrity)
+    script.setAttribute("data-redirect-url", wompiCheckout.redirectUrl)
+    script.setAttribute("data-customer-data:email", wompiCheckout.customerEmail)
+    script.setAttribute("data-acceptance-token", wompiCheckout.acceptanceToken)
+
+    container.appendChild(script)
+
+    return () => {
+      container.innerHTML = ""
+    }
+  }, [isWompiDialogOpen, wompiCheckout])
+
   const handleBooking = async (): Promise<boolean> => {
     if (selectedServices.length === 0 || !selectedBarber || !selectedSlot) {
       return false
@@ -470,6 +588,7 @@ export default function BookingPage() {
           userId,
           barberId: selectedBarber,
           serviceIds: selectedServices,
+          paymentMethod,
           start: selectedSlot.start,
         }),
       })
@@ -498,11 +617,43 @@ export default function BookingPage() {
           ? addMinutes(startInstant, selectedServicesMeta.totalDuration)
           : null
 
+      const wompiData =
+        typeof data === "object" &&
+        data !== null &&
+        "payment" in data &&
+        typeof (data as { payment?: unknown }).payment === "object" &&
+        (data as { payment?: { wompiCheckout?: WompiCheckoutData } }).payment?.wompiCheckout
+          ? ((data as { payment?: { wompiCheckout?: WompiCheckoutData } }).payment?.wompiCheckout ?? null)
+          : null
+
+      if (paymentMethod === "wompi") {
+        if (!wompiData) {
+          toast({
+            title: "No se pudo abrir Wompi",
+            description: "La reserva se creó pero no pudimos cargar el checkout. Intenta nuevamente desde tus citas.",
+            variant: "destructive",
+          })
+          return false
+        }
+
+        toast({
+          title: "Reserva creada",
+          description: "Ahora completa el pago en Wompi para confirmar tu cita.",
+        })
+
+        setWompiCheckout(wompiData)
+        setIsWompiDialogOpen(true)
+        setIsConfirmOpen(false)
+        setSelectedSlot(null)
+        setSlotsRefreshKey((value) => value + 1)
+        return true
+      }
+
       toast({
         title: "Cita reservada con éxito",
         description: endInstant
-          ? `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${format(startInstant, "HH:mm")} a ${format(endInstant, "HH:mm")}.`
-          : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${format(startInstant, "HH:mm")}.`,
+          ? `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${format(startInstant, "HH:mm")} a ${format(endInstant, "HH:mm")}. Pago: efectivo.`
+          : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${format(startInstant, "HH:mm")}. Pago: efectivo.`,
       })
 
       setIsConfirmOpen(false)
@@ -870,6 +1021,35 @@ export default function BookingPage() {
                             <span className="text-muted-foreground">Hora:</span>{" "}
                             <span className="font-medium">{formattedSummaryTime ?? "-"}</span>
                           </div>
+                          <div className="pt-2">
+                            <span className="text-muted-foreground">Método de pago:</span>
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                onClick={() => setPaymentMethod("cash")}
+                                className={cn(
+                                  "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                                  paymentMethod === "cash"
+                                    ? "border-foreground bg-foreground text-background"
+                                    : "border-border bg-background",
+                                )}
+                              >
+                                Efectivo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPaymentMethod("wompi")}
+                                className={cn(
+                                  "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                                  paymentMethod === "wompi"
+                                    ? "border-foreground bg-foreground text-background"
+                                    : "border-border bg-background",
+                                )}
+                              >
+                                Wompi (tarjeta, PSE, Nequi y más)
+                              </button>
+                            </div>
+                          </div>
                         </div>
 
                         <AlertDialogFooter>
@@ -883,6 +1063,34 @@ export default function BookingPage() {
                           >
                             Confirmar
                           </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+
+                    <AlertDialog open={isWompiDialogOpen} onOpenChange={setIsWompiDialogOpen}>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Pagar con Wompi</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Completa el pago para confirmar tu reserva. Wompi te mostrará los medios disponibles como tarjeta, PSE y billeteras.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+
+                        <div className="space-y-3 text-sm">
+                          <p>
+                            Total a pagar:{" "}
+                            <span className="font-semibold">
+                              {wompiCheckout
+                                ? currencyFormatter.format(wompiCheckout.amountInCents / 100)
+                                : "-"}
+                            </span>
+                          </p>
+
+                          <div ref={wompiButtonContainerRef} className="min-h-10" />
+                        </div>
+
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cerrar</AlertDialogCancel>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>

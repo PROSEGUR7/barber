@@ -10,12 +10,12 @@ const withPWA = withPWAInit({
   fallbacks: {
     document: "/offline",
   },
-  buildExcludes: [/middleware-manifest\.json$/],
 })
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  distDir: ".next",
+  // Keep dev and production artifacts isolated to avoid cache/chunk collisions on Windows.
+  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   eslint: {
     ignoreDuringBuilds: true,
   },
