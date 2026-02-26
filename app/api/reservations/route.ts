@@ -209,8 +209,6 @@ export async function POST(request: Request) {
       )
     }
 
-    console.error("Error creating reservation", error)
-
     if (
       typeof error === "object" &&
       error !== null &&
@@ -223,6 +221,8 @@ export async function POST(request: Request) {
         { status: 409 },
       )
     }
+
+    console.error("Error creating reservation", error)
 
     return NextResponse.json(
       { error: "No se pudo crear la reserva" },
