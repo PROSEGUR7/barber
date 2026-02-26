@@ -27,6 +27,9 @@ export function LoginForm({
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false)
+  const [isPasskeySupported, setIsPasskeySupported] = useState(true)
+  const [hasPlatformAuthenticator, setHasPlatformAuthenticator] = useState<boolean | null>(null)
+  const [shouldSuggestPasskeySetup, setShouldSuggestPasskeySetup] = useState(false)
 
   const getWebAuthnHints = () => {
     if (typeof window === "undefined") {
@@ -55,6 +58,28 @@ export function LoginForm({
     } catch (err) {
       console.warn("No fue posible restaurar datos de sesión", err)
     }
+
+    const checkPasskeySupport = async () => {
+      const hasWebAuthnApi = typeof window !== "undefined" && typeof window.PublicKeyCredential !== "undefined"
+      setIsPasskeySupported(hasWebAuthnApi)
+
+      if (!hasWebAuthnApi) {
+        setHasPlatformAuthenticator(false)
+        return
+      }
+
+      try {
+        const supportsPlatformAuthenticator =
+          typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function"
+            ? await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+            : null
+        setHasPlatformAuthenticator(supportsPlatformAuthenticator)
+      } catch {
+        setHasPlatformAuthenticator(null)
+      }
+    }
+
+    void checkPasskeySupport()
   }, [])
 
   const handleLogin = async (event: React.FormEvent) => {
@@ -177,9 +202,13 @@ export function LoginForm({
             ? "/barber"
             : "/booking"
 
-      if (userId && !user.hasPasskeys) {
+      const shouldOfferSetup = Boolean(userId) && (!user.hasPasskeys || shouldSuggestPasskeySetup)
+
+      if (userId && shouldOfferSetup) {
         const wantsPasskey = window.confirm(
-          "Tu cuenta aún no tiene una llave de acceso. ¿Deseas configurarla ahora?",
+          user.hasPasskeys
+            ? "No encontramos una llave válida en este dispositivo o dominio. ¿Deseas registrar una llave de acceso aquí ahora?"
+            : "Tu cuenta aún no tiene una llave de acceso. ¿Deseas configurarla ahora?",
         )
 
         if (wantsPasskey) {
@@ -188,6 +217,8 @@ export function LoginForm({
             setError(
               "No fue posible registrar la llave de acceso. Intenta de nuevo desde la configuración de tu cuenta.",
             )
+          } else {
+            setShouldSuggestPasskeySetup(false)
           }
         }
       }
@@ -203,6 +234,11 @@ export function LoginForm({
 
   const handlePasskeyLogin = async () => {
     const sanitizedEmail = email.trim()
+
+    if (!isPasskeySupported) {
+      setError("Este navegador no soporta llaves de acceso. Inicia con contraseña.")
+      return
+    }
 
     if (!sanitizedEmail) {
       setError("Ingresa tu correo antes de usar tu llave de acceso.")
@@ -298,8 +334,9 @@ export function LoginForm({
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "NotAllowedError") {
+        setShouldSuggestPasskeySetup(true)
         setError(
-          "La autenticación fue cancelada o no hay una llave válida para este dominio. Inicia con contraseña y registra la llave nuevamente en producción.",
+          "No hay una llave de acceso disponible para este dominio en este dispositivo. Inicia con contraseña y registra una llave aquí.",
         )
       } else if (err instanceof Error) {
         console.error("Passkey login error", err)
@@ -426,11 +463,21 @@ export function LoginForm({
                   type="button"
                   variant="outline"
                   className="w-full"
-                  disabled={isSubmitting || isPasskeyLoading}
+                  disabled={isSubmitting || isPasskeyLoading || !isPasskeySupported}
                   onClick={handlePasskeyLogin}
                 >
                   {isPasskeyLoading ? "Verificando llave..." : "Iniciar con llave de acceso"}
                 </Button>
+                {!isPasskeySupported && (
+                  <FieldDescription className="mt-2">
+                    Este navegador no soporta llaves de acceso. Usa contraseña para ingresar.
+                  </FieldDescription>
+                )}
+                {isPasskeySupported && hasPlatformAuthenticator === false && (
+                  <FieldDescription className="mt-2">
+                    No detectamos Windows Hello o biometría en este equipo. Puedes iniciar con contraseña y registrar una llave en este dispositivo.
+                  </FieldDescription>
+                )}
               </Field>
               {error && (
                 <p className="text-sm text-destructive" role="alert">
