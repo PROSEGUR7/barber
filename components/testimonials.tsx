@@ -6,25 +6,25 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 const testimonials = [
   {
     name: "Carlos Mendoza",
-    role: "Cliente Regular",
+    role: "Dueño de barbería",
     image: "/professional-man-portrait.png",
     content:
-      "El mejor lugar para un corte de cabello en la ciudad. Los barberos son verdaderos artistas y el ambiente es increíble.",
+      "Con el plan Básico organizamos reservas y clientes en una semana. La operación es mucho más clara.",
     rating: 5,
   },
   {
     name: "Miguel Ángel Torres",
-    role: "Empresario",
+    role: "Director de cadena de salones",
     image: "/confident-businessman.png",
     content:
-      "Llevo años viniendo aquí y nunca me han decepcionado. Siempre salgo luciendo impecable para mis reuniones.",
+      "El plan Pro con n8n e IA nos ayudó a automatizar recordatorios y seguimiento comercial sin fricción.",
     rating: 5,
   },
   {
     name: "Roberto Sánchez",
-    role: "Diseñador",
+    role: "Gerente de operaciones",
     image: "/creative-man-portrait.png",
-    content: "Atención personalizada y resultados excepcionales. El equipo realmente entiende lo que necesito.",
+    content: "Con Enterprise conectamos procesos internos y métricas. Ahora tomamos decisiones con datos en tiempo real.",
     rating: 5,
   },
 ]
@@ -37,9 +37,9 @@ export function Testimonials() {
           <Badge variant="secondary" className="text-sm">
             Testimonios
           </Badge>
-          <h2 className="text-4xl lg:text-5xl font-bold tracking-tight text-balance">Lo que dicen nuestros clientes</h2>
+          <h2 className="text-4xl lg:text-5xl font-bold tracking-tight text-balance">Lo que dicen negocios como el tuyo</h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto text-pretty">
-            La satisfacción de nuestros clientes es nuestra mejor carta de presentación
+            Equipos reales que ya operan su salón con nuestra plataforma SaaS
           </p>
         </div>
 

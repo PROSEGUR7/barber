@@ -15,7 +15,7 @@ export function Footer() {
               <span className="text-xl font-bold">Hair Salon</span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Tecnología y estilo para tu salón. Reservas, servicios y experiencia del cliente en un solo lugar.
+              Plataforma SaaS para digitalizar y escalar salones y barberías con automatización e IA.
             </p>
             <div className="flex gap-2">
               <Button variant="ghost" size="icon" asChild>
@@ -45,8 +45,8 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="#servicios" className="text-muted-foreground hover:text-foreground transition-colors">
-                  Servicios
+                <Link href="#planes" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Planes
                 </Link>
               </li>
               <li>
@@ -63,26 +63,26 @@ export function Footer() {
           </div>
 
           <div>
-            <h3 className="font-semibold mb-4">Servicios</h3>
+            <h3 className="font-semibold mb-4">Planes</h3>
             <ul className="space-y-2 text-sm">
               <li>
-                <Link href="/booking" className="text-muted-foreground hover:text-foreground transition-colors">
-                  Corte de Cabello
+                <Link href="#planes" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Plan Básico
                 </Link>
               </li>
               <li>
-                <Link href="/booking" className="text-muted-foreground hover:text-foreground transition-colors">
-                  Afeitado Clásico
+                <Link href="#planes" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Plan Pro
                 </Link>
               </li>
               <li>
-                <Link href="/booking" className="text-muted-foreground hover:text-foreground transition-colors">
-                  Coloración
+                <Link href="#planes" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Plan Enterprise
                 </Link>
               </li>
               <li>
-                <Link href="/booking" className="text-muted-foreground hover:text-foreground transition-colors">
-                  Paquete Premium
+                <Link href="/register" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Crear cuenta
                 </Link>
               </li>
             </ul>

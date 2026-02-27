@@ -17,30 +17,30 @@ export function Hero() {
       <div className="relative z-20 container min-h-[calc(100vh-4rem)] py-20 lg:py-28 flex items-center justify-center pointer-events-none">
         <div className="mx-auto max-w-4xl text-center space-y-7">
           <p className="text-sm font-medium tracking-wide text-white/70">
-            Soluciones de IA para tu Hair Salon
+            Plataforma SaaS para salones y barberías
           </p>
 
           <h1 className="font-bold tracking-tight text-balance">
             <span className="block text-5xl sm:text-6xl lg:text-7xl">SOLUCIONES</span>
             <span className="block text-5xl sm:text-6xl lg:text-7xl text-primary">IA</span>
             <span className="block mt-3 text-2xl sm:text-3xl lg:text-4xl text-white/90">
-              en tu Hair Salon
+              para crecer tu negocio
             </span>
           </h1>
 
           <p className="text-base sm:text-lg text-white/70 text-pretty leading-relaxed">
-            Automatiza reservas, recordatorios y atención al cliente sin perder el toque humano.
+            Gestiona reservas, clientes, pagos y operaciones desde un solo lugar con planes escalables.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2 pointer-events-auto">
             <Button asChild size="lg" className="text-base">
-              <Link href="/booking">
+              <Link href="/register">
                 <Calendar className="mr-2 h-5 w-5" />
-                Agendar Cita
+                Comenzar ahora
               </Link>
             </Button>
             <Button asChild variant="outline" size="lg" className="text-base bg-transparent border-white/20 text-white hover:bg-white/10">
-              <Link href="#servicios">Ver Servicios</Link>
+              <Link href="#planes">Ver Planes</Link>
             </Button>
           </div>
         </div>

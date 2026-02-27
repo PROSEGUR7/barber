@@ -2,12 +2,12 @@ import { Badge } from "@/components/ui/badge"
 import { CheckCircle2 } from "lucide-react"
 
 const features = [
-  "Barberos certificados con más de 10 años de experiencia",
-  "Productos premium de marcas reconocidas internacionalmente",
-  "Ambiente relajado y profesional",
-  "Atención personalizada para cada cliente",
-  "Técnicas tradicionales y modernas",
-  "Higiene y esterilización de primer nivel",
+  "Reservas y agenda centralizada para todo tu equipo",
+  "Gestión de clientes, pagos y reportes en tiempo real",
+  "Automatizaciones con n8n para tareas operativas",
+  "Flujos de IA para atención y seguimiento",
+  "Escalabilidad por plan según etapa del negocio",
+  "Implementación rápida y soporte continuo",
 ]
 
 export function About() {
@@ -30,20 +30,19 @@ export function About() {
             </div>
             <div className="absolute -bottom-6 -right-6 bg-secondary text-secondary-foreground rounded-2xl p-6 shadow-xl max-w-[200px]">
               <p className="text-4xl font-bold">15+</p>
-              <p className="text-sm">Años de excelencia en barbería</p>
+              <p className="text-sm">Años construyendo soluciones digitales</p>
             </div>
           </div>
 
           <div className="space-y-6 order-1 lg:order-2">
             <Badge variant="secondary" className="text-sm">
-              Sobre Nosotros
+              Sobre la Plataforma
             </Badge>
             <h2 className="text-4xl lg:text-5xl font-bold tracking-tight text-balance">
-              Tradición y modernidad en cada servicio
+              Operación inteligente para salones modernos
             </h2>
             <p className="text-lg text-muted-foreground leading-relaxed text-pretty">
-              En Hair Salon, combinamos técnicas clásicas con tendencias modernas para ofrecerte una experiencia única.
-              Nuestro equipo está comprometido con la excelencia y tu satisfacción.
+              Hair Salon SaaS centraliza toda la operación de tu negocio en una sola plataforma y te ayuda a crecer con automatización e IA.
             </p>
 
             <div className="space-y-3 pt-4">

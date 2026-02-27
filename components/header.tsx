@@ -11,7 +11,7 @@ export function Header() {
 
   const navigation = [
     { name: "Inicio", href: "/" },
-    { name: "Servicios", href: "#servicios" },
+    { name: "Planes", href: "#planes" },
     { name: "Nosotros", href: "#nosotros" },
     { name: "Testimonios", href: "#testimonios" },
   ]
@@ -49,7 +49,7 @@ export function Header() {
             </Link>
           </Button>
           <Button asChild size="sm" className="hidden md:flex">
-            <Link href="/booking">Agendar Cita</Link>
+            <Link href="/register">Comenzar</Link>
           </Button>
 
           {/* Mobile Menu */}
@@ -79,7 +79,7 @@ export function Header() {
                     </Link>
                   </Button>
                   <Button asChild className="w-full">
-                    <Link href="/booking">Agendar Cita</Link>
+                    <Link href="/register">Comenzar</Link>
                   </Button>
                 </div>
               </div>
