@@ -30,6 +30,10 @@ const reservationSchema = z
     }
   })
 
+export async function GET() {
+  return NextResponse.json({ message: "Usa POST para crear reservas" })
+}
+
 export async function POST(request: Request) {
   try {
     const json = await request.json()
@@ -151,8 +155,24 @@ export async function POST(request: Request) {
     }
 
     if (code === "WOMPI_NOT_CONFIGURED") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as { meta?: { environment?: string; missing?: string[] } }).meta ?? null)
+          : null
+
+      const missing = Array.isArray(meta?.missing) && meta?.missing.length > 0 ? meta.missing.join(", ") : null
+      const envLabel = meta?.environment === "production" ? "producción" : "sandbox"
+
       return NextResponse.json(
-        { error: "Wompi no está configurado todavía. Intenta con pago en efectivo o configura las llaves de Wompi." },
+        {
+          error: missing
+            ? `Wompi no está configurado para ${envLabel}. Faltan: ${missing}.`
+            : "Wompi no está configurado todavía. Intenta con pago en efectivo o configura las llaves de Wompi.",
+        },
         { status: 503 },
       )
     }

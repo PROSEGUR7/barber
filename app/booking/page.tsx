@@ -602,8 +602,13 @@ export default function BookingPage() {
             : "Intenta con otro horario o vuelve a intentarlo más tarde."
 
         if (response.status === 409) {
-          setSelectedSlot(null)
-          setSlotsRefreshKey((value) => value + 1)
+          const shouldRefreshSlot =
+            /horario|disponible|ya pas[oó]|seleccionado/i.test(errorMessage)
+
+          if (shouldRefreshSlot) {
+            setSelectedSlot(null)
+            setSlotsRefreshKey((value) => value + 1)
+          }
         }
 
         toast({
@@ -1059,14 +1064,18 @@ export default function BookingPage() {
 
                         <AlertDialogFooter>
                           <AlertDialogCancel disabled={isBooking}>Cancelar</AlertDialogCancel>
-                          <AlertDialogAction
-                            disabled={isContinueDisabled}
-                            onClick={async (event) => {
-                              event.preventDefault()
-                              await handleBooking()
-                            }}
-                          >
-                            Confirmar
+                          <AlertDialogAction asChild>
+                            <Button
+                              type="button"
+                              disabled={isContinueDisabled}
+                              onClick={async (event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                await handleBooking()
+                              }}
+                            >
+                              Confirmar
+                            </Button>
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>

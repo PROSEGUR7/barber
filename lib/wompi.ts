@@ -40,25 +40,105 @@ export type WompiCheckoutData = {
   acceptanceToken: string
 }
 
+type WompiEnvironment = "sandbox" | "production"
+
+function getWompiEnvironment(): WompiEnvironment {
+  const configuredEnvironment = process.env.WOMPI_ENV?.trim().toLowerCase()
+  if (configuredEnvironment === "production") {
+    return "production"
+  }
+
+  if (configuredEnvironment === "sandbox") {
+    return "sandbox"
+  }
+
+  const publicKey =
+    process.env.WOMPI_PUBLIC_KEY?.trim().toLowerCase() ??
+    process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY?.trim().toLowerCase() ??
+    ""
+  if (publicKey.startsWith("pub_prod_")) {
+    return "production"
+  }
+
+  if (publicKey.startsWith("pub_test_")) {
+    return "sandbox"
+  }
+
+  return "sandbox"
+}
+
+function resolveWompiPublicKey(environment: WompiEnvironment): string | undefined {
+  if (environment === "sandbox") {
+    return (
+      process.env.WOMPI_SANDBOX_PUBLIC_KEY?.trim() ??
+      process.env.WOMPI_PUBLIC_KEY?.trim() ??
+      process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY?.trim()
+    )
+  }
+
+  return (
+    process.env.WOMPI_PRODUCTION_PUBLIC_KEY?.trim() ??
+    process.env.WOMPI_PUBLIC_KEY?.trim() ??
+    process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY?.trim()
+  )
+}
+
+function resolveWompiIntegritySecret(environment: WompiEnvironment): string | undefined {
+  if (environment === "sandbox") {
+    return (
+      process.env.WOMPI_SANDBOX_INTEGRITY_SECRET?.trim() ??
+      process.env.WOMPI_INTEGRITY_SECRET?.trim() ??
+      process.env.NEXT_PUBLIC_WOMPI_INTEGRITY_SECRET?.trim()
+    )
+  }
+
+  return (
+    process.env.WOMPI_PRODUCTION_INTEGRITY_SECRET?.trim() ??
+    process.env.WOMPI_INTEGRITY_SECRET?.trim() ??
+    process.env.NEXT_PUBLIC_WOMPI_INTEGRITY_SECRET?.trim()
+  )
+}
+
 export function getWompiBaseUrl() {
   const configuredBaseUrl = process.env.WOMPI_API_BASE_URL?.trim()
   if (configuredBaseUrl) {
     return configuredBaseUrl.replace(/\/$/, "")
   }
 
-  const publicKey = process.env.WOMPI_PUBLIC_KEY?.trim().toLowerCase() ?? ""
-  const isSandbox = publicKey.startsWith("pub_test_")
-
-  return (isSandbox ? "https://sandbox.wompi.co" : "https://production.wompi.co").replace(/\/$/, "")
+  const environment = getWompiEnvironment()
+  return (environment === "sandbox" ? "https://sandbox.wompi.co" : "https://production.wompi.co").replace(/\/$/, "")
 }
 
 function getRequiredWompiConfig() {
-  const publicKey = process.env.WOMPI_PUBLIC_KEY?.trim()
-  const integritySecret = process.env.WOMPI_INTEGRITY_SECRET?.trim()
+  const environment = getWompiEnvironment()
+  const publicKey = resolveWompiPublicKey(environment)
+  const integritySecret = resolveWompiIntegritySecret(environment)
 
   if (!publicKey || !integritySecret) {
+    const missing: string[] = []
+
+    if (!publicKey) {
+      missing.push(
+        environment === "sandbox"
+          ? "WOMPI_SANDBOX_PUBLIC_KEY (o WOMPI_PUBLIC_KEY)"
+          : "WOMPI_PRODUCTION_PUBLIC_KEY (o WOMPI_PUBLIC_KEY)",
+      )
+    }
+
+    if (!integritySecret) {
+      missing.push(
+        environment === "sandbox"
+          ? "WOMPI_SANDBOX_INTEGRITY_SECRET (o WOMPI_INTEGRITY_SECRET)"
+          : "WOMPI_PRODUCTION_INTEGRITY_SECRET (o WOMPI_INTEGRITY_SECRET)",
+      )
+    }
+
     const error = new Error("WOMPI_NOT_CONFIGURED")
     ;(error as { code?: string }).code = "WOMPI_NOT_CONFIGURED"
+    ;(error as { meta?: unknown }).meta = {
+      environment,
+      missing,
+    }
     throw error
   }
 
