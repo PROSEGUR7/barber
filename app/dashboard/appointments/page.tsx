@@ -105,6 +105,29 @@ const statusClassNameMap: Record<string, string> = {
 
 const MANAGEABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada"]
 
+function getPaymentStatusLabel(status: string | null | undefined, isPaid: boolean): string {
+  if (isPaid) return "Pagado"
+
+  const normalized = (status ?? "").trim().toLowerCase()
+  if (normalized.length === 0) return "Pendiente"
+  if (normalized === "fallido" || normalized === "declined" || normalized === "error" || normalized === "voided") {
+    return "Fallido"
+  }
+
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (chunk) => chunk.toUpperCase())
+}
+
+function getPaymentStatusClass(status: string | null | undefined, isPaid: boolean): string {
+  if (isPaid) return "bg-emerald-100 text-emerald-900 border-transparent"
+
+  const normalized = (status ?? "").trim().toLowerCase()
+  if (normalized === "fallido" || normalized === "declined" || normalized === "error" || normalized === "voided") {
+    return "bg-rose-100 text-rose-900 border-transparent"
+  }
+
+  return "bg-amber-100 text-amber-900 border-transparent"
+}
+
 export default function AppointmentsPage() {
   const { toast } = useToast()
 
@@ -528,6 +551,8 @@ export default function AppointmentsPage() {
             appointment.service.price != null
               ? currencyFormatter.format(Number(appointment.service.price))
               : "A convenir"
+          const paymentStatusLabel = getPaymentStatusLabel(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
+          const paymentStatusClass = getPaymentStatusClass(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
 
           const canManage = MANAGEABLE_STATUSES.includes(
             appointment.status as AppointmentStatus,
@@ -552,6 +577,9 @@ export default function AppointmentsPage() {
                   </Badge>
                   <Badge variant="outline" className="flex items-center gap-1">
                     <DollarSign className="size-4" /> {priceLabel}
+                  </Badge>
+                  <Badge className={cn("flex items-center gap-1", paymentStatusClass)}>
+                    Pago: {paymentStatusLabel}
                   </Badge>
                 </div>
               </CardHeader>

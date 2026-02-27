@@ -46,6 +46,7 @@ export type ServiceSummary = {
 export type AdminAppointmentSummary = {
   id: number
   status: string | null
+  paymentStatus: string | null
   startAt: string
   endAt: string | null
   createdAt: string | null
@@ -188,6 +189,7 @@ type ServiceSummaryRow = {
 type AdminAppointmentRow = {
   id: number
   estado: string | null
+  estado_pago: string | null
   fecha_cita: Date
   fecha_cita_fin: Date | null
   empleado_id: number | null
@@ -337,6 +339,7 @@ function mapAdminAppointmentRow(row: AdminAppointmentRow): AdminAppointmentSumma
   return {
     id: row.id,
     status: row.estado,
+    paymentStatus: row.estado_pago,
     startAt: row.fecha_cita.toISOString(),
     endAt: row.fecha_cita_fin ? row.fecha_cita_fin.toISOString() : null,
     createdAt: null,
@@ -923,6 +926,7 @@ export async function getAdminAppointments(options?: {
     SELECT
       a.id,
       a.estado::text AS estado,
+      lp.estado_pago,
       a.fecha_cita,
       a.fecha_cita_fin,
       e.id AS empleado_id,
@@ -938,11 +942,19 @@ export async function getAdminAppointments(options?: {
     LEFT JOIN tenant_base.empleados e ON e.id = a.empleado_id
     LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
     LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+    LEFT JOIN LATERAL (
+      SELECT pg.estado::text AS estado_pago
+      FROM tenant_base.pagos pg
+      WHERE pg.agendamiento_id = a.id
+      ORDER BY pg.id DESC
+      LIMIT 1
+    ) lp ON TRUE
     LEFT JOIN tenant_base.pagos p ON p.agendamiento_id = a.id
     ${whereClause}
     GROUP BY
       a.id,
       a.estado,
+      lp.estado_pago,
       a.fecha_cita,
       a.fecha_cita_fin,
       e.id,

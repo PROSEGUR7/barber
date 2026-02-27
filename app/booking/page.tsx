@@ -54,6 +54,7 @@ type WompiCheckoutData = {
   redirectUrl: string
   customerEmail: string
   acceptanceToken: string
+  personalDataAuthToken: string | null
 }
 
 declare global {
@@ -67,10 +68,11 @@ declare global {
         integrity: string
       }
       redirectUrl?: string
+      acceptanceToken?: string
+      personalDataAuthToken?: string
       customerData?: {
         email?: string
       }
-      acceptanceToken?: string
     }) => {
       open: (callback?: (result: unknown) => void) => void
     }
@@ -633,7 +635,59 @@ export default function BookingPage() {
       return
     }
 
+    setIsWompiDialogOpen(false)
+
+    const normalizedRedirectUrl = wompiCheckout.redirectUrl?.trim() ?? ""
+    const canUseRedirectUrl =
+      normalizedRedirectUrl.length > 0 && !/localhost|127\.0\.0\.1/i.test(normalizedRedirectUrl)
+    const isLocalhost = /localhost|127\.0\.0\.1/i.test(window.location.hostname)
+
+    const openWebCheckoutFallback = () => {
+      const form = document.createElement("form")
+      form.action = "https://checkout.wompi.co/p/"
+      form.method = "GET"
+      form.target = "_blank"
+
+      const fields: Array<{ name: string; value: string }> = [
+        { name: "public-key", value: wompiCheckout.publicKey },
+        { name: "currency", value: wompiCheckout.currency },
+        { name: "amount-in-cents", value: String(wompiCheckout.amountInCents) },
+        { name: "reference", value: wompiCheckout.reference },
+        { name: "signature:integrity", value: wompiCheckout.signatureIntegrity },
+        { name: "acceptance-token", value: wompiCheckout.acceptanceToken },
+      ]
+
+      if (wompiCheckout.personalDataAuthToken?.trim()) {
+        fields.push({ name: "personal-data-auth-token", value: wompiCheckout.personalDataAuthToken })
+      }
+
+      if (canUseRedirectUrl) {
+        fields.push({ name: "redirect-url", value: normalizedRedirectUrl })
+      }
+
+      for (const field of fields) {
+        const input = document.createElement("input")
+        input.type = "hidden"
+        input.name = field.name
+        input.value = field.value
+        form.appendChild(input)
+      }
+
+      document.body.appendChild(form)
+      form.submit()
+      form.remove()
+    }
+
+    if (isLocalhost) {
+      openWebCheckoutFallback()
+      return
+    }
+
     try {
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve())
+      })
+
       await loadWompiSdk()
 
       if (!window.WidgetCheckout) {
@@ -648,11 +702,9 @@ export default function BookingPage() {
         signature: {
           integrity: wompiCheckout.signatureIntegrity,
         },
-        redirectUrl: wompiCheckout.redirectUrl,
-        customerData: {
-          email: wompiCheckout.customerEmail,
-        },
+        redirectUrl: canUseRedirectUrl ? normalizedRedirectUrl : undefined,
         acceptanceToken: wompiCheckout.acceptanceToken,
+        personalDataAuthToken: wompiCheckout.personalDataAuthToken ?? undefined,
       })
 
       checkout.open((result) => {
@@ -660,11 +712,7 @@ export default function BookingPage() {
       })
     } catch (error) {
       console.error("Error opening Wompi widget", error)
-      toast({
-        title: "No se pudo abrir Wompi",
-        description: "Recarga la página e inténtalo de nuevo.",
-        variant: "destructive",
-      })
+      openWebCheckoutFallback()
     }
   }
 

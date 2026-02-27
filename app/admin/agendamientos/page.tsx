@@ -48,6 +48,38 @@ function getStatusVariant(status: string | null): "default" | "secondary" | "out
   return "outline"
 }
 
+function getPaymentStatusLabel(status: string | null): string {
+  const normalized = status?.trim().toLowerCase() ?? ""
+
+  if (!normalized) {
+    return "Pendiente"
+  }
+
+  if (["completo", "pagado", "aprobado", "paid", "success", "succeeded"].includes(normalized)) {
+    return "Pagado"
+  }
+
+  if (["fallido", "declined", "error", "voided"].includes(normalized)) {
+    return "Fallido"
+  }
+
+  return getStatusLabel(status)
+}
+
+function getPaymentStatusVariant(status: string | null): "default" | "secondary" | "outline" | "destructive" {
+  const normalized = status?.trim().toLowerCase() ?? ""
+
+  if (["fallido", "declined", "error", "voided"].includes(normalized)) {
+    return "destructive"
+  }
+
+  if (["completo", "pagado", "aprobado", "paid", "success", "succeeded"].includes(normalized)) {
+    return "secondary"
+  }
+
+  return "outline"
+}
+
 function sortAppointments(list: AdminAppointmentSummary[]): AdminAppointmentSummary[] {
   return [...list].sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime())
 }
@@ -133,6 +165,7 @@ export default function AdminAgendamientosPage() {
         appointment.employee.name,
         appointment.service.name,
         appointment.status ?? "",
+        appointment.paymentStatus ?? "",
       ]
         .join(" ")
         .toLowerCase()
@@ -317,6 +350,7 @@ export default function AdminAgendamientosPage() {
                       <TableHead>Empleado</TableHead>
                       <TableHead>Servicio</TableHead>
                       <TableHead>Estado</TableHead>
+                      <TableHead>Estado pago</TableHead>
                       <TableHead className="text-right">Monto pagado</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -344,6 +378,11 @@ export default function AdminAgendamientosPage() {
                         </TableCell>
                         <TableCell>
                           <Badge variant={getStatusVariant(appointment.status)}>{getStatusLabel(appointment.status)}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={getPaymentStatusVariant(appointment.paymentStatus)}>
+                            {getPaymentStatusLabel(appointment.paymentStatus)}
+                          </Badge>
                         </TableCell>
                         <TableCell className="text-right">{formatCurrency(appointment.paidAmount)}</TableCell>
                       </TableRow>

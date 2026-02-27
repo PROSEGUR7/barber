@@ -81,11 +81,24 @@ export type AppointmentStatus =
   | "completada"
   | string
 
+const PAID_PAYMENT_STATES = ["completo", "pagado", "aprobado", "paid", "success", "succeeded"] as const
+
+function isPaidPaymentStatus(status: string | null | undefined): boolean {
+  const normalized = (status ?? "").trim().toLowerCase()
+  return PAID_PAYMENT_STATES.includes(normalized as (typeof PAID_PAYMENT_STATES)[number])
+}
+
 export type Appointment = {
   id: number
   start: string
   end: string | null
   status: AppointmentStatus
+  payment: {
+    status: string | null
+    method: string | null
+    amount: number | null
+    isPaid: boolean
+  }
   service: {
     id: number
     name: string
@@ -460,6 +473,9 @@ type AppointmentRow = {
   servicio_precio: number | null
   empleado_id: number
   empleado_nombre: string
+  pago_estado: string | null
+  pago_metodo: string | null
+  pago_monto: string | null
 }
 
 const CANCELABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
@@ -508,11 +524,24 @@ export async function getAppointmentsForUser(options: {
             s.nombre AS servicio_nombre,
             s.precio AS servicio_precio,
             e.id  AS empleado_id,
-            e.nombre AS empleado_nombre
+            e.nombre AS empleado_nombre,
+            p.pago_estado,
+            p.pago_metodo,
+            p.pago_monto
        FROM tenant_base.agendamientos a
        INNER JOIN tenant_base.clientes c ON c.id = a.cliente_id
        INNER JOIN tenant_base.servicios s ON s.id = a.servicio_id
        INNER JOIN tenant_base.empleados e ON e.id = a.empleado_id
+       LEFT JOIN LATERAL (
+         SELECT
+           pg.estado::text AS pago_estado,
+           pg.metodo_pago::text AS pago_metodo,
+           COALESCE(pg.monto_final, pg.monto)::text AS pago_monto
+         FROM tenant_base.pagos pg
+         WHERE pg.agendamiento_id = a.id
+         ORDER BY pg.id DESC
+         LIMIT 1
+       ) p ON TRUE
       WHERE c.user_id = $1
         AND a.fecha_cita ${dateComparator} (now() AT TIME ZONE $4)
         AND ($2::text[] IS NULL OR a.estado::text = ANY($2::text[]))
@@ -526,6 +555,12 @@ export async function getAppointmentsForUser(options: {
     start: row.fecha_cita.toISOString(),
     end: row.fecha_cita_fin ? row.fecha_cita_fin.toISOString() : null,
     status: row.estado,
+    payment: {
+      status: row.pago_estado,
+      method: row.pago_metodo,
+      amount: row.pago_monto != null && row.pago_monto !== "" ? Number(row.pago_monto) : null,
+      isPaid: isPaidPaymentStatus(row.pago_estado),
+    },
     service: {
       id: row.servicio_id,
       name: row.servicio_nombre,

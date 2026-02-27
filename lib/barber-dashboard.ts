@@ -29,6 +29,8 @@ type EmployeeAppointmentRow = {
   servicio_nombre: string | null
   servicio_precio: string | null
   servicio_duracion: number | null
+  pago_estado: string | null
+  pago_metodo: string | null
 }
 
 export type BarberAppointmentStatus = "pendiente" | "confirmada" | "completada" | "cancelada" | string
@@ -36,6 +38,8 @@ export type BarberAppointmentStatus = "pendiente" | "confirmada" | "completada" 
 export type BarberAppointment = {
   id: number
   status: BarberAppointmentStatus
+  paymentStatus: string | null
+  paymentMethod: string | null
   start: string
   end: string | null
   clientName: string
@@ -107,10 +111,21 @@ export async function getAppointmentsForEmployee(options: {
            c.nombre AS cliente_nombre,
            s.nombre AS servicio_nombre,
            s.precio::text AS servicio_precio,
-           s.duracion_min AS servicio_duracion
+           s.duracion_min AS servicio_duracion,
+           p.pago_estado,
+           p.pago_metodo
       FROM tenant_base.agendamientos a
       LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+      LEFT JOIN LATERAL (
+        SELECT
+          pg.estado::text AS pago_estado,
+          pg.metodo_pago::text AS pago_metodo
+        FROM tenant_base.pagos pg
+        WHERE pg.agendamiento_id = a.id
+        ORDER BY pg.id DESC
+        LIMIT 1
+      ) p ON TRUE
      WHERE ${conditions.join(" AND ")}
      ORDER BY a.fecha_cita ASC
      LIMIT $${parameters.length}
@@ -121,6 +136,8 @@ export async function getAppointmentsForEmployee(options: {
   return result.rows.map((row) => ({
     id: row.id,
     status: row.estado,
+    paymentStatus: row.pago_estado,
+    paymentMethod: row.pago_metodo,
     start: row.fecha_cita.toISOString(),
     end: row.fecha_cita_fin ? row.fecha_cita_fin.toISOString() : null,
     clientName: row.cliente_nombre ?? "Cliente",

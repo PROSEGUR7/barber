@@ -24,6 +24,8 @@ type Appointment = {
   end: string | null
   price: number | null
   status: AppointmentStatus
+  paymentStatus: string | null
+  paymentMethod: string | null
 }
 
 export default function BarberAppointmentsPage() {
@@ -89,6 +91,8 @@ export default function BarberAppointmentsPage() {
           end: item.end ? String(item.end) : null,
           price: item.price != null && Number.isFinite(Number(item.price)) ? Number(item.price) : null,
           status: String(item.status ?? "pendiente"),
+          paymentStatus: item.paymentStatus ? String(item.paymentStatus) : null,
+          paymentMethod: item.paymentMethod ? String(item.paymentMethod) : null,
         })),
       )
     } catch (err) {
@@ -168,6 +172,25 @@ export default function BarberAppointmentsPage() {
       default:
         return status
     }
+  }
+
+  const getPaymentStatusText = (status: string | null) => {
+    const normalized = (status ?? "").trim().toLowerCase()
+    if (!normalized) return "Pago pendiente"
+    if (["completo", "pagado", "aprobado", "paid", "success", "succeeded"].includes(normalized)) return "Pagada"
+    if (["fallido", "declined", "error", "voided"].includes(normalized)) return "Pago fallido"
+    return `Pago: ${normalized}`
+  }
+
+  const getPaymentStatusClass = (status: string | null) => {
+    const normalized = (status ?? "").trim().toLowerCase()
+    if (["completo", "pagado", "aprobado", "paid", "success", "succeeded"].includes(normalized)) {
+      return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+    }
+    if (["fallido", "declined", "error", "voided"].includes(normalized)) {
+      return "bg-red-500/10 text-red-500 border-red-500/20"
+    }
+    return "bg-yellow-500/10 text-yellow-600 border-yellow-500/20"
   }
 
   const renderList = (items: Appointment[]) => {
@@ -256,6 +279,9 @@ export default function BarberAppointmentsPage() {
                 </div>
                 <Badge variant="outline" className={getStatusColor(appointment.status)}>
                   {getStatusText(appointment.status)}
+                </Badge>
+                <Badge variant="outline" className={getPaymentStatusClass(appointment.paymentStatus)}>
+                  {getPaymentStatusText(appointment.paymentStatus)}
                 </Badge>
               </div>
 

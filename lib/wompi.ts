@@ -13,6 +13,9 @@ type WompiMerchantResponse = {
     presigned_acceptance?: {
       acceptance_token?: string
     }
+    presigned_personal_data_auth?: {
+      acceptance_token?: string
+    }
   }
 }
 
@@ -38,6 +41,7 @@ export type WompiCheckoutData = {
   redirectUrl: string
   customerEmail: string
   acceptanceToken: string
+  personalDataAuthToken: string | null
 }
 
 type WompiEnvironment = "sandbox" | "production"
@@ -203,7 +207,10 @@ async function getTotalAmountInCents(serviceIds: number[]): Promise<number> {
   return amountInCents
 }
 
-async function getAcceptanceToken(publicKey: string): Promise<string> {
+async function getAcceptanceTokens(publicKey: string): Promise<{
+  acceptanceToken: string
+  personalDataAuthToken: string | null
+}> {
   const response = await fetch(`${getWompiBaseUrl()}/v1/merchants/${publicKey}`, {
     method: "GET",
     cache: "no-store",
@@ -224,7 +231,12 @@ async function getAcceptanceToken(publicKey: string): Promise<string> {
     throw error
   }
 
-  return token
+  const personalDataAuthToken = payload.data?.presigned_personal_data_auth?.acceptance_token?.trim() ?? null
+
+  return {
+    acceptanceToken: token,
+    personalDataAuthToken,
+  }
 }
 
 export async function createWompiCheckoutDataForReservation(options: {
@@ -246,7 +258,7 @@ export async function createWompiCheckoutDataForReservation(options: {
   const amountInCents = await getTotalAmountInCents(serviceIds)
   const currency = "COP" as const
   const reference = `RES-${appointmentId}-${Date.now()}`
-  const acceptanceToken = await getAcceptanceToken(publicKey)
+  const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const redirectUrl = buildRedirectUrl(reference)
 
   const signatureIntegrity = createHash("sha256")
@@ -262,6 +274,7 @@ export async function createWompiCheckoutDataForReservation(options: {
     redirectUrl,
     customerEmail: user.email,
     acceptanceToken,
+    personalDataAuthToken,
   }
 }
 
