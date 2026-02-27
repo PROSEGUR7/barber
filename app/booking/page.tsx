@@ -56,6 +56,27 @@ type WompiCheckoutData = {
   acceptanceToken: string
 }
 
+declare global {
+  interface Window {
+    WidgetCheckout?: new (options: {
+      currency: string
+      amountInCents: number
+      reference: string
+      publicKey: string
+      signature: {
+        integrity: string
+      }
+      redirectUrl?: string
+      customerData?: {
+        email?: string
+      }
+      acceptanceToken?: string
+    }) => {
+      open: (callback?: (result: unknown) => void) => void
+    }
+  }
+}
+
 export default function BookingPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -86,7 +107,42 @@ export default function BookingPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [wompiCheckout, setWompiCheckout] = useState<WompiCheckoutData | null>(null)
   const [isWompiDialogOpen, setIsWompiDialogOpen] = useState(false)
-  const wompiButtonContainerRef = useRef<HTMLDivElement | null>(null)
+  const [isWompiSdkReady, setIsWompiSdkReady] = useState(false)
+  const [isLoadingWompiSdk, setIsLoadingWompiSdk] = useState(false)
+  const wompiSdkPromiseRef = useRef<Promise<void> | null>(null)
+
+  const loadWompiSdk = async () => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    if (window.WidgetCheckout) {
+      return
+    }
+
+    if (!wompiSdkPromiseRef.current) {
+      wompiSdkPromiseRef.current = new Promise<void>((resolve, reject) => {
+        const scriptId = "wompi-widget-sdk"
+        const existing = document.getElementById(scriptId) as HTMLScriptElement | null
+
+        if (existing) {
+          existing.addEventListener("load", () => resolve(), { once: true })
+          existing.addEventListener("error", () => reject(new Error("WOMPI_SDK_LOAD_FAILED")), { once: true })
+          return
+        }
+
+        const script = document.createElement("script")
+        script.id = scriptId
+        script.src = "https://checkout.wompi.co/widget.js"
+        script.async = true
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error("WOMPI_SDK_LOAD_FAILED"))
+        document.body.appendChild(script)
+      })
+    }
+
+    await wompiSdkPromiseRef.current
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -535,32 +591,82 @@ export default function BookingPage() {
   }, [barbers, selectedBarber])
 
   useEffect(() => {
-    if (!isWompiDialogOpen || !wompiCheckout || !wompiButtonContainerRef.current) {
+    if (!isWompiDialogOpen || !wompiCheckout) {
       return
     }
 
-    const container = wompiButtonContainerRef.current
-    container.innerHTML = ""
+    let isActive = true
 
-    const script = document.createElement("script")
-    script.src = "https://checkout.wompi.co/widget.js"
-    script.async = true
-    script.setAttribute("data-render", "button")
-    script.setAttribute("data-public-key", wompiCheckout.publicKey)
-    script.setAttribute("data-currency", wompiCheckout.currency)
-    script.setAttribute("data-amount-in-cents", String(wompiCheckout.amountInCents))
-    script.setAttribute("data-reference", wompiCheckout.reference)
-    script.setAttribute("data-signature:integrity", wompiCheckout.signatureIntegrity)
-    script.setAttribute("data-redirect-url", wompiCheckout.redirectUrl)
-    script.setAttribute("data-customer-data:email", wompiCheckout.customerEmail)
-    script.setAttribute("data-acceptance-token", wompiCheckout.acceptanceToken)
+    const ensureSdk = async () => {
+      setIsLoadingWompiSdk(true)
+      try {
+        await loadWompiSdk()
+        if (isActive) {
+          setIsWompiSdkReady(true)
+        }
+      } catch (error) {
+        console.error("Error loading Wompi SDK", error)
+        if (isActive) {
+          setIsWompiSdkReady(false)
+          toast({
+            title: "No se pudo cargar Wompi",
+            description: "Intenta nuevamente en unos segundos.",
+            variant: "destructive",
+          })
+        }
+      } finally {
+        if (isActive) {
+          setIsLoadingWompiSdk(false)
+        }
+      }
+    }
 
-    container.appendChild(script)
+    void ensureSdk()
 
     return () => {
-      container.innerHTML = ""
+      isActive = false
     }
-  }, [isWompiDialogOpen, wompiCheckout])
+  }, [isWompiDialogOpen, wompiCheckout, toast])
+
+  const openWompiWidget = async () => {
+    if (!wompiCheckout) {
+      return
+    }
+
+    try {
+      await loadWompiSdk()
+
+      if (!window.WidgetCheckout) {
+        throw new Error("WOMPI_WIDGET_UNAVAILABLE")
+      }
+
+      const checkout = new window.WidgetCheckout({
+        currency: wompiCheckout.currency,
+        amountInCents: wompiCheckout.amountInCents,
+        reference: wompiCheckout.reference,
+        publicKey: wompiCheckout.publicKey,
+        signature: {
+          integrity: wompiCheckout.signatureIntegrity,
+        },
+        redirectUrl: wompiCheckout.redirectUrl,
+        customerData: {
+          email: wompiCheckout.customerEmail,
+        },
+        acceptanceToken: wompiCheckout.acceptanceToken,
+      })
+
+      checkout.open((result) => {
+        console.log("[WOMPI_WIDGET_RESULT]", result)
+      })
+    } catch (error) {
+      console.error("Error opening Wompi widget", error)
+      toast({
+        title: "No se pudo abrir Wompi",
+        description: "Recarga la página e inténtalo de nuevo.",
+        variant: "destructive",
+      })
+    }
+  }
 
   const handleBooking = async (): Promise<boolean> => {
     if (selectedServices.length === 0 || !selectedBarber || !selectedSlot) {
@@ -1100,7 +1206,20 @@ export default function BookingPage() {
                             </span>
                           </p>
 
-                          <div ref={wompiButtonContainerRef} className="min-h-10" />
+                          <Button
+                            type="button"
+                            onClick={() => {
+                              void openWompiWidget()
+                            }}
+                            disabled={!wompiCheckout || isLoadingWompiSdk}
+                            className="w-full"
+                          >
+                            {isLoadingWompiSdk
+                              ? "Cargando checkout..."
+                              : isWompiSdkReady
+                                ? "Pagar con Wompi"
+                                : "Reintentar carga de Wompi"}
+                          </Button>
                         </div>
 
                         <AlertDialogFooter>
