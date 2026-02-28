@@ -38,6 +38,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Este código ya no está disponible" }, { status: 409 })
     }
 
+    if (code === "PROMO_ALREADY_REDEEMED") {
+      return NextResponse.json({ error: "Este código ya fue agregado a tu cuenta" }, { status: 409 })
+    }
+
     console.error("Error redeeming promo code", error)
     return NextResponse.json({ error: "No se pudo aplicar el código" }, { status: 500 })
   }

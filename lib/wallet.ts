@@ -33,6 +33,18 @@ type ReceiptRow = {
   estado: string | null
 }
 
+type ReceiptDownloadRow = {
+  id: number
+  servicio_nombre: string | null
+  empleado_nombre: string | null
+  fecha_cita: Date | null
+  monto: string | null
+  monto_descuento: string | null
+  monto_final: string | null
+  metodo_pago: string | null
+  estado: string | null
+}
+
 type PromoCodeRow = {
   description: string
   expires_label: string | null
@@ -54,9 +66,19 @@ export type WalletCoupon = {
 }
 
 export type WalletReceipt = {
+  id: number
   title: string
   subtitle: string
+  dateLabel: string
+  amountLabel: string
+  status: string
   actionHref: string | null
+}
+
+export type WalletReceiptDownload = {
+  filename: string
+  contentType: string
+  body: string
 }
 
 export type WalletSummary = {
@@ -95,6 +117,14 @@ function parseMoney(value: string | null | undefined): number {
   if (!value) return 0
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatCopAmount(value: number): string {
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: "COP",
+    minimumFractionDigits: 0,
+  }).format(value)
 }
 
 export async function getWalletDataForUser(userId: number): Promise<WalletData> {
@@ -175,15 +205,28 @@ export async function getWalletDataForUser(userId: number): Promise<WalletData> 
   }))
 
   const walletReceipts: WalletReceipt[] = receipts.rows.map((row) => {
+    const status = row.estado?.trim() || "pendiente"
     const title = row.estado?.toLowerCase() === "aprobado" ? `Recibo #${row.id}` : `Pago #${row.id}`
     const service = row.servicio_nombre ?? "Servicio"
     const barber = row.empleado_nombre ? ` · ${row.empleado_nombre}` : ""
     const subtitle = `${service}${barber}`
+    const dateLabel = row.fecha_cita
+      ? new Intl.DateTimeFormat("es-CO", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date(row.fecha_cita))
+      : "Sin fecha"
+    const amountLabel = formatCopAmount(parseMoney(row.monto_final))
 
     return {
+      id: row.id,
       title,
       subtitle,
-      actionHref: null,
+      dateLabel,
+      amountLabel,
+      status,
+      actionHref: `/api/wallet/receipts/${row.id}/download`,
     }
   })
 
@@ -287,7 +330,7 @@ export async function redeemPromoCodeForUser(options: {
   const promo = await pool.query<PromoCodeRow>(
     `SELECT description, expires_label, active
        FROM tenant_base.promo_codes
-      WHERE code = $1
+      WHERE UPPER(code) = $1
       LIMIT 1`,
     [code],
   )
@@ -304,10 +347,83 @@ export async function redeemPromoCodeForUser(options: {
     throw error
   }
 
-  await pool.query(
+  const insert = await pool.query<{ id: number }>(
     `INSERT INTO tenant_base.clientes_cupones (cliente_id, code, description, expires_label, status)
      VALUES ($1, $2, $3, $4, 'Disponible')
-     ON CONFLICT (cliente_id, code) DO NOTHING`,
+     ON CONFLICT (cliente_id, code) DO NOTHING
+     RETURNING id`,
     [clientId, code, promo.rows[0].description, promo.rows[0].expires_label],
   )
+
+  if (insert.rowCount === 0) {
+    const error = new Error("PROMO_ALREADY_REDEEMED")
+    ;(error as { code?: string }).code = "PROMO_ALREADY_REDEEMED"
+    throw error
+  }
+}
+
+export async function getWalletReceiptDownloadForUser(options: {
+  userId: number
+  receiptId: number
+}): Promise<WalletReceiptDownload> {
+  const clientId = await resolveClientIdForUser(options.userId)
+
+  const receipt = await pool.query<ReceiptDownloadRow>(
+    `SELECT p.id,
+            s.nombre AS servicio_nombre,
+            e.nombre AS empleado_nombre,
+            a.fecha_cita,
+            p.monto::text AS monto,
+            p.monto_descuento::text AS monto_descuento,
+            p.monto_final::text AS monto_final,
+            p.metodo_pago::text AS metodo_pago,
+            p.estado::text AS estado
+       FROM tenant_base.pagos p
+       INNER JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+       LEFT JOIN tenant_base.empleados e ON e.id = a.empleado_id
+      WHERE p.id = $1
+        AND a.cliente_id = $2
+      LIMIT 1`,
+    [options.receiptId, clientId],
+  )
+
+  if (receipt.rowCount === 0) {
+    const error = new Error("RECEIPT_NOT_FOUND")
+    ;(error as { code?: string }).code = "RECEIPT_NOT_FOUND"
+    throw error
+  }
+
+  const row = receipt.rows[0]
+  const amount = parseMoney(row.monto)
+  const discount = parseMoney(row.monto_descuento)
+  const total = parseMoney(row.monto_final)
+  const dateLabel = row.fecha_cita
+    ? new Intl.DateTimeFormat("es-CO", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(row.fecha_cita))
+    : "N/A"
+
+  const body = [
+    `Factura / Comprobante #${row.id}`,
+    `Fecha: ${dateLabel}`,
+    `Servicio: ${row.servicio_nombre ?? "Servicio"}`,
+    `Profesional: ${row.empleado_nombre ?? "No asignado"}`,
+    `Método de pago: ${row.metodo_pago ?? "No registrado"}`,
+    `Estado: ${row.estado ?? "pendiente"}`,
+    "",
+    `Subtotal: ${formatCopAmount(amount)}`,
+    `Descuento: ${formatCopAmount(discount)}`,
+    `Total: ${formatCopAmount(total)}`,
+  ].join("\n")
+
+  return {
+    filename: `factura-${row.id}.txt`,
+    contentType: "text/plain; charset=utf-8",
+    body,
+  }
 }
