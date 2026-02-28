@@ -4,6 +4,7 @@ import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import { Analytics } from "@vercel/analytics/next"
 import "./globals.css"
+import { DevServiceWorkerReset } from "@/components/dev-sw-reset"
 import { PWAInstallPrompt } from "@/components/pwa-install-prompt"
 import { ThemeProvider } from "@/components/theme-provider"
 
@@ -50,6 +51,7 @@ export default function RootLayout({
         className={`font-sans ${GeistSans.variable} ${GeistMono.variable} antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
+          <DevServiceWorkerReset />
           {children}
           <PWAInstallPrompt />
           {enableVercelAnalytics ? <Analytics /> : null}

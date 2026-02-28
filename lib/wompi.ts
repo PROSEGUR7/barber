@@ -30,6 +30,12 @@ export type WompiTransactionData = {
   amount_in_cents?: number | null
   currency?: string | null
   payment_method_type?: string | null
+  [key: string]: unknown
+}
+
+type ReconcileContext = {
+  source?: "webhook" | "transaction_query" | "unknown"
+  eventName?: string | null
 }
 
 export type WompiCheckoutData = {
@@ -256,10 +262,45 @@ export async function createWompiCheckoutDataForReservation(options: {
   }
 
   const amountInCents = await getTotalAmountInCents(serviceIds)
+  const amount = amountInCents / 100
   const currency = "COP" as const
   const reference = `RES-${appointmentId}-${Date.now()}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const redirectUrl = buildRedirectUrl(reference)
+
+  const existingPayment = await pool.query<{ id: number }>(
+    `SELECT id
+       FROM tenant_base.pagos
+      WHERE agendamiento_id = $1
+      ORDER BY id DESC
+      LIMIT 1`,
+    [appointmentId],
+  )
+
+  if (existingPayment.rowCount > 0) {
+    await pool.query(
+      `UPDATE tenant_base.pagos
+          SET estado = 'pendiente'::tenant_base.estado_pago_enum,
+              proveedor_pago = 'wompi',
+              metodo_pago = COALESCE(metodo_pago, 'otro'::tenant_base.metodo_pago_enum),
+              monto = COALESCE(monto, $2::numeric),
+              wompi_reference = COALESCE($3::text, wompi_reference),
+              wompi_currency = COALESCE($4::text, wompi_currency),
+              wompi_status = 'PENDING',
+              wompi_payload_updated_at = now(),
+              fecha_pago = COALESCE(fecha_pago, now())
+        WHERE id = $1`,
+      [existingPayment.rows[0].id, amount, reference, currency],
+    )
+  } else {
+    await pool.query(
+      `INSERT INTO tenant_base.pagos
+        (agendamiento_id, monto, monto_descuento, metodo_pago, fecha_pago, estado, proveedor_pago, wompi_reference, wompi_currency, wompi_status, wompi_payload_updated_at)
+       VALUES
+        ($1, $2::numeric, 0, 'otro'::tenant_base.metodo_pago_enum, now(), 'pendiente'::tenant_base.estado_pago_enum, 'wompi', $3::text, $4::text, 'PENDING', now())`,
+      [appointmentId, amount, reference, currency],
+    )
+  }
 
   const signatureIntegrity = createHash("sha256")
     .update(`${reference}${amountInCents}${currency}${integritySecret}`)
@@ -311,7 +352,10 @@ function mapWompiMethodToPaymentMethod(method: string | null | undefined): Payme
   return "otro"
 }
 
-export async function reconcileWompiTransaction(transaction: WompiTransactionData): Promise<{
+export async function reconcileWompiTransaction(
+  transaction: WompiTransactionData,
+  context: ReconcileContext = {},
+): Promise<{
   appointmentId: number | null
   appointmentStatus: AppointmentState | null
   paymentStatus: PaymentState | null
@@ -330,6 +374,12 @@ export async function reconcileWompiTransaction(transaction: WompiTransactionDat
   const amountInCents = typeof transaction.amount_in_cents === "number" ? transaction.amount_in_cents : null
   const amount = amountInCents != null && Number.isFinite(amountInCents) ? amountInCents / 100 : null
   const paymentMethod = mapWompiMethodToPaymentMethod(transaction.payment_method_type)
+  const wompiTransactionId = typeof transaction.id === "string" ? transaction.id.trim() : ""
+  const wompiReference = typeof transaction.reference === "string" ? transaction.reference.trim() : ""
+  const wompiCurrency = typeof transaction.currency === "string" ? transaction.currency.trim() : ""
+  const wompiStatus = typeof transaction.status === "string" ? transaction.status.trim().toUpperCase() : ""
+  const wompiPayload = JSON.stringify(transaction)
+  const wompiEventName = context.eventName?.trim() || null
 
   const client = await pool.connect()
 
@@ -371,20 +421,49 @@ export async function reconcileWompiTransaction(transaction: WompiTransactionDat
       await client.query(
         `UPDATE tenant_base.pagos
             SET estado = $2::tenant_base.estado_pago_enum,
+                proveedor_pago = 'wompi',
                 metodo_pago = COALESCE($3::tenant_base.metodo_pago_enum, metodo_pago),
                 monto = COALESCE($4::numeric, monto),
-                monto_final = COALESCE($4::numeric, monto_final),
+                wompi_transaction_id = COALESCE(NULLIF($5::text, ''), wompi_transaction_id),
+                wompi_reference = COALESCE(NULLIF($6::text, ''), wompi_reference),
+                wompi_currency = COALESCE(NULLIF($7::text, ''), wompi_currency),
+                wompi_status = COALESCE(NULLIF($8::text, ''), wompi_status),
+                wompi_event_name = COALESCE($9::text, wompi_event_name),
+                wompi_payload = COALESCE($10::jsonb, wompi_payload),
+                wompi_payload_updated_at = now(),
                 fecha_pago = now()
           WHERE id = $1`,
-        [paymentId, paymentStatus, paymentMethod, amount],
+        [
+          paymentId,
+          paymentStatus,
+          paymentMethod,
+          amount,
+          wompiTransactionId,
+          wompiReference,
+          wompiCurrency,
+          wompiStatus,
+          wompiEventName,
+          wompiPayload,
+        ],
       )
     } else {
       await client.query(
         `INSERT INTO tenant_base.pagos
-          (agendamiento_id, monto, monto_descuento, monto_final, metodo_pago, fecha_pago, estado)
+          (agendamiento_id, monto, monto_descuento, metodo_pago, fecha_pago, estado, proveedor_pago, wompi_transaction_id, wompi_reference, wompi_currency, wompi_status, wompi_event_name, wompi_payload, wompi_payload_updated_at)
          VALUES
-          ($1, COALESCE($2::numeric, 0), 0, COALESCE($2::numeric, 0), $3::tenant_base.metodo_pago_enum, now(), $4::tenant_base.estado_pago_enum)`,
-        [appointmentId, amount, paymentMethod, paymentStatus],
+          ($1, COALESCE($2::numeric, 0), 0, $3::tenant_base.metodo_pago_enum, now(), $4::tenant_base.estado_pago_enum, 'wompi', NULLIF($5::text, ''), NULLIF($6::text, ''), NULLIF($7::text, ''), NULLIF($8::text, ''), $9::text, $10::jsonb, now())`,
+        [
+          appointmentId,
+          amount,
+          paymentMethod,
+          paymentStatus,
+          wompiTransactionId,
+          wompiReference,
+          wompiCurrency,
+          wompiStatus,
+          wompiEventName,
+          wompiPayload,
+        ],
       )
     }
 

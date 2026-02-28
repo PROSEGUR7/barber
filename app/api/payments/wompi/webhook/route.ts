@@ -72,7 +72,10 @@ export async function POST(request: Request) {
 
     let reconciliation = null
     if (transactionForReconciliation) {
-      reconciliation = await reconcileWompiTransaction(transactionForReconciliation)
+      reconciliation = await reconcileWompiTransaction(transactionForReconciliation, {
+        source: "webhook",
+        eventName,
+      })
     }
 
     console.log("[WOMPI_WEBHOOK_RECONCILED]", {

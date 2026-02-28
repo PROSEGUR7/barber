@@ -339,56 +339,65 @@ export default function AdminAgendamientosPage() {
               </Alert>
             )}
 
-            <Card>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>#</TableHead>
-                      <TableHead>Fecha y hora</TableHead>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Empleado</TableHead>
-                      <TableHead>Servicio</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead>Estado pago</TableHead>
-                      <TableHead className="text-right">Monto pagado</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredAppointments.map((appointment) => (
-                      <TableRow key={appointment.id}>
-                        <TableCell className="font-medium">{appointment.id}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span>{formatDateTime(appointment.startAt)}</span>
-                            <span className="text-xs text-muted-foreground">
-                              Fin: {appointment.endAt ? formatDateTime(appointment.endAt) : "Sin definir"}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>{appointment.client.name}</TableCell>
-                        <TableCell>{appointment.employee.name}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span>{appointment.service.name}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatCurrency(appointment.service.price)} · {formatNumber(appointment.service.durationMin)} min
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={getStatusVariant(appointment.status)}>{getStatusLabel(appointment.status)}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={getPaymentStatusVariant(appointment.paymentStatus)}>
-                            {getPaymentStatusLabel(appointment.paymentStatus)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">{formatCurrency(appointment.paidAmount)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+            <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-xl">Agendamientos registrados</CardTitle>
+                <CardDescription>Consulta estado, pago y detalle del servicio con el mismo estándar visual del panel.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/60 shadow-sm">
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[1080px] text-base">
+                      <TableHeader className="bg-muted/40">
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">#</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fecha y hora</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cliente</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Empleado</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Servicio</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Estado</TableHead>
+                          <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Estado pago</TableHead>
+                          <TableHead className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Monto pagado</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredAppointments.map((appointment) => (
+                          <TableRow key={appointment.id} className="h-[76px] border-border/50 transition-colors">
+                            <TableCell className="font-medium">{appointment.id}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span>{formatDateTime(appointment.startAt)}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  Fin: {appointment.endAt ? formatDateTime(appointment.endAt) : "Sin definir"}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>{appointment.client.name}</TableCell>
+                            <TableCell>{appointment.employee.name}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span>{appointment.service.name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {formatCurrency(appointment.service.price)} · {formatNumber(appointment.service.durationMin)} min
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={getStatusVariant(appointment.status)}>{getStatusLabel(appointment.status)}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={getPaymentStatusVariant(appointment.paymentStatus)}>
+                                {getPaymentStatusLabel(appointment.paymentStatus)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">{formatCurrency(appointment.paidAmount)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground">{formatNumber(filteredAppointments.length)} agendamientos filtrados en la tabla.</p>
               </CardContent>
             </Card>
           </>

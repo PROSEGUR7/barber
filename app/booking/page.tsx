@@ -630,6 +630,71 @@ export default function BookingPage() {
     }
   }, [isWompiDialogOpen, wompiCheckout, toast])
 
+  const extractTransactionIdFromWidgetResult = (payload: unknown): string | null => {
+    if (!payload || typeof payload !== "object") {
+      return null
+    }
+
+    const result = payload as {
+      transaction?: { id?: unknown }
+      data?: { transaction?: { id?: unknown } }
+    }
+
+    const candidateIds = [result.transaction?.id, result.data?.transaction?.id]
+    for (const candidate of candidateIds) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim()
+      }
+    }
+
+    return null
+  }
+
+  const reconcileWompiTransactionById = async (transactionId: string) => {
+    try {
+      const response = await fetch(`/api/payments/wompi/transaction/${encodeURIComponent(transactionId)}`, {
+        method: "GET",
+        cache: "no-store",
+      })
+
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        toast({
+          title: "Pago recibido",
+          description: "No pudimos sincronizar el estado al instante. Se reflejará al confirmar en webhook.",
+        })
+        return
+      }
+
+      const status = String(data.status ?? "").toUpperCase()
+
+      if (status === "APPROVED") {
+        toast({
+          title: "Pago aprobado",
+          description: "Tu pago fue confirmado y quedó registrado.",
+        })
+        return
+      }
+
+      if (status === "DECLINED" || status === "ERROR" || status === "VOIDED") {
+        toast({
+          title: "Pago no aprobado",
+          description: "La reserva quedó creada, pero el pago no fue aprobado.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({
+        title: "Pago en proceso",
+        description: "Wompi reporta la transacción en estado pendiente.",
+      })
+    } catch (error) {
+      console.error("Error reconciling Wompi transaction", error)
+    }
+  }
+
   const openWompiWidget = async () => {
     if (!wompiCheckout) {
       return
@@ -640,7 +705,6 @@ export default function BookingPage() {
     const normalizedRedirectUrl = wompiCheckout.redirectUrl?.trim() ?? ""
     const canUseRedirectUrl =
       normalizedRedirectUrl.length > 0 && !/localhost|127\.0\.0\.1/i.test(normalizedRedirectUrl)
-    const isLocalhost = /localhost|127\.0\.0\.1/i.test(window.location.hostname)
 
     const openWebCheckoutFallback = () => {
       const form = document.createElement("form")
@@ -678,11 +742,6 @@ export default function BookingPage() {
       form.remove()
     }
 
-    if (isLocalhost) {
-      openWebCheckoutFallback()
-      return
-    }
-
     try {
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => resolve())
@@ -709,6 +768,11 @@ export default function BookingPage() {
 
       checkout.open((result) => {
         console.log("[WOMPI_WIDGET_RESULT]", result)
+
+        const transactionId = extractTransactionIdFromWidgetResult(result)
+        if (transactionId) {
+          void reconcileWompiTransactionById(transactionId)
+        }
       })
     } catch (error) {
       console.error("Error opening Wompi widget", error)

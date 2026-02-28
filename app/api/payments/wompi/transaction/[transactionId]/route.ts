@@ -39,7 +39,10 @@ export async function GET(_: Request, context: Params) {
       )
     }
 
-    const reconciliation = await reconcileWompiTransaction(payload.data)
+    const reconciliation = await reconcileWompiTransaction(payload.data, {
+      source: "transaction_query",
+      eventName: null,
+    })
 
     return NextResponse.json(
       {

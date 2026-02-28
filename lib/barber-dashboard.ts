@@ -81,7 +81,7 @@ export async function getAppointmentsForEmployee(options: {
   const limit =
     typeof options.limit === "number" && Number.isFinite(options.limit)
       ? Math.min(Math.max(Math.trunc(options.limit), 1), 500)
-      : 200
+      : 1000
 
   const conditions: string[] = ["a.empleado_id = $1"]
   const parameters: Array<string | number> = [employeeId]
