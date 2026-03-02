@@ -161,6 +161,7 @@ export async function findTenantSchemaByEmail(
   }
 
   const childSchemas = await listChildTenantSchemas()
+  const matches: string[] = []
 
   for (const schemaName of childSchemas) {
     if (schemaName === normalizedPreferredTenant) {
@@ -177,8 +178,16 @@ export async function findTenantSchemaByEmail(
     )
 
     if (result.rowCount > 0) {
-      return schemaName
+      matches.push(schemaName)
     }
+  }
+
+  if (matches.length > 1) {
+    return null
+  }
+
+  if (matches.length === 1) {
+    return matches[0]
   }
 
   return null
