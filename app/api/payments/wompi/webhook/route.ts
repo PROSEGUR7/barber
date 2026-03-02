@@ -30,6 +30,13 @@ type WompiTransactionResponse = {
   }
 }
 
+type BillingValidationMeta = {
+  reason?: string
+  businessMessage?: string
+  pgCode?: string
+  pgMessage?: string
+}
+
 function wompiMethodToAdminMethod(method: string | undefined): string {
   const normalized = (method ?? "").trim().toUpperCase()
 
@@ -102,6 +109,7 @@ export async function POST(request: Request) {
       skipped: boolean
       rejected: boolean
       code: string | null
+      reason: string | null
       message: string | null
     } = {
       attempted: false,
@@ -109,6 +117,7 @@ export async function POST(request: Request) {
       skipped: false,
       rejected: false,
       code: null,
+      reason: null,
       message: null,
     }
 
@@ -136,15 +145,24 @@ export async function POST(request: Request) {
         const errorMessage = error instanceof Error ? error.message : "UNKNOWN_BILLING_ERROR"
 
         if (errorMessage === "ADMIN_BILLING_PAYMENT_VALIDATION_FAILED") {
+          const meta =
+            typeof error === "object" && error !== null && "meta" in error
+              ? ((error as { meta?: unknown }).meta as BillingValidationMeta)
+              : undefined
+
           billingRegistration.rejected = true
           billingRegistration.code = errorMessage
+          billingRegistration.reason = meta?.reason ?? "payment_validation_failed"
           billingRegistration.message =
-            "Pago aprobado en pasarela, pero rechazado por validación de billing (monto/moneda/ciclo)."
+            meta?.businessMessage ?? "Pago aprobado en pasarela, pero rechazado por validación de billing."
           console.warn("[WOMPI_WEBHOOK_BILLING_REJECTED]", {
             transactionId,
             paymentReference,
             amountInCents,
             currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
+            reason: billingRegistration.reason,
+            pgCode: meta?.pgCode ?? null,
+            pgMessage: meta?.pgMessage ?? null,
           })
         } else {
           throw error
@@ -159,7 +177,18 @@ export async function POST(request: Request) {
       billingRegistration,
     })
 
-    return NextResponse.json({ ok: true, received: true, reconciliation, billingRegistration }, { status: 200 })
+    return NextResponse.json(
+      {
+        ok: true,
+        received: true,
+        reconciliation,
+        billingRegistration,
+        billingRejected: billingRegistration.rejected,
+        billingRejectReason: billingRegistration.reason,
+        billingRejectMessage: billingRegistration.message,
+      },
+      { status: 200 },
+    )
   } catch (error) {
     console.error("[WOMPI_WEBHOOK_ERROR]", error)
     return NextResponse.json({ ok: false, error: "Invalid webhook payload" }, { status: 400 })

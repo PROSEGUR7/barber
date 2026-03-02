@@ -138,6 +138,41 @@ type PgLikeError = {
   message?: string
 }
 
+type BillingRejectReason = "amount_mismatch" | "invalid_currency" | "invalid_cycle" | "payment_validation_failed"
+
+function mapBillingValidationError(pgMessage: string | null | undefined): {
+  reason: BillingRejectReason
+  businessMessage: string
+} {
+  const normalized = (pgMessage ?? "").trim().toLowerCase()
+
+  if (normalized.includes("monto inválido") || normalized.includes("monto invalido")) {
+    return {
+      reason: "amount_mismatch",
+      businessMessage: "Monto no coincide con el plan.",
+    }
+  }
+
+  if (normalized.includes("moneda inválida") || normalized.includes("moneda invalida")) {
+    return {
+      reason: "invalid_currency",
+      businessMessage: "Moneda inválida para la suscripción.",
+    }
+  }
+
+  if (normalized.includes("ciclo")) {
+    return {
+      reason: "invalid_cycle",
+      businessMessage: "Ciclo de facturación inválido para la suscripción.",
+    }
+  }
+
+  return {
+    reason: "payment_validation_failed",
+    businessMessage: "No fue posible registrar el pago por validación de billing.",
+  }
+}
+
 function normalizeBillingCycle(value: string | null | undefined) {
   const normalized = (value ?? "").trim().toLowerCase()
   if (BILLING_CYCLES.has(normalized)) {
@@ -347,9 +382,12 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
     }
 
     if (pgCode === "P0001") {
+      const mapped = mapBillingValidationError(pgError?.message)
       const wrappedError = new Error("ADMIN_BILLING_PAYMENT_VALIDATION_FAILED")
       ;(wrappedError as { meta?: unknown }).meta = {
         pgCode,
+        reason: mapped.reason,
+        businessMessage: mapped.businessMessage,
         pgMessage: pgError?.message ?? null,
       }
       throw wrappedError

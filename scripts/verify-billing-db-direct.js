@@ -112,6 +112,106 @@ async function main() {
       })
     }
 
+    await client.query("BEGIN")
+    try {
+      await client.query(
+        `UPDATE admin_platform.tenants
+            SET estado = false,
+                estado_suscripcion = 'active',
+                gracia_hasta = NULL
+          WHERE id = $1`,
+        [tenantIdForPayment],
+      )
+      const inactiveResult = await client.query("SELECT * FROM admin_platform.tenant_can_login($1)", [tenantIdForPayment])
+      report.push({
+        test: "tenant_can_login(inactive tenant)",
+        ok: inactiveResult.rows[0]?.can_login === false && inactiveResult.rows[0]?.reason === "tenant_inactive",
+        detail: inactiveResult.rows[0] || null,
+      })
+    } finally {
+      await client.query("ROLLBACK")
+    }
+
+    await client.query("BEGIN")
+    try {
+      await client.query(
+        `UPDATE admin_platform.tenants
+            SET estado = true,
+                estado_suscripcion = 'past_due',
+                gracia_hasta = now() - interval '1 day'
+          WHERE id = $1`,
+        [tenantIdForPayment],
+      )
+      const pastDueNoGrace = await client.query("SELECT * FROM admin_platform.tenant_can_login($1)", [tenantIdForPayment])
+      report.push({
+        test: "tenant_can_login(past_due no grace)",
+        ok: pastDueNoGrace.rows[0]?.can_login === false && pastDueNoGrace.rows[0]?.reason === "payment_past_due",
+        detail: pastDueNoGrace.rows[0] || null,
+      })
+    } finally {
+      await client.query("ROLLBACK")
+    }
+
+    await client.query("BEGIN")
+    try {
+      await client.query(
+        `UPDATE admin_platform.tenants
+            SET estado = true,
+                estado_suscripcion = 'unpaid',
+                gracia_hasta = NULL
+          WHERE id = $1`,
+        [tenantIdForPayment],
+      )
+      const unpaidResult = await client.query("SELECT * FROM admin_platform.tenant_can_login($1)", [tenantIdForPayment])
+      report.push({
+        test: "tenant_can_login(unpaid)",
+        ok: unpaidResult.rows[0]?.can_login === false && unpaidResult.rows[0]?.reason === "subscription_unpaid",
+        detail: unpaidResult.rows[0] || null,
+      })
+    } finally {
+      await client.query("ROLLBACK")
+    }
+
+    await client.query("BEGIN")
+    try {
+      await client.query(
+        `UPDATE admin_platform.tenants
+            SET estado = true,
+                estado_suscripcion = 'paused',
+                gracia_hasta = NULL
+          WHERE id = $1`,
+        [tenantIdForPayment],
+      )
+      const pausedResult = await client.query("SELECT * FROM admin_platform.tenant_can_login($1)", [tenantIdForPayment])
+      report.push({
+        test: "tenant_can_login(paused)",
+        ok: pausedResult.rows[0]?.can_login === false && pausedResult.rows[0]?.reason === "subscription_paused",
+        detail: pausedResult.rows[0] || null,
+      })
+    } finally {
+      await client.query("ROLLBACK")
+    }
+
+    await client.query("BEGIN")
+    try {
+      await client.query(
+        `UPDATE admin_platform.tenants
+            SET estado = true,
+                estado_suscripcion = 'active',
+                gracia_hasta = NULL
+          WHERE id = $1`,
+        [tenantIdForPayment],
+      )
+      const activeResult = await client.query("SELECT * FROM admin_platform.tenant_can_login($1)", [tenantIdForPayment])
+      report.push({
+        test: "tenant_can_login(active baseline)",
+        ok: activeResult.rows[0]?.can_login === true,
+        detail: activeResult.rows[0] || null,
+      })
+    } finally {
+      await client.query("ROLLBACK")
+    }
+
     const blockedSample = await client.query(
       "SELECT id, estado_suscripcion FROM admin_platform.tenants WHERE estado_suscripcion IN ('past_due', 'unpaid', 'paused') ORDER BY id LIMIT 1",
     )
@@ -258,6 +358,98 @@ async function main() {
         reference,
         secondAttemptErrorCode,
         countAfterSecond: afterSecond.rows[0].count,
+      },
+    })
+
+    const lowerAmountReference = `VERIFY-BILLING-LOW-AMOUNT-${Date.now()}`
+    const lowerAmount = expectedAmount > 1 ? expectedAmount - 1 : Math.max(0.01, expectedAmount / 2)
+    let lowerAmountRejected = false
+    let lowerAmountErrorCode = null
+
+    try {
+      await client.query(
+        `SELECT *
+           FROM admin_platform.registrar_pago_tenant(
+             $1,
+             $2,
+             $3,
+             $4,
+             $5,
+             $6,
+             $7::admin_platform.ciclo_facturacion_enum,
+             $8
+           )`,
+        [
+          tenantIdForPayment,
+          lowerAmount,
+          expectedCurrency,
+          "qa",
+          "verify-script",
+          lowerAmountReference,
+          expectedCycle,
+          new Date().toISOString(),
+        ],
+      )
+    } catch (error) {
+      lowerAmountRejected = true
+      lowerAmountErrorCode = typeof error?.code === "string" ? error.code : "unknown"
+    }
+
+    report.push({
+      test: "registrar_pago_tenant(lower amount)",
+      ok: lowerAmountRejected,
+      detail: {
+        expectedAmount,
+        attemptedAmount: lowerAmount,
+        currency: expectedCurrency,
+        reference: lowerAmountReference,
+        errorCode: lowerAmountErrorCode,
+      },
+    })
+
+    const invalidCurrencyReference = `VERIFY-BILLING-BAD-CURRENCY-${Date.now()}`
+    const invalidCurrency = expectedCurrency === "COP" ? "USD" : "COP"
+    let invalidCurrencyRejected = false
+    let invalidCurrencyErrorCode = null
+
+    try {
+      await client.query(
+        `SELECT *
+           FROM admin_platform.registrar_pago_tenant(
+             $1,
+             $2,
+             $3,
+             $4,
+             $5,
+             $6,
+             $7::admin_platform.ciclo_facturacion_enum,
+             $8
+           )`,
+        [
+          tenantIdForPayment,
+          expectedAmount,
+          invalidCurrency,
+          "qa",
+          "verify-script",
+          invalidCurrencyReference,
+          expectedCycle,
+          new Date().toISOString(),
+        ],
+      )
+    } catch (error) {
+      invalidCurrencyRejected = true
+      invalidCurrencyErrorCode = typeof error?.code === "string" ? error.code : "unknown"
+    }
+
+    report.push({
+      test: "registrar_pago_tenant(invalid currency)",
+      ok: invalidCurrencyRejected,
+      detail: {
+        expectedCurrency,
+        attemptedCurrency: invalidCurrency,
+        amount: expectedAmount,
+        reference: invalidCurrencyReference,
+        errorCode: invalidCurrencyErrorCode,
       },
     })
 

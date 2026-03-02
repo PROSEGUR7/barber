@@ -369,8 +369,19 @@ export default function BookingPage() {
         }
 
         const status = String(data.status ?? "").toUpperCase()
+        const billingRejected = Boolean(data.billingRejected)
+        const billingRejectMessage = getBillingRejectMessage(data)
 
         if (status === "APPROVED") {
+          if (billingRejected) {
+            toast({
+              title: "Pago validado con observación",
+              description: billingRejectMessage,
+              variant: "destructive",
+            })
+            return
+          }
+
           toast({
             title: "Pago aprobado",
             description: "Tu pago fue confirmado con Wompi.",
@@ -650,6 +661,37 @@ export default function BookingPage() {
     return null
   }
 
+  const getBillingRejectMessage = (payload: unknown): string => {
+    if (!payload || typeof payload !== "object") {
+      return "El pago fue aprobado en Wompi, pero no coincide con las reglas de facturación del plan."
+    }
+
+    const data = payload as {
+      billingRejectMessage?: unknown
+      billingRejectReason?: unknown
+    }
+
+    if (typeof data.billingRejectMessage === "string" && data.billingRejectMessage.trim()) {
+      return data.billingRejectMessage.trim()
+    }
+
+    const reason = typeof data.billingRejectReason === "string" ? data.billingRejectReason.trim().toLowerCase() : ""
+
+    if (reason === "amount_mismatch") {
+      return "Monto no coincide con el plan."
+    }
+
+    if (reason === "invalid_currency") {
+      return "Moneda inválida para la suscripción."
+    }
+
+    if (reason === "invalid_cycle") {
+      return "Ciclo de facturación inválido para la suscripción."
+    }
+
+    return "El pago fue aprobado en Wompi, pero no coincide con las reglas de facturación del plan."
+  }
+
   const reconcileWompiTransactionById = async (transactionId: string) => {
     try {
       const response = await fetch(`/api/payments/wompi/transaction/${encodeURIComponent(transactionId)}`, {
@@ -668,8 +710,19 @@ export default function BookingPage() {
       }
 
       const status = String(data.status ?? "").toUpperCase()
+      const billingRejected = Boolean(data.billingRejected)
+      const billingRejectMessage = getBillingRejectMessage(data)
 
       if (status === "APPROVED") {
+        if (billingRejected) {
+          toast({
+            title: "Pago validado con observación",
+            description: billingRejectMessage,
+            variant: "destructive",
+          })
+          return
+        }
+
         toast({
           title: "Pago aprobado",
           description: "Tu pago fue confirmado y quedó registrado.",
