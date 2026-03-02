@@ -84,7 +84,9 @@ function getMessagePayload(message: MetaMessage): {
       mediaCaption: message.image?.caption?.trim() || null,
       mediaFilename: null,
       type,
-       ON CONFLICT (wamid) DO UPDATE
+    }
+  }
+
   if (type === "audio") {
     return {
       text: null,
@@ -95,8 +97,7 @@ function getMessagePayload(message: MetaMessage): {
       type,
     }
   }
-         updated_at = NOW()
-       WHERE tenant_base.meta_webhook_messages.tenant_schema = EXCLUDED.tenant_schema`,
+
   if (type === "document") {
     return {
       text: message.document?.caption?.trim() || null,
@@ -221,8 +222,6 @@ export async function POST(request: Request) {
              )
              VALUES ($1,$2,$3,$4,$5,$6,'inbound',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,NOW())
              ON CONFLICT (wamid) DO UPDATE
-             WHERE tenant_base.meta_webhook_messages.tenant_schema = EXCLUDED.tenant_schema
-             DO UPDATE
                SET wa_id = COALESCE(EXCLUDED.wa_id, tenant_base.meta_webhook_messages.wa_id),
                    contact_name = COALESCE(EXCLUDED.contact_name, tenant_base.meta_webhook_messages.contact_name),
                    message_type = COALESCE(EXCLUDED.message_type, tenant_base.meta_webhook_messages.message_type),
@@ -233,7 +232,8 @@ export async function POST(request: Request) {
                    media_filename = COALESCE(EXCLUDED.media_filename, tenant_base.meta_webhook_messages.media_filename),
                    sent_at = COALESCE(EXCLUDED.sent_at, tenant_base.meta_webhook_messages.sent_at),
                    raw_payload = EXCLUDED.raw_payload,
-                   updated_at = NOW()`,
+                   updated_at = NOW()
+             WHERE tenant_base.meta_webhook_messages.tenant_schema = EXCLUDED.tenant_schema`,
             [
               tenantSchema,
               message.id?.trim() || null,
