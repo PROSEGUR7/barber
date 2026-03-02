@@ -26,6 +26,13 @@ export async function GET(request: Request, context: Params) {
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 1), 500) : 200
   const tenantSchema = resolveTenantSchemaFromRequest(request)
 
+  if (!tenantSchema) {
+    return jsonError(400, {
+      code: "TENANT_REQUIRED",
+      error: "Debes indicar el tenant para cargar mensajes.",
+    })
+  }
+
   try {
     const messages = await getMessagesByConversation(conversationId, limit, tenantSchema)
 

@@ -13,6 +13,17 @@ export async function GET(request: Request, context: Params) {
   const { mediaId } = await context.params
   const tenantSchema = resolveTenantSchemaFromRequest(request)
 
+  if (!tenantSchema) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "TENANT_REQUIRED",
+        error: "Debes indicar el tenant para cargar archivos multimedia.",
+      },
+      { status: 400 },
+    )
+  }
+
   try {
     const media = await fetchMetaMedia(decodeURIComponent(mediaId), tenantSchema)
 

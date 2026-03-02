@@ -23,6 +23,13 @@ export async function POST(request: Request, context: Params) {
   const { conversationId } = await context.params
   const tenantSchema = resolveTenantSchemaFromRequest(request)
 
+  if (!tenantSchema) {
+    return jsonError(400, {
+      code: "TENANT_REQUIRED",
+      error: "Debes indicar el tenant para marcar mensajes.",
+    })
+  }
+
   try {
     const updated = await markConversationAsRead(conversationId, tenantSchema)
 

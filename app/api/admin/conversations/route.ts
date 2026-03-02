@@ -21,6 +21,13 @@ export async function GET(request: Request) {
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 1), 200) : 50
   const tenantSchema = resolveTenantSchemaFromRequest(request)
 
+  if (!tenantSchema) {
+    return jsonError(400, {
+      code: "TENANT_REQUIRED",
+      error: "Debes indicar el tenant para cargar conversaciones.",
+    })
+  }
+
   try {
     const { conversations, phoneDisplay } = await getConversations(limit, tenantSchema)
     const config = await getMetaConfigByTenantSchema(tenantSchema)

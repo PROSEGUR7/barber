@@ -37,6 +37,18 @@ export function LoginForm({
     )
   }
 
+  const persistTenant = (tenantValue: string | null | undefined) => {
+    const normalized = typeof tenantValue === "string" ? tenantValue.trim().toLowerCase() : ""
+    if (/^tenant_[a-z0-9_]+$/.test(normalized)) {
+      localStorage.setItem("userTenant", normalized)
+      localStorage.setItem("tenantSchema", normalized)
+      return
+    }
+
+    localStorage.removeItem("userTenant")
+    localStorage.removeItem("tenantSchema")
+  }
+
   const getWebAuthnHints = () => {
     if (typeof window === "undefined") {
       return {
@@ -117,6 +129,7 @@ export function LoginForm({
           role?: string
           hasPasskeys?: boolean
           displayName?: string | null
+          tenant?: string | null
         }
       }
 
@@ -172,6 +185,7 @@ export function LoginForm({
         role?: string
         hasPasskeys?: boolean
         displayName?: string | null
+        tenant?: string | null
       }
 
       if (user.email) {
@@ -200,6 +214,8 @@ export function LoginForm({
       } else {
         localStorage.removeItem("userRole")
       }
+
+      persistTenant(user.tenant)
 
       const destination =
         user.role === "admin"
@@ -302,6 +318,7 @@ export function LoginForm({
         email?: string
         role?: string
         displayName?: string | null
+        tenant?: string | null
       }
 
       if (user.email) {
@@ -330,6 +347,8 @@ export function LoginForm({
       } else {
         localStorage.removeItem("userRole")
       }
+
+      persistTenant(user.tenant)
 
       toast({
         title: "Sesión iniciada",

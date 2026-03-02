@@ -114,6 +114,42 @@ function normalizePhone(phone: string): string {
   return phone.replace(/\D+/g, "")
 }
 
+function getStoredTenantSchema(): string | null {
+  if (typeof window === "undefined") {
+    return null
+  }
+
+  const raw =
+    localStorage.getItem("userTenant") ??
+    localStorage.getItem("tenantSchema") ??
+    ""
+
+  const normalized = raw.trim().toLowerCase()
+  return /^tenant_[a-z0-9_]+$/.test(normalized) ? normalized : null
+}
+
+function withTenantQuery(path: string): string {
+  const tenantSchema = getStoredTenantSchema()
+  if (!tenantSchema) {
+    return path
+  }
+
+  const separator = path.includes("?") ? "&" : "?"
+  return `${path}${separator}tenant=${encodeURIComponent(tenantSchema)}`
+}
+
+function tenantHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const tenantSchema = getStoredTenantSchema()
+  if (!tenantSchema) {
+    return headers
+  }
+
+  return {
+    ...headers,
+    "x-tenant": tenantSchema,
+  }
+}
+
 function formatStatus(status: string | null): string {
   if (!status) {
     return ""
@@ -580,7 +616,10 @@ export default function AdminConversacionesPage() {
     }
 
     try {
-      const response = await fetch("/api/admin/conversations?limit=100", { cache: "no-store" })
+      const response = await fetch(withTenantQuery("/api/admin/conversations?limit=100"), {
+        cache: "no-store",
+        headers: tenantHeaders(),
+      })
       const data = (await response.json().catch(() => ({}))) as ConversationsResponse
 
       if (!response.ok || !data.ok) {
@@ -626,8 +665,9 @@ export default function AdminConversacionesPage() {
 
     try {
       const encodedId = encodeURIComponent(conversationId)
-      const response = await fetch(`/api/admin/conversations/${encodedId}/messages?limit=250`, {
+      const response = await fetch(withTenantQuery(`/api/admin/conversations/${encodedId}/messages?limit=250`), {
         cache: "no-store",
+        headers: tenantHeaders(),
       })
       const data = (await response.json().catch(() => ({}))) as MessagesResponse
 
@@ -637,8 +677,9 @@ export default function AdminConversacionesPage() {
 
       setMessages(Array.isArray(data.messages) ? data.messages : [])
 
-      await fetch(`/api/admin/conversations/${encodedId}/read`, {
+      await fetch(withTenantQuery(`/api/admin/conversations/${encodedId}/read`), {
         method: "POST",
+        headers: tenantHeaders(),
       })
 
       setConversations((current) =>
@@ -809,8 +850,9 @@ export default function AdminConversacionesPage() {
           formData.append("file", fileToSend)
         }
 
-        const response = await fetch(`/api/admin/conversations/${encodeURIComponent(selectedConversation.id)}/send`, {
+        const response = await fetch(withTenantQuery(`/api/admin/conversations/${encodeURIComponent(selectedConversation.id)}/send`), {
           method: "POST",
+          headers: tenantHeaders(),
           body: formData,
         })
 
@@ -1295,7 +1337,7 @@ export default function AdminConversacionesPage() {
                         messages.map((message) => {
                           const isOutbound = message.direction === "outbound"
                           const mediaUrl = message.mediaId
-                            ? `/api/admin/conversations/media/${encodeURIComponent(message.mediaId)}`
+                            ? withTenantQuery(`/api/admin/conversations/media/${encodeURIComponent(message.mediaId)}`)
                             : null
 
                           return (

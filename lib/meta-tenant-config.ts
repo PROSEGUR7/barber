@@ -89,10 +89,15 @@ function tenantHintFromHost(host: string | null): string | null {
   return firstLabel
 }
 
-export function resolveTenantSchemaFromRequest(request: Request): string {
+export function resolveTenantSchemaFromRequest(request: Request): string | null {
   const fromHeader = request.headers.get("x-tenant")?.trim().toLowerCase() ?? ""
   if (TENANT_SCHEMA_PATTERN.test(fromHeader)) {
     return fromHeader
+  }
+
+  const fromQuery = new URL(request.url).searchParams.get("tenant")?.trim().toLowerCase() ?? ""
+  if (TENANT_SCHEMA_PATTERN.test(fromQuery)) {
+    return fromQuery
   }
 
   const fromHost = tenantHintFromHost(request.headers.get("x-forwarded-host") ?? request.headers.get("host"))
@@ -100,7 +105,7 @@ export function resolveTenantSchemaFromRequest(request: Request): string {
     return fromHost
   }
 
-  return DEFAULT_TENANT_SCHEMA
+  return null
 }
 
 export async function ensureMetaTenantConfigTable() {

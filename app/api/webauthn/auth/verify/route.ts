@@ -81,6 +81,7 @@ export async function POST(request: Request) {
           role: result.user.role,
           displayName: result.user.displayName ?? null,
           hasPasskeys: await userHasPasskeys(result.user.id),
+          tenant: result.user.tenantSchema ?? null,
         },
       },
       { status: 200 },
