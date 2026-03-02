@@ -100,7 +100,7 @@ export function resolveTenantSchemaFromRequest(request: Request): string {
     return fromHost
   }
 
-  return normalizeTenantSchema(process.env.DEFAULT_TENANT_SCHEMA ?? DEFAULT_TENANT_SCHEMA)
+  return DEFAULT_TENANT_SCHEMA
 }
 
 export async function ensureMetaTenantConfigTable() {

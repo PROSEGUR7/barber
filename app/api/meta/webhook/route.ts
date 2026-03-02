@@ -5,7 +5,6 @@ import { ensureMetaWebhookTables } from "@/lib/meta-chat"
 import {
   getMetaConfigByPhoneNumberId,
   getMetaConfigByVerifyToken,
-  normalizeTenantSchema,
 } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
@@ -138,10 +137,8 @@ export async function GET(request: Request) {
 
   const requestedToken = token?.trim() ?? ""
   const configFromTable = requestedToken ? await getMetaConfigByVerifyToken(requestedToken) : null
-  const fallbackVerifyToken = process.env.META_VERIFY_TOKEN?.trim() ?? ""
-  const validByFallback = requestedToken && fallbackVerifyToken && requestedToken === fallbackVerifyToken
 
-  if (mode === "subscribe" && challenge && (Boolean(configFromTable) || Boolean(validByFallback))) {
+  if (mode === "subscribe" && challenge && Boolean(configFromTable)) {
     return new NextResponse(challenge, {
       status: 200,
       headers: { "Content-Type": "text/plain" },
@@ -183,14 +180,8 @@ export async function POST(request: Request) {
         const metadata = value?.metadata
         const phoneNumberId = metadata?.phone_number_id?.trim() || ""
         const configByPhone = phoneNumberId ? await getMetaConfigByPhoneNumberId(phoneNumberId) : null
-        const fallbackPhoneId = process.env.META_PHONE_NUMBER_ID?.trim() ?? ""
-        const fallbackTenantSchema = normalizeTenantSchema(process.env.DEFAULT_TENANT_SCHEMA ?? "tenant_base")
 
-        const tenantSchema = configByPhone
-          ? configByPhone.tenantSchema
-          : phoneNumberId && fallbackPhoneId && phoneNumberId === fallbackPhoneId
-            ? fallbackTenantSchema
-            : null
+        const tenantSchema = configByPhone?.tenantSchema ?? null
 
         if (!tenantSchema) {
           console.warn("Meta webhook ignorado: phone_number_id sin configuración tenant", {
