@@ -96,6 +96,22 @@ export async function POST(request: Request) {
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
 
+    let billingRegistration: {
+      attempted: boolean
+      registered: boolean
+      skipped: boolean
+      rejected: boolean
+      code: string | null
+      message: string | null
+    } = {
+      attempted: false,
+      registered: false,
+      skipped: false,
+      rejected: false,
+      code: null,
+      message: null,
+    }
+
     if (
       normalizedStatus === "APPROVED" &&
       typeof amountInCents === "number" &&
@@ -103,22 +119,47 @@ export async function POST(request: Request) {
       amountInCents > 0 &&
       paymentReference
     ) {
-      await registerTenantPaymentWithIdempotency({
-        amount: amountInCents / 100,
-        currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
-        paymentMethod: wompiMethodToAdminMethod(transactionForReconciliation?.payment_method_type ?? undefined),
-        paymentProvider: "wompi",
-        externalReference: paymentReference,
-      })
+      billingRegistration.attempted = true
+
+      try {
+        const result = await registerTenantPaymentWithIdempotency({
+          amount: amountInCents / 100,
+          currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
+          paymentMethod: wompiMethodToAdminMethod(transactionForReconciliation?.payment_method_type ?? undefined),
+          paymentProvider: "wompi",
+          externalReference: paymentReference,
+        })
+
+        billingRegistration.registered = result.ok && !result.skipped
+        billingRegistration.skipped = result.skipped
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "UNKNOWN_BILLING_ERROR"
+
+        if (errorMessage === "ADMIN_BILLING_PAYMENT_VALIDATION_FAILED") {
+          billingRegistration.rejected = true
+          billingRegistration.code = errorMessage
+          billingRegistration.message =
+            "Pago aprobado en pasarela, pero rechazado por validación de billing (monto/moneda/ciclo)."
+          console.warn("[WOMPI_WEBHOOK_BILLING_REJECTED]", {
+            transactionId,
+            paymentReference,
+            amountInCents,
+            currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
+          })
+        } else {
+          throw error
+        }
+      }
     }
 
     console.log("[WOMPI_WEBHOOK_RECONCILED]", {
       event: eventName,
       transactionId,
       reconciliation,
+      billingRegistration,
     })
 
-    return NextResponse.json({ ok: true, received: true, reconciliation }, { status: 200 })
+    return NextResponse.json({ ok: true, received: true, reconciliation, billingRegistration }, { status: 200 })
   } catch (error) {
     console.error("[WOMPI_WEBHOOK_ERROR]", error)
     return NextResponse.json({ ok: false, error: "Invalid webhook payload" }, { status: 400 })

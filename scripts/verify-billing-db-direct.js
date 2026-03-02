@@ -141,6 +141,37 @@ async function main() {
     }
 
     const reference = `VERIFY-BILLING-${Date.now()}`
+    const subscriptionPricing = await client.query(
+      `SELECT
+         COALESCE(
+           s.monto_ciclo,
+           CASE s.ciclo_facturacion
+             WHEN 'mensual' THEN p.precio_mensual
+             WHEN 'trimestral' THEN p.precio_trimestral
+             ELSE p.precio_anual
+           END
+         )::numeric AS expected_amount,
+         COALESCE(NULLIF(s.moneda, ''), 'COP') AS expected_currency,
+         COALESCE(s.ciclo_facturacion::text, 'mensual') AS expected_cycle
+       FROM admin_platform.suscripciones_tenants s
+       JOIN admin_platform.planes_suscripcion p ON p.id = s.plan_id
+      WHERE s.tenant_id = $1
+      LIMIT 1`,
+      [tenantIdForPayment],
+    )
+
+    if (subscriptionPricing.rowCount === 0) {
+      throw new Error(`No existe suscripción para tenant_id=${tenantIdForPayment}`)
+    }
+
+    const expectedAmount = Number.parseFloat(String(subscriptionPricing.rows[0].expected_amount ?? "0"))
+    const expectedCurrency = String(subscriptionPricing.rows[0].expected_currency ?? "COP").toUpperCase()
+    const expectedCycle = String(subscriptionPricing.rows[0].expected_cycle ?? "mensual").toLowerCase()
+
+    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
+      throw new Error(`Monto esperado inválido para tenant_id=${tenantIdForPayment}`)
+    }
+
     const before = await client.query("SELECT count(*)::int as count FROM admin_platform.pagos_tenants WHERE referencia_externa = $1", [
       reference,
     ])
@@ -157,7 +188,16 @@ async function main() {
            $7::admin_platform.ciclo_facturacion_enum,
            $8
          )`,
-      [tenantIdForPayment, 1000, "COP", "qa", "verify-script", reference, "mensual", new Date().toISOString()],
+      [
+        tenantIdForPayment,
+        expectedAmount,
+        expectedCurrency,
+        "qa",
+        "verify-script",
+        reference,
+        expectedCycle,
+        new Date().toISOString(),
+      ],
     )
 
     const afterFirst = await client.query("SELECT count(*)::int as count FROM admin_platform.pagos_tenants WHERE referencia_externa = $1", [
@@ -178,7 +218,16 @@ async function main() {
              $7::admin_platform.ciclo_facturacion_enum,
              $8
            )`,
-        [tenantIdForPayment, 1000, "COP", "qa", "verify-script", reference, "mensual", new Date().toISOString()],
+        [
+          tenantIdForPayment,
+          expectedAmount,
+          expectedCurrency,
+          "qa",
+          "verify-script",
+          reference,
+          expectedCycle,
+          new Date().toISOString(),
+        ],
       )
     } catch (error) {
       secondAttemptErrorCode = typeof error?.code === "string" ? error.code : "unknown"
@@ -193,6 +242,9 @@ async function main() {
       ok: firstPayment.rowCount > 0 && afterFirst.rows[0].count === 1,
       detail: {
         reference,
+        expectedAmount,
+        expectedCurrency,
+        expectedCycle,
         firstResult: firstPayment.rows[0] || null,
         countBefore: before.rows[0].count,
         countAfterFirst: afterFirst.rows[0].count,

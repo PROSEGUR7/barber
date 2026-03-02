@@ -133,6 +133,11 @@ type SyncBillingRow = {
   a_paused: number
 }
 
+type PgLikeError = {
+  code?: string
+  message?: string
+}
+
 function normalizeBillingCycle(value: string | null | undefined) {
   const normalized = (value ?? "").trim().toLowerCase()
   if (BILLING_CYCLES.has(normalized)) {
@@ -324,6 +329,9 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {})
 
+    const pgError = error as PgLikeError
+    const pgCode = typeof pgError?.code === "string" ? pgError.code : null
+
     const isDuplicateReference =
       typeof error === "object" &&
       error !== null &&
@@ -336,6 +344,15 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
         ok: true,
         skipped: true,
       }
+    }
+
+    if (pgCode === "P0001") {
+      const wrappedError = new Error("ADMIN_BILLING_PAYMENT_VALIDATION_FAILED")
+      ;(wrappedError as { meta?: unknown }).meta = {
+        pgCode,
+        pgMessage: pgError?.message ?? null,
+      }
+      throw wrappedError
     }
 
     throw error
