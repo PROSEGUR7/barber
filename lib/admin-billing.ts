@@ -441,6 +441,16 @@ async function fetchTenantAccessSnapshot(tenantId: number): Promise<TenantAccess
   const primaryResponse = await adminApiRequest(requestPath, { method: "GET" })
   const primaryPayload = (await primaryResponse.json().catch(() => ({}))) as unknown
 
+  if (primaryResponse.status === 403) {
+    const snapshot = parseTenantAccessSnapshot(primaryPayload)
+    return {
+      ...snapshot,
+      canLogin: false,
+      reason: snapshot.reason ?? "access_denied",
+      tenantId: snapshot.tenantId ?? tenantId,
+    }
+  }
+
   if (!primaryResponse.ok) {
     throw new Error("ADMIN_BILLING_ACCESS_REQUEST_FAILED")
   }
@@ -454,6 +464,16 @@ async function fetchTenantAccessSnapshot(tenantId: number): Promise<TenantAccess
   const fallbackPath = `/api/billing/overview?tenantId=${encodeURIComponent(String(tenantId))}`
   const fallbackResponse = await adminApiRequest(fallbackPath, { method: "GET" })
   const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as unknown
+
+  if (fallbackResponse.status === 403) {
+    const snapshot = parseTenantAccessSnapshot(fallbackPayload)
+    return {
+      ...snapshot,
+      canLogin: false,
+      reason: snapshot.reason ?? "access_denied",
+      tenantId: snapshot.tenantId ?? tenantId,
+    }
+  }
 
   if (!fallbackResponse.ok) {
     throw new Error("ADMIN_BILLING_ACCESS_REQUEST_FAILED")
