@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "start": "next start",
     "db:apply:senior-hardening": "node scripts/apply-senior-hardening-schema.js",
-    "billing:sync-status": "node scripts/sync-billing-status.js"
+    "billing:sync-status": "node scripts/sync-billing-status.js",
+    "billing:verify": "node scripts/verify-billing-db-direct.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
