@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { fetchMetaMedia } from "@/lib/meta-chat"
-import { resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
+import { resolveTenantSchemaForRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -11,7 +11,7 @@ type Params = {
 
 export async function GET(request: Request, context: Params) {
   const { mediaId } = await context.params
-  const tenantSchema = resolveTenantSchemaFromRequest(request)
+  const tenantSchema = await resolveTenantSchemaForRequest(request)
 
   if (!tenantSchema) {
     return NextResponse.json(

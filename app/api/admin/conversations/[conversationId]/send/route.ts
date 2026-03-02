@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { sendMessageToMeta } from "@/lib/meta-chat"
-import { resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
+import { resolveTenantSchemaForRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -21,7 +21,7 @@ function jsonError(status: number, payload: { error: string; code?: string; deta
 
 export async function POST(request: Request, context: Params) {
   const { conversationId } = await context.params
-  const tenantSchema = resolveTenantSchemaFromRequest(request)
+  const tenantSchema = await resolveTenantSchemaForRequest(request)
 
   if (!tenantSchema) {
     return jsonError(400, {

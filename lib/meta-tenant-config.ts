@@ -39,6 +39,10 @@ type MetaTenantConfigRow = {
   n8n_api_key: string | null
 }
 
+type AdminTenantByEmailRow = {
+  esquema: string | null
+}
+
 function mapConfigRow(row: MetaTenantConfigRow): MetaTenantConfig {
   return {
     id: row.id,
@@ -106,6 +110,46 @@ export function resolveTenantSchemaFromRequest(request: Request): string | null 
   }
 
   return null
+}
+
+export async function resolveTenantSchemaForRequest(request: Request): Promise<string | null> {
+  const direct = resolveTenantSchemaFromRequest(request)
+  if (direct) {
+    return direct
+  }
+
+  const rawEmail = request.headers.get("x-user-email")?.trim().toLowerCase() ?? ""
+  if (!rawEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+    return null
+  }
+
+  try {
+    const result = await pool.query<AdminTenantByEmailRow>(
+      `SELECT esquema
+         FROM admin_platform.tenants
+        WHERE lower(trim(email_contacto)) = lower($1)
+          AND estado = TRUE
+        LIMIT 2`,
+      [rawEmail],
+    )
+
+    if (result.rowCount !== 1) {
+      return null
+    }
+
+    const tenantSchema = result.rows[0]?.esquema?.trim().toLowerCase() ?? ""
+    if (!TENANT_SCHEMA_PATTERN.test(tenantSchema)) {
+      return null
+    }
+
+    return tenantSchema
+  } catch (error) {
+    console.warn("Failed to resolve tenant schema by user email", {
+      email: rawEmail,
+      error,
+    })
+    return null
+  }
 }
 
 export async function ensureMetaTenantConfigTable() {

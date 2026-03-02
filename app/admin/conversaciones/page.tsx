@@ -140,12 +140,24 @@ function withTenantQuery(path: string): string {
 
 function tenantHeaders(headers: Record<string, string> = {}): Record<string, string> {
   const tenantSchema = getStoredTenantSchema()
+  const userEmail =
+    typeof window === "undefined"
+      ? ""
+      : (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  const withUserEmail = userEmail
+    ? {
+        ...headers,
+        "x-user-email": userEmail,
+      }
+    : { ...headers }
+
   if (!tenantSchema) {
-    return headers
+    return withUserEmail
   }
 
   return {
-    ...headers,
+    ...withUserEmail,
     "x-tenant": tenantSchema,
   }
 }

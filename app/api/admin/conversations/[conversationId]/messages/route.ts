@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getMessagesByConversation } from "@/lib/meta-chat"
-import { resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
+import { resolveTenantSchemaForRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -24,7 +24,7 @@ export async function GET(request: Request, context: Params) {
   const url = new URL(request.url)
   const limitParam = Number(url.searchParams.get("limit") ?? "200")
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 1), 500) : 200
-  const tenantSchema = resolveTenantSchemaFromRequest(request)
+  const tenantSchema = await resolveTenantSchemaForRequest(request)
 
   if (!tenantSchema) {
     return jsonError(400, {
