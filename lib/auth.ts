@@ -1,6 +1,44 @@
 import bcrypt from "bcryptjs"
 import { pool } from "@/lib/db"
 
+export const BASE_TENANT_SCHEMA = "tenant_base"
+
+const tenantSchemaPattern = /^tenant_[a-z0-9_]+$/i
+
+function quotePgIdentifier(identifier: string) {
+  return `"${identifier.replace(/"/g, '""')}"`
+}
+
+function normalizeTenantSchemaName(schema: string | null | undefined): string | null {
+  if (!schema) {
+    return null
+  }
+
+  const normalized = schema.trim().toLowerCase()
+
+  if (!tenantSchemaPattern.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function resolveTenantSchemaName(schema?: string) {
+  return normalizeTenantSchemaName(schema) ?? BASE_TENANT_SCHEMA
+}
+
+function usersTableForTenant(tenantSchema: string) {
+  return `${quotePgIdentifier(tenantSchema)}.${quotePgIdentifier("users")}`
+}
+
+function clientesTableForTenant(tenantSchema: string) {
+  return `${quotePgIdentifier(tenantSchema)}.${quotePgIdentifier("clientes")}`
+}
+
+function empleadosTableForTenant(tenantSchema: string) {
+  return `${quotePgIdentifier(tenantSchema)}.${quotePgIdentifier("empleados")}`
+}
+
 export type AppUserRole = "client" | "barber" | "admin"
 
 const roleToDb: Record<AppUserRole, "cliente" | "empleado" | "admin"> = {
@@ -29,6 +67,7 @@ export type AuthUser = {
   role: AppUserRole
   lastLogin: string | null
   displayName?: string | null
+  tenantSchema?: string
 }
 
 export type UserWithPassword = AuthUser & {
@@ -49,18 +88,73 @@ export class UserAlreadyExistsError extends Error {
   }
 }
 
+async function listChildTenantSchemas(): Promise<string[]> {
+  const result = await pool.query<{ schema_name: string }>(
+    `SELECT n.nspname AS schema_name
+       FROM pg_namespace n
+      WHERE n.nspname LIKE 'tenant\\_%' ESCAPE '\\'
+        AND n.nspname <> $1
+        AND to_regclass(format('%I.users', n.nspname)) IS NOT NULL
+      ORDER BY n.nspname ASC`,
+    [BASE_TENANT_SCHEMA],
+  )
+
+  return result.rows.map((row) => row.schema_name)
+}
+
+export async function findUserByEmailAcrossChildTenants(
+  email: string,
+  preferredTenantSchema?: string | null,
+): Promise<{ user: UserWithPassword; tenantSchema: string } | null> {
+  const normalizedPreferredTenant = normalizeTenantSchemaName(preferredTenantSchema)
+
+  if (normalizedPreferredTenant && normalizedPreferredTenant !== BASE_TENANT_SCHEMA) {
+    const preferredTenantUser = await findUserByEmail(email, normalizedPreferredTenant)
+
+    if (preferredTenantUser) {
+      return {
+        user: preferredTenantUser,
+        tenantSchema: normalizedPreferredTenant,
+      }
+    }
+  }
+
+  const childSchemas = await listChildTenantSchemas()
+
+  for (const schemaName of childSchemas) {
+    if (schemaName === normalizedPreferredTenant) {
+      continue
+    }
+
+    const user = await findUserByEmail(email, schemaName)
+
+    if (user) {
+      return {
+        user,
+        tenantSchema: schemaName,
+      }
+    }
+  }
+
+  return null
+}
+
 export async function findUserByEmailAndRole(
   email: string,
   role: AppUserRole,
+  tenantSchema?: string,
 ): Promise<UserWithPassword | null> {
   const dbRoleParam = roleToDb[role]
+  const resolvedTenantSchema = resolveTenantSchemaName(tenantSchema)
+  const usersTable = usersTableForTenant(resolvedTenantSchema)
+
   const result = await pool.query<DbUserRow>(
     `SELECT id,
             correo,
             passwordhash,
             rol::text as rol,
             ultimo_acceso
-       FROM tenant_base.users
+       FROM ${usersTable}
       WHERE lower(correo) = lower($1)
         AND rol::text = $2
       LIMIT 1`,
@@ -83,20 +177,25 @@ export async function findUserByEmailAndRole(
     passwordHash: row.passwordhash,
     role: appRole,
     lastLogin: row.ultimo_acceso,
-    displayName: await getDisplayNameForRole(row.id, appRole),
+    displayName: await getDisplayNameForRole(row.id, appRole, resolvedTenantSchema),
+    tenantSchema: resolvedTenantSchema,
   }
 }
 
 export async function findUserByEmail(
   email: string,
+  tenantSchema?: string,
 ): Promise<UserWithPassword | null> {
+  const resolvedTenantSchema = resolveTenantSchemaName(tenantSchema)
+  const usersTable = usersTableForTenant(resolvedTenantSchema)
+
   const result = await pool.query<DbUserRow>(
     `SELECT id,
             correo,
             passwordhash,
             rol::text as rol,
             ultimo_acceso
-       FROM tenant_base.users
+       FROM ${usersTable}
       WHERE lower(correo) = lower($1)
       LIMIT 1`,
     [email],
@@ -109,7 +208,7 @@ export async function findUserByEmail(
   const row = result.rows[0]
   const dbRoleFromRow = row.rol as keyof typeof roleFromDb
   const appRole = roleFromDb[dbRoleFromRow]
-  const displayName = await getDisplayNameForRole(row.id, appRole)
+  const displayName = await getDisplayNameForRole(row.id, appRole, resolvedTenantSchema)
 
   return {
     id: row.id,
@@ -118,17 +217,21 @@ export async function findUserByEmail(
     role: appRole,
     lastLogin: row.ultimo_acceso,
     displayName,
+    tenantSchema: resolvedTenantSchema,
   }
 }
 
-export async function findUserById(id: number): Promise<AuthUser | null> {
+export async function findUserById(id: number, tenantSchema?: string): Promise<AuthUser | null> {
+  const resolvedTenantSchema = resolveTenantSchemaName(tenantSchema)
+  const usersTable = usersTableForTenant(resolvedTenantSchema)
+
   const result = await pool.query<DbUserRow>(
     `SELECT id,
             correo,
             passwordhash,
             rol::text as rol,
             ultimo_acceso
-       FROM tenant_base.users
+       FROM ${usersTable}
       WHERE id = $1
       LIMIT 1`,
     [id],
@@ -141,7 +244,7 @@ export async function findUserById(id: number): Promise<AuthUser | null> {
   const row = result.rows[0]
   const dbRoleFromRow = row.rol as keyof typeof roleFromDb
   const appRole = roleFromDb[dbRoleFromRow]
-  const displayName = await getDisplayNameForRole(row.id, appRole)
+  const displayName = await getDisplayNameForRole(row.id, appRole, resolvedTenantSchema)
 
   return {
     id: row.id,
@@ -149,6 +252,7 @@ export async function findUserById(id: number): Promise<AuthUser | null> {
     role: appRole,
     lastLogin: row.ultimo_acceso,
     displayName,
+    tenantSchema: resolvedTenantSchema,
   }
 }
 
@@ -226,7 +330,8 @@ export async function createUser({
       email: userRow.correo,
       role: appRole,
       lastLogin: userRow.ultimo_acceso,
-      displayName: await getDisplayNameForRole(userRow.id, appRole),
+      displayName: await getDisplayNameForRole(userRow.id, appRole, BASE_TENANT_SCHEMA),
+      tenantSchema: BASE_TENANT_SCHEMA,
     }
   } catch (error) {
     try {
@@ -272,28 +377,37 @@ export async function verifyPassword(password: string, passwordHash: string) {
   return bcrypt.compare(password, passwordHash)
 }
 
-export async function markUserLogin(userId: number) {
+export async function markUserLogin(userId: number, tenantSchema?: string) {
+  const resolvedTenantSchema = resolveTenantSchemaName(tenantSchema)
+  const usersTable = usersTableForTenant(resolvedTenantSchema)
+
   await pool.query(
-    `UPDATE tenant_base.users
+    `UPDATE ${usersTable}
      SET ultimo_acceso = NOW(), ultima_actualizacion = NOW()
      WHERE id = $1`,
     [userId],
   )
 }
 
-async function getDisplayNameForRole(userId: number, role: AppUserRole): Promise<string | null> {
+async function getDisplayNameForRole(
+  userId: number,
+  role: AppUserRole,
+  tenantSchema: string,
+): Promise<string | null> {
   try {
     switch (role) {
       case "client": {
+        const clientesTable = clientesTableForTenant(tenantSchema)
         const result = await pool.query<{ nombre: string | null }>(
-          `SELECT nombre FROM tenant_base.clientes WHERE user_id = $1 LIMIT 1`,
+          `SELECT nombre FROM ${clientesTable} WHERE user_id = $1 LIMIT 1`,
           [userId],
         )
         return result.rows[0]?.nombre ?? null
       }
       case "barber": {
+        const empleadosTable = empleadosTableForTenant(tenantSchema)
         const result = await pool.query<{ nombre: string | null }>(
-          `SELECT nombre FROM tenant_base.empleados WHERE user_id = $1 LIMIT 1`,
+          `SELECT nombre FROM ${empleadosTable} WHERE user_id = $1 LIMIT 1`,
           [userId],
         )
         return result.rows[0]?.nombre ?? null

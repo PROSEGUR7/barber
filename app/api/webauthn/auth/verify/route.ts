@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { verifyPasskeyAuthentication, userHasPasskeys } from "@/lib/webauthn"
 import { markUserLogin } from "@/lib/auth"
+import { validateTenantAccess } from "@/lib/admin-billing"
 
 export const runtime = "nodejs"
 
@@ -59,7 +60,16 @@ export async function POST(request: Request) {
       })
     }
 
-    await markUserLogin(result.user.id)
+    const tenantAccess = await validateTenantAccess({ tenantSchema: result.user.tenantSchema })
+
+    if (!tenantAccess.allowed) {
+      return jsonError(403, {
+        code: "SUBSCRIPTION_BLOCKED",
+        error: tenantAccess.message,
+      })
+    }
+
+    await markUserLogin(result.user.id, result.user.tenantSchema)
 
     return NextResponse.json(
       {
@@ -77,6 +87,11 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof Error) {
       switch (error.message) {
+        case "BILLING_VALIDATION_UNAVAILABLE":
+          return jsonError(503, {
+            code: "BILLING_VALIDATION_UNAVAILABLE",
+            error: "No fue posible validar el estado de suscripción. Intenta nuevamente en unos minutos.",
+          })
         case "PASSKEY_NOT_FOUND":
           return jsonError(404, {
             code: "PASSKEY_NOT_FOUND",

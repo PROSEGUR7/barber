@@ -1,21 +1,23 @@
 import { NextResponse } from "next/server"
 
 import {
-  findUserByEmail,
+  findUserByEmailAcrossChildTenants,
   markUserLogin,
   verifyPassword,
   type AuthUser,
 } from "@/lib/auth"
+import { validateTenantAccess } from "@/lib/admin-billing"
 import { pool } from "@/lib/db"
 
 type LoginBody = {
   email?: unknown
   password?: unknown
+  tenant?: unknown
 }
 
 function jsonError(
   status: number,
-  payload: { code: string; error: string; field?: string },
+  payload: { code: string; error: string; field?: string; [key: string]: unknown },
 ) {
   return NextResponse.json(
     {
@@ -34,11 +36,46 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
-async function hasPasskeys(userId: number): Promise<boolean> {
+function normalizeTenantHint(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const normalized = value.trim().toLowerCase()
+
+  if (!/^tenant_[a-z0-9_]+$/.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function tenantHintFromHost(host: string | null): string | null {
+  if (!host) {
+    return null
+  }
+
+  const hostname = host.split(":")[0]?.trim().toLowerCase()
+
+  if (!hostname) {
+    return null
+  }
+
+  const firstLabel = hostname.split(".")[0] ?? ""
+  return normalizeTenantHint(firstLabel)
+}
+
+async function hasPasskeys(userId: number, tenantSchema: string): Promise<boolean> {
+  if (!/^tenant_[a-z0-9_]+$/.test(tenantSchema)) {
+    return false
+  }
+
+  const passkeysTable = `"${tenantSchema.replace(/"/g, '""')}"."passkeys"`
+
   try {
     const result = await pool.query<{ exists: boolean }>(
       `SELECT EXISTS(
-         SELECT 1 FROM tenant_base.passkeys WHERE user_id = $1 LIMIT 1
+         SELECT 1 FROM ${passkeysTable} WHERE user_id = $1 LIMIT 1
        ) as exists`,
       [userId],
     )
@@ -63,6 +100,10 @@ export async function POST(request: Request) {
 
   const email = isNonEmptyString(body.email) ? body.email.trim().toLowerCase() : ""
   const password = typeof body.password === "string" ? body.password : ""
+  const preferredTenant =
+    normalizeTenantHint(body.tenant) ??
+    normalizeTenantHint(request.headers.get("x-tenant")) ??
+    tenantHintFromHost(request.headers.get("x-forwarded-host") ?? request.headers.get("host"))
 
   if (!email) {
     return jsonError(400, {
@@ -89,15 +130,17 @@ export async function POST(request: Request) {
   }
 
   try {
-    const userWithPassword = await findUserByEmail(email)
+    const tenantUserMatch = await findUserByEmailAcrossChildTenants(email, preferredTenant)
 
-    if (!userWithPassword) {
+    if (!tenantUserMatch) {
       return jsonError(401, {
         code: "USER_NOT_FOUND",
         error: "No existe una cuenta con ese correo.",
         field: "email",
       })
     }
+
+    const { user: userWithPassword, tenantSchema } = tenantUserMatch
 
     const passwordOk = await verifyPassword(password, userWithPassword.passwordHash)
 
@@ -109,7 +152,19 @@ export async function POST(request: Request) {
       })
     }
 
-    await markUserLogin(userWithPassword.id)
+    const tenantAccess = await validateTenantAccess({ tenantSchema })
+
+    if (!tenantAccess.allowed) {
+      return jsonError(403, {
+        code: "SUBSCRIPTION_BLOCKED",
+        error: tenantAccess.message,
+        subscriptionStatus: tenantAccess.status,
+        graceUntil: tenantAccess.graceUntil,
+        tenantId: tenantAccess.tenantId,
+      })
+    }
+
+    await markUserLogin(userWithPassword.id, tenantSchema)
 
     const authUser: AuthUser = {
       id: userWithPassword.id,
@@ -117,6 +172,7 @@ export async function POST(request: Request) {
       role: userWithPassword.role,
       lastLogin: userWithPassword.lastLogin,
       displayName: userWithPassword.displayName,
+      tenantSchema,
     }
 
     return NextResponse.json(
@@ -127,12 +183,20 @@ export async function POST(request: Request) {
           email: authUser.email,
           role: authUser.role,
           displayName: authUser.displayName ?? null,
-          hasPasskeys: await hasPasskeys(authUser.id),
+          hasPasskeys: await hasPasskeys(authUser.id, tenantSchema),
+          tenant: tenantSchema,
         },
       },
       { status: 200 },
     )
   } catch (error) {
+    if (error instanceof Error && error.message === "BILLING_VALIDATION_UNAVAILABLE") {
+      return jsonError(503, {
+        code: "BILLING_VALIDATION_UNAVAILABLE",
+        error: "No fue posible validar el estado de suscripción. Intenta nuevamente en unos minutos.",
+      })
+    }
+
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
       return jsonError(503, {
         code: "DATABASE_NOT_CONFIGURED",

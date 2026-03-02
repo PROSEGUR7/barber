@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getWompiBaseUrl, reconcileWompiTransaction } from "@/lib/wompi"
+import { registerTenantPaymentWithIdempotency } from "@/lib/admin-billing"
 
 export const runtime = "nodejs"
 
@@ -27,6 +28,16 @@ type WompiTransactionResponse = {
     currency?: string
     payment_method_type?: string
   }
+}
+
+function wompiMethodToAdminMethod(method: string | undefined): string {
+  const normalized = (method ?? "").trim().toUpperCase()
+
+  if (normalized === "CARD" || normalized === "PSE") return "tarjeta"
+  if (normalized === "NEQUI") return "nequi"
+  if (normalized === "DAVIPLATA") return "daviplata"
+
+  return "otro"
 }
 
 export async function GET() {
@@ -75,6 +86,29 @@ export async function POST(request: Request) {
       reconciliation = await reconcileWompiTransaction(transactionForReconciliation, {
         source: "webhook",
         eventName,
+      })
+    }
+
+    const normalizedStatus = (transactionForReconciliation?.status ?? "").trim().toUpperCase()
+    const amountInCents = transactionForReconciliation?.amount_in_cents
+    const paymentReference =
+      (typeof transactionForReconciliation?.id === "string" && transactionForReconciliation.id.trim()) ||
+      (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
+      ""
+
+    if (
+      normalizedStatus === "APPROVED" &&
+      typeof amountInCents === "number" &&
+      Number.isFinite(amountInCents) &&
+      amountInCents > 0 &&
+      paymentReference
+    ) {
+      await registerTenantPaymentWithIdempotency({
+        amount: amountInCents / 100,
+        currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
+        paymentMethod: wompiMethodToAdminMethod(transactionForReconciliation?.payment_method_type ?? undefined),
+        paymentProvider: "wompi",
+        externalReference: paymentReference,
       })
     }
 
