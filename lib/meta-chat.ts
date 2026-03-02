@@ -153,13 +153,13 @@ function conversationWhereSql(conversationId: string): { sql: string; params: st
 
   if (normalized.startsWith("unknown-")) {
     return {
-      sql: "COALESCE(NULLIF(trim(wa_id), ''), concat('unknown-', id::text)) = $1",
+      sql: "COALESCE(NULLIF(trim(wa_id), ''), concat('unknown-', id::text)) = $2::text",
       params: [normalized],
     }
   }
 
   return {
-    sql: "NULLIF(trim(wa_id), '') = $1",
+    sql: "NULLIF(trim(wa_id), '') = $2::text",
     params: [normalized],
   }
 }
