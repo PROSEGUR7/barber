@@ -139,6 +139,51 @@ export async function findUserByEmailAcrossChildTenants(
   return null
 }
 
+export async function findTenantSchemaByEmail(
+  email: string,
+  preferredTenantSchema?: string | null,
+): Promise<string | null> {
+  const normalizedPreferredTenant = normalizeTenantSchemaName(preferredTenantSchema)
+
+  if (normalizedPreferredTenant && normalizedPreferredTenant !== BASE_TENANT_SCHEMA) {
+    const usersTable = usersTableForTenant(normalizedPreferredTenant)
+    const preferredResult = await pool.query<{ id: number }>(
+      `SELECT id
+         FROM ${usersTable}
+        WHERE lower(correo) = lower($1)
+        LIMIT 1`,
+      [email],
+    )
+
+    if (preferredResult.rowCount > 0) {
+      return normalizedPreferredTenant
+    }
+  }
+
+  const childSchemas = await listChildTenantSchemas()
+
+  for (const schemaName of childSchemas) {
+    if (schemaName === normalizedPreferredTenant) {
+      continue
+    }
+
+    const usersTable = usersTableForTenant(schemaName)
+    const result = await pool.query<{ id: number }>(
+      `SELECT id
+         FROM ${usersTable}
+        WHERE lower(correo) = lower($1)
+        LIMIT 1`,
+      [email],
+    )
+
+    if (result.rowCount > 0) {
+      return schemaName
+    }
+  }
+
+  return null
+}
+
 export async function findUserByEmailAndRole(
   email: string,
   role: AppUserRole,
