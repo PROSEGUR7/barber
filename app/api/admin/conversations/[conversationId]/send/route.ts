@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { sendMessageToMeta } from "@/lib/meta-chat"
+import { resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -20,6 +21,7 @@ function jsonError(status: number, payload: { error: string; code?: string; deta
 
 export async function POST(request: Request, context: Params) {
   const { conversationId } = await context.params
+  const tenantSchema = resolveTenantSchemaFromRequest(request)
 
   try {
     const form = await request.formData()
@@ -32,6 +34,7 @@ export async function POST(request: Request, context: Params) {
     const contactName = typeof contactNameValue === "string" ? contactNameValue : null
 
     const result = await sendMessageToMeta({
+      tenantSchema,
       to: decodeURIComponent(conversationId),
       text,
       file,
@@ -53,6 +56,13 @@ export async function POST(request: Request, context: Params) {
       return jsonError(503, {
         code: detail,
         error: "Faltan variables de Meta para enviar mensajes.",
+      })
+    }
+
+    if (detail === "META_TENANT_CONFIG_MISSING") {
+      return jsonError(503, {
+        code: detail,
+        error: "No hay configuración de Meta activa para este tenant.",
       })
     }
 

@@ -1,4 +1,9 @@
 import { pool } from "@/lib/db"
+import {
+  ensureMetaTenantConfigTable,
+  getMetaConfigByTenantSchema,
+  normalizeTenantSchema,
+} from "@/lib/meta-tenant-config"
 
 export type ConversationSummary = {
   id: string
@@ -162,6 +167,7 @@ function conversationWhereSql(conversationId: string): { sql: string; params: st
 export async function ensureMetaWebhookTables() {
   if (!ensurePromise) {
     ensurePromise = (async () => {
+      await ensureMetaTenantConfigTable()
       await pool.query("SELECT pg_advisory_lock(hashtext('tenant_base.meta_webhook_messages_ddl'))")
 
       try {
@@ -172,6 +178,7 @@ export async function ensureMetaWebhookTables() {
         await pool.query(`
           CREATE TABLE IF NOT EXISTS tenant_base.meta_webhook_messages (
             id BIGINT PRIMARY KEY DEFAULT nextval('tenant_base.meta_webhook_messages_id_seq'::regclass),
+            tenant_schema TEXT NOT NULL DEFAULT 'tenant_base',
             wamid TEXT UNIQUE,
             phone_number_id TEXT,
             display_phone_number TEXT,
@@ -196,6 +203,7 @@ export async function ensureMetaWebhookTables() {
 
         await pool.query(`
           ALTER TABLE tenant_base.meta_webhook_messages
+          ADD COLUMN IF NOT EXISTS tenant_schema TEXT NOT NULL DEFAULT 'tenant_base',
           ADD COLUMN IF NOT EXISTS media_id TEXT,
           ADD COLUMN IF NOT EXISTS media_mime_type TEXT,
           ADD COLUMN IF NOT EXISTS media_caption TEXT,
@@ -207,18 +215,24 @@ export async function ensureMetaWebhookTables() {
         `)
 
         await pool.query(`
+          UPDATE tenant_base.meta_webhook_messages
+             SET tenant_schema = 'tenant_base'
+           WHERE tenant_schema IS NULL OR trim(tenant_schema) = ''
+        `)
+
+        await pool.query(`
           ALTER SEQUENCE tenant_base.meta_webhook_messages_id_seq
           OWNED BY tenant_base.meta_webhook_messages.id
         `)
 
         await pool.query(`
           CREATE INDEX IF NOT EXISTS meta_webhook_messages_wa_id_sent_idx
-            ON tenant_base.meta_webhook_messages (wa_id, sent_at DESC, id DESC)
+            ON tenant_base.meta_webhook_messages (tenant_schema, wa_id, sent_at DESC, id DESC)
         `)
 
         await pool.query(`
           CREATE INDEX IF NOT EXISTS meta_webhook_messages_unread_idx
-            ON tenant_base.meta_webhook_messages (wa_id, id)
+            ON tenant_base.meta_webhook_messages (tenant_schema, wa_id, id)
           WHERE direction = 'inbound' AND read_at IS NULL
         `)
       } finally {
@@ -233,8 +247,13 @@ export async function ensureMetaWebhookTables() {
   return ensurePromise
 }
 
-export async function getConversations(limit: number): Promise<{ conversations: ConversationSummary[]; phoneDisplay: string }> {
+export async function getConversations(
+  limit: number,
+  tenantSchemaRaw: string,
+): Promise<{ conversations: ConversationSummary[]; phoneDisplay: string }> {
   await ensureMetaWebhookTables()
+
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
 
   const result = await pool.query<ConversationRow>(
     `WITH base AS (
@@ -257,6 +276,7 @@ export async function getConversations(limit: number): Promise<{ conversations: 
          direction,
          read_at
        FROM tenant_base.meta_webhook_messages
+      WHERE tenant_schema = $1
      ),
      latest_per_contact AS (
        SELECT DISTINCT ON (conversation_id)
@@ -288,8 +308,8 @@ export async function getConversations(limit: number): Promise<{ conversations: 
      FROM latest_per_contact
      LEFT JOIN unread_counts ON unread_counts.conversation_id = latest_per_contact.conversation_id
      ORDER BY latest_per_contact.sent_at DESC NULLS LAST
-     LIMIT $1`,
-    [limit],
+     LIMIT $2`,
+    [tenantSchema, limit],
   )
 
   const conversations = result.rows.map((row) => {
@@ -314,8 +334,14 @@ export async function getConversations(limit: number): Promise<{ conversations: 
   return { conversations, phoneDisplay }
 }
 
-export async function getMessagesByConversation(conversationId: string, limit = 200): Promise<ConversationMessage[]> {
+export async function getMessagesByConversation(
+  conversationId: string,
+  limit = 200,
+  tenantSchemaRaw: string,
+): Promise<ConversationMessage[]> {
   await ensureMetaWebhookTables()
+
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
 
   const where = conversationWhereSql(conversationId)
   const result = await pool.query<MessageRow>(
@@ -333,10 +359,11 @@ export async function getMessagesByConversation(conversationId: string, limit = 
        status_error,
        sent_at::text
      FROM tenant_base.meta_webhook_messages
-     WHERE ${where.sql}
+     WHERE tenant_schema = $1
+       AND ${where.sql}
      ORDER BY sent_at ASC NULLS LAST, id ASC
-     LIMIT $2`,
-    [...where.params, limit],
+     LIMIT $3`,
+    [tenantSchema, ...where.params, limit],
   )
 
   return result.rows.map((row) => {
@@ -361,18 +388,21 @@ export async function getMessagesByConversation(conversationId: string, limit = 
   })
 }
 
-export async function markConversationAsRead(conversationId: string): Promise<number> {
+export async function markConversationAsRead(conversationId: string, tenantSchemaRaw: string): Promise<number> {
   await ensureMetaWebhookTables()
+
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
 
   const where = conversationWhereSql(conversationId)
   const result = await pool.query(
     `UPDATE tenant_base.meta_webhook_messages
         SET read_at = NOW(),
             updated_at = NOW()
-      WHERE ${where.sql}
+      WHERE tenant_schema = $1
+        AND ${where.sql}
         AND direction = 'inbound'
         AND read_at IS NULL`,
-    where.params,
+    [tenantSchema, ...where.params],
   )
 
   return result.rowCount ?? 0
@@ -388,21 +418,13 @@ type SendResult = {
   mediaFilename: string | null
 }
 
-function requiredEnv(name: string): string {
-  const value = process.env[name]?.trim()
-  if (!value) {
-    throw new Error(`${name}_MISSING`)
-  }
-  return value
-}
-
-function buildGraphUrl(path: string): string {
-  const version = process.env.META_GRAPH_VERSION?.trim() || "v22.0"
+function buildGraphUrl(path: string, graphVersion: string): string {
+  const version = graphVersion.trim() || "v22.0"
   return `https://graph.facebook.com/${version}/${path}`
 }
 
-async function graphRequest(path: string, init: RequestInit, token: string) {
-  const response = await fetch(buildGraphUrl(path), {
+async function graphRequest(path: string, init: RequestInit, token: string, graphVersion: string) {
+  const response = await fetch(buildGraphUrl(path, graphVersion), {
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -442,6 +464,7 @@ function inferMessageTypeFromMime(mimeType: string | null | undefined): "image" 
 }
 
 export async function sendMessageToMeta(params: {
+  tenantSchema: string
   to: string
   text?: string | null
   file?: File | null
@@ -449,8 +472,15 @@ export async function sendMessageToMeta(params: {
 }): Promise<SendResult> {
   await ensureMetaWebhookTables()
 
-  const accessToken = requiredEnv("META_ACCESS_TOKEN")
-  const phoneNumberId = requiredEnv("META_PHONE_NUMBER_ID")
+  const tenantSchema = normalizeTenantSchema(params.tenantSchema)
+  const config = await getMetaConfigByTenantSchema(tenantSchema)
+  if (!config) {
+    throw new Error("META_TENANT_CONFIG_MISSING")
+  }
+
+  const accessToken = config.metaAccessToken
+  const phoneNumberId = config.metaPhoneNumberId
+  const graphVersion = config.metaGraphVersion
 
   const to = params.to.trim()
   const text = params.text?.trim() ?? ""
@@ -478,7 +508,7 @@ export async function sendMessageToMeta(params: {
     const uploadPayload = (await graphRequest(`${phoneNumberId}/media`, {
       method: "POST",
       body: formData,
-    }, accessToken)) as { id?: string }
+    }, accessToken, graphVersion)) as { id?: string }
 
     if (!uploadPayload.id) {
       throw new Error("MEDIA_UPLOAD_FAILED")
@@ -531,7 +561,7 @@ export async function sendMessageToMeta(params: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
-  }, accessToken)) as {
+  }, accessToken, graphVersion)) as {
     messages?: Array<{ id?: string }>
   }
 
@@ -540,6 +570,7 @@ export async function sendMessageToMeta(params: {
 
   await pool.query(
     `INSERT INTO tenant_base.meta_webhook_messages (
+       tenant_schema,
        wamid,
        phone_number_id,
        wa_id,
@@ -557,12 +588,13 @@ export async function sendMessageToMeta(params: {
        raw_payload,
        updated_at
      ) VALUES (
-       $1,$2,$3,$4,'outbound',$5,$6,$7,$8,$9,$10,'sent',$11,NOW(),$12::jsonb,NOW()
+       $1,$2,$3,$4,$5,'outbound',$6,$7,$8,$9,$10,$11,'sent',$12,NOW(),$13::jsonb,NOW()
      )
      ON CONFLICT (wamid) DO UPDATE
      SET message_status = EXCLUDED.message_status,
          updated_at = NOW()`,
     [
+      tenantSchema,
       wamid,
       phoneNumberId,
       to,
@@ -589,12 +621,24 @@ export async function sendMessageToMeta(params: {
   }
 }
 
-export async function fetchMetaMedia(mediaId: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename?: string }> {
-  const accessToken = requiredEnv("META_ACCESS_TOKEN")
+export async function fetchMetaMedia(
+  mediaId: string,
+  tenantSchemaRaw: string,
+): Promise<{ buffer: ArrayBuffer; contentType: string; filename?: string }> {
+  await ensureMetaWebhookTables()
+
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
+  const config = await getMetaConfigByTenantSchema(tenantSchema)
+  if (!config) {
+    throw new Error("META_TENANT_CONFIG_MISSING")
+  }
+
+  const accessToken = config.metaAccessToken
+  const graphVersion = config.metaGraphVersion
 
   const metadata = (await graphRequest(mediaId, {
     method: "GET",
-  }, accessToken)) as {
+  }, accessToken, graphVersion)) as {
     url?: string
     mime_type?: string
     file_size?: number

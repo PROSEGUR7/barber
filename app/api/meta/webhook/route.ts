@@ -2,6 +2,11 @@ import { NextResponse } from "next/server"
 
 import { pool } from "@/lib/db"
 import { ensureMetaWebhookTables } from "@/lib/meta-chat"
+import {
+  getMetaConfigByPhoneNumberId,
+  getMetaConfigByVerifyToken,
+  normalizeTenantSchema,
+} from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -80,9 +85,7 @@ function getMessagePayload(message: MetaMessage): {
       mediaCaption: message.image?.caption?.trim() || null,
       mediaFilename: null,
       type,
-    }
-  }
-
+       ON CONFLICT (wamid) DO UPDATE
   if (type === "audio") {
     return {
       text: null,
@@ -93,7 +96,8 @@ function getMessagePayload(message: MetaMessage): {
       type,
     }
   }
-
+         updated_at = NOW()
+       WHERE tenant_base.meta_webhook_messages.tenant_schema = EXCLUDED.tenant_schema`,
   if (type === "document") {
     return {
       text: message.document?.caption?.trim() || null,
@@ -127,24 +131,17 @@ function getMessagePayload(message: MetaMessage): {
 }
 
 export async function GET(request: Request) {
-  const verifyToken = process.env.META_VERIFY_TOKEN?.trim()
-
-  if (!verifyToken) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "META_VERIFY_TOKEN no está configurado en el servidor.",
-      },
-      { status: 503 },
-    )
-  }
-
   const { searchParams } = new URL(request.url)
   const mode = searchParams.get("hub.mode")
   const token = searchParams.get("hub.verify_token")
   const challenge = searchParams.get("hub.challenge")
 
-  if (mode === "subscribe" && token === verifyToken && challenge) {
+  const requestedToken = token?.trim() ?? ""
+  const configFromTable = requestedToken ? await getMetaConfigByVerifyToken(requestedToken) : null
+  const fallbackVerifyToken = process.env.META_VERIFY_TOKEN?.trim() ?? ""
+  const validByFallback = requestedToken && fallbackVerifyToken && requestedToken === fallbackVerifyToken
+
+  if (mode === "subscribe" && challenge && (Boolean(configFromTable) || Boolean(validByFallback))) {
     return new NextResponse(challenge, {
       status: 200,
       headers: { "Content-Type": "text/plain" },
@@ -184,6 +181,24 @@ export async function POST(request: Request) {
 
         const value = change.value
         const metadata = value?.metadata
+        const phoneNumberId = metadata?.phone_number_id?.trim() || ""
+        const configByPhone = phoneNumberId ? await getMetaConfigByPhoneNumberId(phoneNumberId) : null
+        const fallbackPhoneId = process.env.META_PHONE_NUMBER_ID?.trim() ?? ""
+        const fallbackTenantSchema = normalizeTenantSchema(process.env.DEFAULT_TENANT_SCHEMA ?? "tenant_base")
+
+        const tenantSchema = configByPhone
+          ? configByPhone.tenantSchema
+          : phoneNumberId && fallbackPhoneId && phoneNumberId === fallbackPhoneId
+            ? fallbackTenantSchema
+            : null
+
+        if (!tenantSchema) {
+          console.warn("Meta webhook ignorado: phone_number_id sin configuración tenant", {
+            phoneNumberId: phoneNumberId || null,
+          })
+          continue
+        }
+
         const contact = value?.contacts?.[0]
         const messages = Array.isArray(value?.messages) ? value.messages : []
         const statuses = Array.isArray(value?.statuses) ? value.statuses : []
@@ -196,6 +211,7 @@ export async function POST(request: Request) {
 
           await pool.query(
             `INSERT INTO tenant_base.meta_webhook_messages (
+               tenant_schema,
                wamid,
                phone_number_id,
                display_phone_number,
@@ -212,20 +228,23 @@ export async function POST(request: Request) {
                raw_payload,
                updated_at
              )
-             VALUES ($1,$2,$3,$4,$5,'inbound',$6,$7,$8,$9,$10,$11,$12,$13::jsonb,NOW())
+             VALUES ($1,$2,$3,$4,$5,$6,'inbound',$7,$8,$9,$10,$11,$12,$13,$14::jsonb,NOW())
              ON CONFLICT (wamid) DO UPDATE
-            SET wa_id = COALESCE(EXCLUDED.wa_id, tenant_base.meta_webhook_messages.wa_id),
-              contact_name = COALESCE(EXCLUDED.contact_name, tenant_base.meta_webhook_messages.contact_name),
-              message_type = COALESCE(EXCLUDED.message_type, tenant_base.meta_webhook_messages.message_type),
-              message_text = COALESCE(EXCLUDED.message_text, tenant_base.meta_webhook_messages.message_text),
-              media_id = COALESCE(EXCLUDED.media_id, tenant_base.meta_webhook_messages.media_id),
-              media_mime_type = COALESCE(EXCLUDED.media_mime_type, tenant_base.meta_webhook_messages.media_mime_type),
-              media_caption = COALESCE(EXCLUDED.media_caption, tenant_base.meta_webhook_messages.media_caption),
-              media_filename = COALESCE(EXCLUDED.media_filename, tenant_base.meta_webhook_messages.media_filename),
-              sent_at = COALESCE(EXCLUDED.sent_at, tenant_base.meta_webhook_messages.sent_at),
-              raw_payload = EXCLUDED.raw_payload,
-              updated_at = NOW()`,
+             WHERE tenant_base.meta_webhook_messages.tenant_schema = EXCLUDED.tenant_schema
+             DO UPDATE
+               SET wa_id = COALESCE(EXCLUDED.wa_id, tenant_base.meta_webhook_messages.wa_id),
+                   contact_name = COALESCE(EXCLUDED.contact_name, tenant_base.meta_webhook_messages.contact_name),
+                   message_type = COALESCE(EXCLUDED.message_type, tenant_base.meta_webhook_messages.message_type),
+                   message_text = COALESCE(EXCLUDED.message_text, tenant_base.meta_webhook_messages.message_text),
+                   media_id = COALESCE(EXCLUDED.media_id, tenant_base.meta_webhook_messages.media_id),
+                   media_mime_type = COALESCE(EXCLUDED.media_mime_type, tenant_base.meta_webhook_messages.media_mime_type),
+                   media_caption = COALESCE(EXCLUDED.media_caption, tenant_base.meta_webhook_messages.media_caption),
+                   media_filename = COALESCE(EXCLUDED.media_filename, tenant_base.meta_webhook_messages.media_filename),
+                   sent_at = COALESCE(EXCLUDED.sent_at, tenant_base.meta_webhook_messages.sent_at),
+                   raw_payload = EXCLUDED.raw_payload,
+                   updated_at = NOW()`,
             [
+              tenantSchema,
               message.id?.trim() || null,
               metadata?.phone_number_id?.trim() || null,
               metadata?.display_phone_number?.trim() || null,
@@ -261,12 +280,14 @@ export async function POST(request: Request) {
                      status_error = COALESCE($3, status_error),
                      read_at = COALESCE($4::timestamptz, read_at),
                      updated_at = NOW()
-              WHERE wamid = $1`,
+              WHERE wamid = $1
+                AND tenant_schema = $5`,
              [
               wamid,
                statusValue,
                statusError,
                readAt,
+               tenantSchema,
              ],
            )
 

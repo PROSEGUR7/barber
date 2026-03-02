@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { fetchMetaMedia } from "@/lib/meta-chat"
+import { resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -8,11 +9,12 @@ type Params = {
   params: Promise<{ mediaId: string }>
 }
 
-export async function GET(_: Request, context: Params) {
+export async function GET(request: Request, context: Params) {
   const { mediaId } = await context.params
+  const tenantSchema = resolveTenantSchemaFromRequest(request)
 
   try {
-    const media = await fetchMetaMedia(decodeURIComponent(mediaId))
+    const media = await fetchMetaMedia(decodeURIComponent(mediaId), tenantSchema)
 
     return new NextResponse(media.buffer, {
       status: 200,
