@@ -64,8 +64,9 @@ export async function POST(request: Request) {
 
     if (!tenantAccess.allowed) {
       return jsonError(403, {
-        code: "SUBSCRIPTION_BLOCKED",
+        code: tenantAccess.code,
         error: tenantAccess.message,
+        reason: tenantAccess.reason,
       })
     }
 

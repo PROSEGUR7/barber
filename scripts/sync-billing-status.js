@@ -2,6 +2,7 @@
 
 const fs = require("fs")
 const path = require("path")
+const { Client } = require("pg")
 
 function loadDotEnvLocal() {
   const envPath = path.join(process.cwd(), ".env.local")
@@ -27,61 +28,38 @@ function loadDotEnvLocal() {
 }
 
 function getConfig() {
-  const baseUrl =
-    process.env.ADMIN_BILLING_BASE_URL ||
-    process.env.ADMIN_API_BASE_URL ||
-    process.env.ADMIN_BASE_URL ||
-    ""
-  const serviceToken =
-    process.env.ADMIN_BILLING_SERVICE_TOKEN ||
-    process.env.ADMIN_SERVICE_TOKEN ||
-    process.env.ADMIN_API_KEY ||
-    ""
-  const tokenHeader = process.env.ADMIN_BILLING_SERVICE_TOKEN_HEADER || "x-service-token"
-  const syncPath = process.env.ADMIN_BILLING_SYNC_STATUS_PATH || "/api/billing/sync-status"
+  const connectionString = process.env.DATABASE_URL || ""
 
-  if (!baseUrl) {
-    throw new Error("Falta ADMIN_BILLING_BASE_URL (o ADMIN_API_BASE_URL / ADMIN_BASE_URL)")
+  if (!connectionString) {
+    throw new Error("Falta DATABASE_URL")
   }
 
-  if (!serviceToken) {
-    throw new Error("Falta ADMIN_BILLING_SERVICE_TOKEN (o ADMIN_SERVICE_TOKEN / ADMIN_API_KEY)")
-  }
-
-  return {
-    baseUrl: baseUrl.replace(/\/$/, ""),
-    serviceToken,
-    tokenHeader,
-    syncPath: syncPath.startsWith("/") ? syncPath : `/${syncPath}`,
-  }
+  return { connectionString }
 }
 
 async function main() {
   loadDotEnvLocal()
   const config = getConfig()
-
-  const response = await fetch(`${config.baseUrl}${config.syncPath}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      [config.tokenHeader]: config.serviceToken,
+  const client = new Client({
+    connectionString: config.connectionString,
+    ssl: {
+      rejectUnauthorized: false,
     },
-    body: JSON.stringify({}),
   })
 
-  const payload = await response.json().catch(() => ({}))
+  await client.connect()
 
-  if (!response.ok) {
-    console.error("[billing:sync-status] Error", {
-      status: response.status,
-      payload,
+  try {
+    const result = await client.query("SELECT * FROM admin_platform.sincronizar_estado_suscripciones_tenants()")
+    console.log("[billing:sync-status] OK", result.rows[0] || {
+      total_actualizados: 0,
+      a_past_due: 0,
+      a_unpaid: 0,
+      a_paused: 0,
     })
-    process.exitCode = 1
-    return
+  } finally {
+    await client.end()
   }
-
-  console.log("[billing:sync-status] OK", payload)
 }
 
 main().catch((error) => {
