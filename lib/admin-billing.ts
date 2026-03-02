@@ -91,6 +91,48 @@ function resolveTenantId(tenantSchema?: string | null, explicitTenantId?: number
   return parseTenantId(suffixMatch[1])
 }
 
+async function resolveTenantIdFromSchema(tenantSchema?: string | null): Promise<number | null> {
+  const normalizedSchema = resolveTenantSchema(tenantSchema)
+
+  if (!TENANT_SCHEMA_PATTERN.test(normalizedSchema)) {
+    return null
+  }
+
+  try {
+    const result = await pool.query<TenantIdBySchemaRow>(
+      `SELECT id
+         FROM admin_platform.tenants
+        WHERE lower(trim(esquema)) = lower($1)
+        LIMIT 1`,
+      [normalizedSchema],
+    )
+
+    if (result.rowCount === 0) {
+      return null
+    }
+
+    return result.rows[0].id
+  } catch (error) {
+    console.warn("Failed to resolve tenant id by schema", {
+      tenantSchema: normalizedSchema,
+      error,
+    })
+    return null
+  }
+}
+
+async function resolveTenantIdWithFallback(
+  tenantSchema?: string | null,
+  explicitTenantId?: number | null,
+): Promise<number | null> {
+  const directTenantId = resolveTenantId(tenantSchema, explicitTenantId)
+  if (directTenantId) {
+    return directTenantId
+  }
+
+  return resolveTenantIdFromSchema(tenantSchema)
+}
+
 function shouldFailOpenOnBillingErrors() {
   const fromEnv = (process.env.ADMIN_BILLING_FAIL_OPEN ?? "").trim().toLowerCase()
   if (fromEnv === "true") {
@@ -123,6 +165,10 @@ type RegisterTenantPaymentRow = {
 }
 
 type ExistingPaymentRow = {
+  id: number
+}
+
+type TenantIdBySchemaRow = {
   id: number
 }
 
@@ -191,6 +237,8 @@ export async function validateTenantAccess(options: {
   tenantSchema?: string | null
   tenantId?: number | null
 }): Promise<TenantAccessDecision> {
+  const tenantId = await resolveTenantIdWithFallback(options.tenantSchema, options.tenantId)
+
   if (isBillingEnforcementDisabled()) {
     return {
       allowed: true,
@@ -199,11 +247,9 @@ export async function validateTenantAccess(options: {
       message: "Validación de billing deshabilitada por configuración.",
       status: null,
       graceUntil: null,
-      tenantId: resolveTenantId(options.tenantSchema, options.tenantId),
+      tenantId,
     }
   }
-
-  const tenantId = resolveTenantId(options.tenantSchema, options.tenantId)
 
   if (!tenantId) {
     const failOpen = shouldFailOpenOnBillingErrors()
@@ -301,7 +347,7 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
     throw new Error("ADMIN_BILLING_REFERENCE_REQUIRED")
   }
 
-  const tenantId = resolveTenantId(input.tenantSchema, input.tenantId)
+  const tenantId = await resolveTenantIdWithFallback(input.tenantSchema, input.tenantId)
 
   if (!tenantId) {
     throw new Error("ADMIN_BILLING_TENANT_ID_REQUIRED")
