@@ -503,8 +503,10 @@ export async function resolveTenantBillingChargeContext(options?: {
     }
   }
 
-  const billingCycle = normalizeBillingCycle(effectiveRow.subscription_cycle ?? requestedCycle)
   const explicitPlanOrCycleRequested = Boolean(requestedPlanCode) || hasRequestedBillingCycle
+  const billingCycle = explicitPlanOrCycleRequested
+    ? requestedCycle
+    : normalizeBillingCycle(effectiveRow.subscription_cycle)
   const amountFromSelectedPlan = pickAmountByCycle(effectiveRow, billingCycle)
   const amountFromCurrentSubscription = parseNumericAmount(effectiveRow.subscription_amount)
 
