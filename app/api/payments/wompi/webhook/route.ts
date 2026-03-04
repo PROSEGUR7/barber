@@ -162,6 +162,7 @@ export async function POST(request: Request) {
           paymentProvider: "wompi",
           externalReference: paymentReference,
           billingCycle: billingContext.billingCycle,
+          requestedPlanCode: parsedReference.planCode,
         })
 
         billingRegistration.registered = result.ok && !result.skipped

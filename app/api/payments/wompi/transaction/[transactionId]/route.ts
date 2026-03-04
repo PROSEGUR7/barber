@@ -96,6 +96,7 @@ export async function GET(_: Request, context: Params) {
           paymentProvider: "wompi",
           externalReference: paymentReference,
           billingCycle: billingContext.billingCycle,
+          requestedPlanCode: parsedReference.planCode,
         })
 
         billingRegistration.registered = result.ok && !result.skipped

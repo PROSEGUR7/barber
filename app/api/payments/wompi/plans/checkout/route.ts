@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { resolveTenantBillingChargeContext } from "@/lib/admin-billing"
+import { isPlanChangeBillingEnabled, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 import { findTenantSchemaByEmail } from "@/lib/auth"
 import { createWompiCheckoutDataForSaasPlan } from "@/lib/wompi"
 
@@ -69,16 +69,19 @@ export async function POST(request: Request) {
     const currentPlanCode = billingContext.currentSubscriptionPlanCode?.trim().toLowerCase() ?? null
 
     if (currentPlanCode && normalizedRequestedPlan !== currentPlanCode) {
-      return NextResponse.json(
-        {
-          error:
-            "El cambio de plan aún no está habilitado en billing. Solo puedes pagar tu plan actual desde esta pantalla.",
-          code: "PLAN_CHANGE_NOT_SUPPORTED",
-          currentPlanCode,
-          requestedPlanCode: normalizedRequestedPlan,
-        },
-        { status: 409 },
-      )
+      const planChangeEnabled = await isPlanChangeBillingEnabled()
+      if (!planChangeEnabled) {
+        return NextResponse.json(
+          {
+            error:
+              "El cambio de plan aún no está habilitado en billing. Debes aplicar la función SQL registrar_pago_tenant_con_plan.",
+            code: "PLAN_CHANGE_NOT_SUPPORTED",
+            currentPlanCode,
+            requestedPlanCode: normalizedRequestedPlan,
+          },
+          { status: 409 },
+        )
+      }
     }
 
     const wompiCheckout = await createWompiCheckoutDataForSaasPlan({
