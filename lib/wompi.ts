@@ -346,6 +346,17 @@ async function getAcceptanceTokens(publicKey: string): Promise<{
   if (!response.ok) {
     const error = new Error("WOMPI_MERCHANT_UNAVAILABLE")
     ;(error as { code?: string }).code = "WOMPI_MERCHANT_UNAVAILABLE"
+    ;(error as { meta?: unknown }).meta = {
+      status: response.status,
+      statusText: response.statusText,
+      publicKeyPrefix: publicKey.slice(0, 12),
+      wompiMessage:
+        typeof (payload as { error?: unknown }).error === "object" &&
+        (payload as { error?: unknown }).error !== null &&
+        "messages" in ((payload as { error?: unknown }).error as Record<string, unknown>)
+          ? ((payload as { error: { messages?: unknown } }).error.messages ?? null)
+          : null,
+    }
     throw error
   }
 
@@ -353,6 +364,10 @@ async function getAcceptanceTokens(publicKey: string): Promise<{
   if (!token) {
     const error = new Error("WOMPI_ACCEPTANCE_TOKEN_MISSING")
     ;(error as { code?: string }).code = "WOMPI_ACCEPTANCE_TOKEN_MISSING"
+    ;(error as { meta?: unknown }).meta = {
+      status: response.status,
+      publicKeyPrefix: publicKey.slice(0, 12),
+    }
     throw error
   }
 

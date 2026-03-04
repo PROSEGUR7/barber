@@ -122,8 +122,32 @@ export async function POST(request: Request) {
     }
 
     if (code === "WOMPI_MERCHANT_UNAVAILABLE" || code === "WOMPI_ACCEPTANCE_TOKEN_MISSING") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as {
+              meta?: {
+                status?: number
+                statusText?: string
+                publicKeyPrefix?: string
+                wompiMessage?: unknown
+              }
+            }).meta ?? null)
+          : null
+
       return NextResponse.json(
-        { error: "No pudimos inicializar el checkout de Wompi. Intenta nuevamente." },
+        {
+          error: "No pudimos inicializar el checkout de Wompi. Intenta nuevamente.",
+          debug: {
+            upstreamStatus: meta?.status ?? null,
+            upstreamStatusText: meta?.statusText ?? null,
+            publicKeyPrefix: meta?.publicKeyPrefix ?? null,
+            wompiMessage: meta?.wompiMessage ?? null,
+          },
+        },
         { status: 502 },
       )
     }
