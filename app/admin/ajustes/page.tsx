@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { Settings2 } from "lucide-react"
+import { useTheme } from "next-themes"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -11,6 +12,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Label } from "@/components/ui/label"
 import {
   Sheet,
   SheetContent,
@@ -19,6 +21,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { AdminSettingsSummary, AdminUserSettings } from "@/lib/admin"
 import { formatCurrency, formatDateTime, formatNumber } from "@/lib/formatters"
@@ -34,6 +37,30 @@ type AdminUserResponse = {
   error?: string
 }
 
+type ProfileRole = "client" | "barber" | "admin"
+type ThemeMode = "light" | "dark" | "system"
+
+type ProfilePayload = {
+  id: number
+  email: string
+  role: ProfileRole
+  name: string
+  phone: string
+  lastLogin: string | null
+}
+
+type ProfileResponse = {
+  profile?: ProfilePayload
+  error?: string
+}
+
+type Preferences = {
+  themeMode: ThemeMode
+  notifyWhatsapp: boolean
+  notifyEmail: boolean
+  notifySms: boolean
+}
+
 const EMPTY_SUMMARY: AdminSettingsSummary = {
   totalAdminUsers: 0,
   totalEmployees: 0,
@@ -43,6 +70,29 @@ const EMPTY_SUMMARY: AdminSettingsSummary = {
   totalAppointments: 0,
   totalPayments: 0,
   totalPaymentsAmount: 0,
+}
+
+const DEFAULT_PREFERENCES: Preferences = {
+  themeMode: "system",
+  notifyWhatsapp: true,
+  notifyEmail: true,
+  notifySms: false,
+}
+
+function getPreferencesKey(email: string) {
+  return `profilePreferences:${email.toLowerCase()}`
+}
+
+function getRoleLabel(role: ProfileRole) {
+  if (role === "admin") {
+    return "Administrador"
+  }
+
+  if (role === "barber") {
+    return "Peluquero"
+  }
+
+  return "Cliente"
 }
 
 function normalizeStatus(status: string | null): string {
@@ -70,6 +120,22 @@ function getStatusVariant(status: string | null): "default" | "secondary" | "out
 }
 
 export default function AdminAjustesPage() {
+  const { setTheme } = useTheme()
+
+  const [isProfileLoading, setIsProfileLoading] = useState(true)
+  const [profileError, setProfileError] = useState<string | null>(null)
+  const [currentEmail, setCurrentEmail] = useState("")
+  const [role, setRole] = useState<ProfileRole>("admin")
+  const [lastLogin, setLastLogin] = useState<string | null>(null)
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [phone, setPhone] = useState("")
+  const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false)
+  const [profileFeedback, setProfileFeedback] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null)
+  const [settingsView, setSettingsView] = useState<"personal" | "platform">("personal")
+
   const [summary, setSummary] = useState<AdminSettingsSummary>(EMPTY_SUMMARY)
   const [adminUsers, setAdminUsers] = useState<AdminUserSettings[]>([])
   const [areSettingsLoading, setAreSettingsLoading] = useState(true)
@@ -84,6 +150,107 @@ export default function AdminAjustesPage() {
   const sortedAdmins = useMemo(() => {
     return [...adminUsers].sort((a, b) => a.email.localeCompare(b.email, "es", { sensitivity: "base" }))
   }, [adminUsers])
+
+  const roleLabel = useMemo(() => getRoleLabel(role), [role])
+
+  const loadProfileSettings = useCallback(async () => {
+    setIsProfileLoading(true)
+    setProfileError(null)
+    setProfileFeedback(null)
+
+    try {
+      const storedEmail = typeof window !== "undefined" ? localStorage.getItem("userEmail")?.trim() ?? "" : ""
+      const storedDisplayName = typeof window !== "undefined" ? localStorage.getItem("userDisplayName")?.trim() ?? "" : ""
+      const tenantSchema = typeof window !== "undefined" ? localStorage.getItem("tenantSchema")?.trim() ?? localStorage.getItem("userTenant")?.trim() ?? "" : ""
+
+      if (!storedEmail) {
+        setProfileError("No encontramos tu sesión para cargar la configuración personal.")
+        return
+      }
+
+      const query = new URLSearchParams({ email: storedEmail })
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+
+      const response = await fetch(`/api/profile?${query.toString()}`, {
+        cache: "no-store",
+      })
+
+      const data: ProfileResponse = await response.json().catch(() => ({}))
+
+      if (!response.ok || !data.profile) {
+        if (response.status === 404) {
+          const fallbackName = storedDisplayName || storedEmail.split("@")[0] || "Administrador"
+
+          setCurrentEmail(storedEmail)
+          setRole("admin")
+          setLastLogin(null)
+          setName(fallbackName)
+          setEmail(storedEmail)
+          setPhone("")
+          setProfileError(null)
+          setProfileFeedback({
+            type: "info",
+            message: "No encontramos tu perfil en la base tenant. Mostramos datos de sesión para que puedas continuar.",
+          })
+
+          const fallbackPreferencesRaw = localStorage.getItem(getPreferencesKey(storedEmail))
+          if (fallbackPreferencesRaw) {
+            const parsed = JSON.parse(fallbackPreferencesRaw) as Partial<Preferences>
+            setPreferences({
+              themeMode:
+                parsed.themeMode === "dark" || parsed.themeMode === "light" || parsed.themeMode === "system"
+                  ? parsed.themeMode
+                  : DEFAULT_PREFERENCES.themeMode,
+              notifyWhatsapp: parsed.notifyWhatsapp ?? DEFAULT_PREFERENCES.notifyWhatsapp,
+              notifyEmail: parsed.notifyEmail ?? DEFAULT_PREFERENCES.notifyEmail,
+              notifySms: parsed.notifySms ?? DEFAULT_PREFERENCES.notifySms,
+            })
+          } else {
+            setPreferences(DEFAULT_PREFERENCES)
+          }
+
+          return
+        }
+
+        throw new Error(data.error ?? "No se pudo cargar el perfil")
+      }
+
+      const profile = data.profile
+      setCurrentEmail(profile.email)
+      setRole(profile.role)
+      setLastLogin(profile.lastLogin)
+      setName(profile.name)
+      setEmail(profile.email)
+      setPhone(profile.phone)
+
+      localStorage.setItem("userEmail", profile.email)
+      localStorage.setItem("userDisplayName", profile.name)
+
+      const rawPreferences = localStorage.getItem(getPreferencesKey(profile.email))
+
+      if (rawPreferences) {
+        const parsed = JSON.parse(rawPreferences) as Partial<Preferences>
+        setPreferences({
+          themeMode:
+            parsed.themeMode === "dark" || parsed.themeMode === "light" || parsed.themeMode === "system"
+              ? parsed.themeMode
+              : DEFAULT_PREFERENCES.themeMode,
+          notifyWhatsapp: parsed.notifyWhatsapp ?? DEFAULT_PREFERENCES.notifyWhatsapp,
+          notifyEmail: parsed.notifyEmail ?? DEFAULT_PREFERENCES.notifyEmail,
+          notifySms: parsed.notifySms ?? DEFAULT_PREFERENCES.notifySms,
+        })
+      } else {
+        setPreferences(DEFAULT_PREFERENCES)
+      }
+    } catch (error) {
+      console.error("Error loading profile settings", error)
+      setProfileError("No se pudo cargar tu configuración personal.")
+    } finally {
+      setIsProfileLoading(false)
+    }
+  }, [])
 
   const loadSettings = useCallback(
     async (signal?: AbortSignal) => {
@@ -126,6 +293,10 @@ export default function AdminAjustesPage() {
   }, [loadSettings])
 
   useEffect(() => {
+    void loadProfileSettings()
+  }, [loadProfileSettings])
+
+  useEffect(() => {
     if (!isEditOpen) {
       setEditingAdmin(null)
       setEditEmail("")
@@ -137,6 +308,110 @@ export default function AdminAjustesPage() {
   const handleReload = useCallback(() => {
     void loadSettings()
   }, [loadSettings])
+
+  const handleProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setProfileFeedback(null)
+
+    const sanitizedEmail = email.trim().toLowerCase()
+    const sanitizedName = name.trim()
+    const sanitizedPhone = phone.trim()
+    const tenantSchema = typeof window !== "undefined" ? localStorage.getItem("tenantSchema")?.trim() ?? localStorage.getItem("userTenant")?.trim() ?? "" : ""
+
+    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
+      setProfileFeedback({ type: "error", message: "Ingresa un correo válido para guardar tu perfil." })
+      return
+    }
+
+    if (!sanitizedName) {
+      setProfileFeedback({ type: "error", message: "El nombre es obligatorio." })
+      return
+    }
+
+    if (!currentEmail) {
+      setProfileFeedback({ type: "error", message: "No encontramos tu sesión actual para guardar cambios." })
+      return
+    }
+
+    setIsSavingProfile(true)
+
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          currentEmail,
+          email: sanitizedEmail,
+          name: sanitizedName,
+          phone: sanitizedPhone,
+          tenantSchema,
+        }),
+      })
+
+      const data: ProfileResponse = await response.json().catch(() => ({}))
+
+      if (!response.ok || !data.profile) {
+        setProfileFeedback({ type: "error", message: data.error ?? "No se pudo actualizar tu perfil." })
+        return
+      }
+
+      const updated = data.profile
+      const previousEmail = currentEmail
+
+      setCurrentEmail(updated.email)
+      setRole(updated.role)
+      setLastLogin(updated.lastLogin)
+      setName(updated.name)
+      setEmail(updated.email)
+      setPhone(updated.phone)
+
+      localStorage.setItem("userEmail", updated.email)
+      localStorage.setItem("userDisplayName", updated.name)
+
+      if (previousEmail && previousEmail !== updated.email) {
+        const previousKey = getPreferencesKey(previousEmail)
+        const nextKey = getPreferencesKey(updated.email)
+        const previousPreferences = localStorage.getItem(previousKey)
+
+        if (previousPreferences) {
+          localStorage.setItem(nextKey, previousPreferences)
+          localStorage.removeItem(previousKey)
+        }
+      }
+
+      setProfileFeedback({ type: "success", message: "Configuración personal actualizada correctamente." })
+    } catch (error) {
+      console.error("Error updating profile", error)
+      setProfileFeedback({ type: "error", message: "No fue posible guardar tu configuración personal." })
+    } finally {
+      setIsSavingProfile(false)
+    }
+  }
+
+  const handlePreferencesSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setProfileFeedback(null)
+
+    if (!currentEmail) {
+      setProfileFeedback({ type: "error", message: "No encontramos tu sesión para guardar preferencias." })
+      return
+    }
+
+    setIsSavingPreferences(true)
+
+    try {
+      localStorage.setItem(getPreferencesKey(currentEmail), JSON.stringify(preferences))
+      setTheme(preferences.themeMode)
+      setProfileFeedback({ type: "success", message: "Preferencias personales guardadas." })
+    } catch (error) {
+      console.error("Error saving preferences", error)
+      setProfileFeedback({ type: "error", message: "No fue posible guardar tus preferencias." })
+    } finally {
+      setIsSavingPreferences(false)
+    }
+  }
 
   const handleOpenEdit = (adminUser: AdminUserSettings) => {
     setEditingAdmin(adminUser)
@@ -197,13 +472,224 @@ export default function AdminAjustesPage() {
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
         <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Ajustes de la plataforma</h1>
+          <h1 className="text-3xl font-bold">Ajustes</h1>
           <p className="text-muted-foreground">
-            Configura preferencias generales, permisos del equipo y personalización de la marca.
+            Configura en una sola vista tus ajustes personales y la administración de plataforma.
           </p>
+          <div className="inline-flex rounded-lg border bg-background p-1">
+            <Button
+              type="button"
+              variant={settingsView === "personal" ? "default" : "ghost"}
+              className="h-8 px-4 text-sm"
+              onClick={() => setSettingsView("personal")}
+            >
+              Personal
+            </Button>
+            <Button
+              type="button"
+              variant={settingsView === "platform" ? "default" : "ghost"}
+              className="h-8 px-4 text-sm"
+              onClick={() => setSettingsView("platform")}
+            >
+              Administración
+            </Button>
+          </div>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {settingsView === "personal" && (
+        <section className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="text-2xl font-semibold">Configuración personal</h2>
+            <p className="text-sm text-muted-foreground">
+              Gestiona tus datos de perfil y preferencias. Rol actual: {roleLabel}.
+              {" "}
+              Último acceso: {lastLogin ? formatDateTime(lastLogin) : "Sin registro"}.
+            </p>
+          </div>
+
+          {profileFeedback && (
+            <Alert variant={profileFeedback.type === "error" ? "destructive" : "default"}>
+              <AlertTitle>
+                {profileFeedback.type === "error"
+                  ? "No se pudo guardar"
+                  : profileFeedback.type === "success"
+                    ? "Cambios guardados"
+                    : "Información"}
+              </AlertTitle>
+              <AlertDescription>{profileFeedback.message}</AlertDescription>
+            </Alert>
+          )}
+
+          {isProfileLoading ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Cargando configuración personal</CardTitle>
+                <CardDescription>Espera un momento mientras obtenemos tus datos.</CardDescription>
+              </CardHeader>
+            </Card>
+          ) : profileError ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>No se pudo cargar la configuración personal</CardTitle>
+                <CardDescription>{profileError}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" onClick={() => void loadProfileSettings()}>
+                  Reintentar
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card>
+                <form onSubmit={handleProfileSubmit}>
+                  <CardHeader>
+                    <CardTitle>Datos personales</CardTitle>
+                    <CardDescription>Actualiza tu nombre, teléfono y correo de acceso.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="admin-profile-name">Nombre completo</Label>
+                      <Input
+                        id="admin-profile-name"
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="Tu nombre"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="admin-profile-phone">Teléfono</Label>
+                      <Input
+                        id="admin-profile-phone"
+                        value={phone}
+                        onChange={(event) => setPhone(event.target.value)}
+                        placeholder="Tu teléfono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="admin-profile-email">Correo electrónico</Label>
+                      <Input
+                        id="admin-profile-email"
+                        type="email"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        placeholder="tucorreo@dominio.com"
+                        required
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <Button type="submit" disabled={isSavingProfile}>
+                        {isSavingProfile ? "Guardando..." : "Guardar perfil"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </form>
+              </Card>
+
+              <Card>
+                <form onSubmit={handlePreferencesSubmit}>
+                  <CardHeader>
+                    <CardTitle>Preferencias</CardTitle>
+                    <CardDescription>Personaliza tema y notificaciones de tu cuenta.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Tema</Label>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <Button
+                          type="button"
+                          variant={preferences.themeMode === "light" ? "default" : "outline"}
+                          onClick={() =>
+                            setPreferences((previous) => ({
+                              ...previous,
+                              themeMode: "light",
+                            }))
+                          }
+                        >
+                          Claro
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={preferences.themeMode === "dark" ? "default" : "outline"}
+                          onClick={() =>
+                            setPreferences((previous) => ({
+                              ...previous,
+                              themeMode: "dark",
+                            }))
+                          }
+                        >
+                          Oscuro
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={preferences.themeMode === "system" ? "default" : "outline"}
+                          onClick={() =>
+                            setPreferences((previous) => ({
+                              ...previous,
+                              themeMode: "system",
+                            }))
+                          }
+                        >
+                          Sistema
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <p className="text-sm font-medium text-foreground">Notificaciones</p>
+                      <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                        <span className="text-sm">WhatsApp</span>
+                        <Switch
+                          checked={preferences.notifyWhatsapp}
+                          onCheckedChange={(checked) =>
+                            setPreferences((previous) => ({ ...previous, notifyWhatsapp: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                        <span className="text-sm">Email</span>
+                        <Switch
+                          checked={preferences.notifyEmail}
+                          onCheckedChange={(checked) =>
+                            setPreferences((previous) => ({ ...previous, notifyEmail: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                        <span className="text-sm">SMS</span>
+                        <Switch
+                          checked={preferences.notifySms}
+                          onCheckedChange={(checked) =>
+                            setPreferences((previous) => ({ ...previous, notifySms: checked }))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <Button type="submit" disabled={isSavingPreferences}>
+                        {isSavingPreferences ? "Guardando..." : "Guardar preferencias"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </form>
+              </Card>
+            </div>
+          )}
+        </section>
+        )}
+
+        {settingsView === "platform" && (
+        <section className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="text-2xl font-semibold">Configuración de plataforma</h2>
+            <p className="text-sm text-muted-foreground">
+              Métricas operativas y gestión de cuentas administradoras.
+            </p>
+          </div>
+
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <CardHeader className="space-y-1">
               <CardTitle className="text-sm font-medium text-muted-foreground">Administradores</CardTitle>
@@ -236,9 +722,9 @@ export default function AdminAjustesPage() {
               </CardDescription>
             </CardHeader>
           </Card>
-        </section>
+          </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Card>
             <CardHeader className="space-y-1">
               <CardTitle className="text-sm font-medium text-muted-foreground">Agendamientos totales</CardTitle>
@@ -263,9 +749,9 @@ export default function AdminAjustesPage() {
               </CardDescription>
             </CardHeader>
           </Card>
-        </section>
+          </section>
 
-        {shouldShowErrorCard ? (
+          {shouldShowErrorCard ? (
           <Card>
             <CardHeader>
               <CardTitle>No pudimos cargar el centro de configuración</CardTitle>
@@ -275,9 +761,9 @@ export default function AdminAjustesPage() {
               <Button onClick={handleReload}>Reintentar</Button>
             </CardContent>
           </Card>
-        ) : areSettingsLoading ? (
+          ) : areSettingsLoading ? (
           <SettingsSkeleton />
-        ) : sortedAdmins.length === 0 ? (
+          ) : sortedAdmins.length === 0 ? (
           <Card>
             <CardContent>
               <Empty className="border border-dashed">
@@ -294,7 +780,7 @@ export default function AdminAjustesPage() {
               </Empty>
             </CardContent>
           </Card>
-        ) : (
+          ) : (
           <>
             {settingsError && (
               <Alert variant="destructive">
@@ -347,6 +833,8 @@ export default function AdminAjustesPage() {
               </CardContent>
             </Card>
           </>
+          )}
+        </section>
         )}
 
         <Sheet open={isEditOpen} onOpenChange={setIsEditOpen}>

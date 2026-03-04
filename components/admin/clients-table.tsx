@@ -86,8 +86,16 @@ const COLUMN_LABELS: Record<string, string> = {
 
 export function AdminClientsTable({
   clients,
+  onViewProfile,
+  onEditClient,
+  onDeleteClient,
+  deletingClientId,
 }: {
   clients: ClientSummary[]
+  onViewProfile: (client: ClientSummary) => void
+  onEditClient: (client: ClientSummary) => void
+  onDeleteClient: (client: ClientSummary) => void
+  deletingClientId?: number | null
 }) {
   const { toast } = useToast()
   const [sorting, setSorting] = useState<SortingState>([
@@ -100,16 +108,6 @@ export function AdminClientsTable({
   const [typeFilter, setTypeFilter] = useState('all')
   const [density, setDensity] = useState<'comfortable' | 'compact'>(
     'comfortable',
-  )
-
-  const handleUnavailableAction = useCallback(
-    (action: string, clientName: string) => {
-      toast({
-        title: `${action} aún no disponible`,
-        description: `Pronto podrás gestionar esta acción para ${clientName}.`,
-      })
-    },
-    [toast],
   )
 
   const typeOptions = useMemo(() => {
@@ -290,29 +288,23 @@ export function AdminClientsTable({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Acciones rápidas</DropdownMenuLabel>
               <DropdownMenuItem
-                onClick={() =>
-                  handleUnavailableAction('Ver perfil', row.original.name)
-                }
+                onClick={() => onViewProfile(row.original)}
               >
                 Ver perfil
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() =>
-                  handleUnavailableAction('Editar cliente', row.original.name)
-                }
+                onClick={() => onEditClient(row.original)}
               >
                 Editar
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
-                onClick={() =>
-                  handleUnavailableAction('Eliminar cliente', row.original.name)
-                }
+                onClick={() => onDeleteClient(row.original)}
+                disabled={deletingClientId === row.original.id}
               >
-                Eliminar
+                {deletingClientId === row.original.id ? 'Eliminando...' : 'Eliminar'}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -322,7 +314,7 @@ export function AdminClientsTable({
         size: 56,
       },
     ],
-    [handleUnavailableAction],
+    [deletingClientId, onDeleteClient, onEditClient, onViewProfile],
   )
 
   const table = useReactTable<ClientSummary>({

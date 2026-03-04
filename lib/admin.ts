@@ -798,6 +798,99 @@ export async function registerClient(input: {
   return client
 }
 
+export async function updateClient(input: {
+  clientId: number
+  name: string
+  email: string
+  phone: string
+}): Promise<ClientSummary> {
+  const client = await pool.connect()
+
+  try {
+    await client.query("BEGIN")
+
+    const clientResult = await client.query<{ user_id: number }>(
+      `UPDATE tenant_base.clientes
+          SET nombre = $2,
+              telefono = $3
+        WHERE id = $1
+        RETURNING user_id`,
+      [input.clientId, input.name, input.phone],
+    )
+
+    if (clientResult.rowCount === 0) {
+      throw new ClientRecordNotFoundError()
+    }
+
+    const userId = clientResult.rows[0].user_id
+
+    await client.query(
+      `UPDATE tenant_base.users
+          SET correo = $2
+        WHERE id = $1`,
+      [userId, input.email],
+    )
+
+    await client.query("COMMIT")
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackError) {
+      console.error("Failed to rollback client update transaction", rollbackError)
+    }
+
+    throw error
+  } finally {
+    client.release()
+  }
+
+  const updatedClient = await getClientsWithStats({ clientId: input.clientId })
+  if (!updatedClient[0]) {
+    throw new ClientRecordNotFoundError()
+  }
+
+  return updatedClient[0]
+}
+
+export async function deleteClient(clientId: number): Promise<void> {
+  const client = await pool.connect()
+
+  try {
+    await client.query("BEGIN")
+
+    const clientResult = await client.query<{ user_id: number }>(
+      `DELETE FROM tenant_base.clientes
+        WHERE id = $1
+        RETURNING user_id`,
+      [clientId],
+    )
+
+    if (clientResult.rowCount === 0) {
+      throw new ClientRecordNotFoundError()
+    }
+
+    const userId = clientResult.rows[0].user_id
+
+    await client.query(
+      `DELETE FROM tenant_base.users
+        WHERE id = $1`,
+      [userId],
+    )
+
+    await client.query("COMMIT")
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackError) {
+      console.error("Failed to rollback client delete transaction", rollbackError)
+    }
+
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function getServicesCatalog(): Promise<ServiceSummary[]> {
   const result = await pool.query<ServiceSummaryRow>(
     `SELECT id,

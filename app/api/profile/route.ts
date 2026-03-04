@@ -22,6 +22,8 @@ type ProfileResponse = {
   lastLogin: string | null
 }
 
+const TENANT_SCHEMA_PATTERN = /^(tenant_base|tenant_[a-z0-9_]+)$/i
+
 const roleMap: Record<DbRole, AppRole> = {
   cliente: "client",
   empleado: "barber",
@@ -40,12 +42,22 @@ const updateProfileSchema = z.object({
     .max(20, "El teléfono no puede exceder 20 caracteres")
     .optional()
     .or(z.literal("")),
+  tenantSchema: z.string().trim().optional(),
 })
 
-async function getUserByEmail(email: string): Promise<UserRow | null> {
+function resolveTenantSchema(rawValue?: string | null): string {
+  const normalized = (rawValue ?? "").trim().toLowerCase()
+  if (TENANT_SCHEMA_PATTERN.test(normalized)) {
+    return normalized
+  }
+
+  return "tenant_base"
+}
+
+async function getUserByEmail(email: string, tenantSchema: string): Promise<UserRow | null> {
   const result = await pool.query<UserRow>(
     `SELECT id, correo, rol::text as rol, ultimo_acceso
-       FROM tenant_base.users
+       FROM ${tenantSchema}.users
       WHERE lower(correo) = lower($1)
       LIMIT 1`,
     [email],
@@ -54,11 +66,11 @@ async function getUserByEmail(email: string): Promise<UserRow | null> {
   return result.rows[0] ?? null
 }
 
-async function resolveNameAndPhone(userId: number, role: AppRole, fallbackEmail: string) {
+async function resolveNameAndPhone(userId: number, role: AppRole, fallbackEmail: string, tenantSchema: string) {
   if (role === "client") {
     const result = await pool.query<{ nombre: string | null; telefono: string | null }>(
       `SELECT nombre, telefono
-         FROM tenant_base.clientes
+         FROM ${tenantSchema}.clientes
         WHERE user_id = $1
         LIMIT 1`,
       [userId],
@@ -73,7 +85,7 @@ async function resolveNameAndPhone(userId: number, role: AppRole, fallbackEmail:
   if (role === "barber") {
     const result = await pool.query<{ nombre: string | null; telefono: string | null }>(
       `SELECT nombre, telefono
-         FROM tenant_base.empleados
+         FROM ${tenantSchema}.empleados
         WHERE user_id = $1
         LIMIT 1`,
       [userId],
@@ -91,15 +103,15 @@ async function resolveNameAndPhone(userId: number, role: AppRole, fallbackEmail:
   }
 }
 
-async function buildProfileByEmail(email: string): Promise<ProfileResponse | null> {
-  const user = await getUserByEmail(email)
+async function buildProfileByEmail(email: string, tenantSchema: string): Promise<ProfileResponse | null> {
+  const user = await getUserByEmail(email, tenantSchema)
 
   if (!user) {
     return null
   }
 
   const role = roleMap[user.rol]
-  const { name, phone } = await resolveNameAndPhone(user.id, role, user.correo)
+  const { name, phone } = await resolveNameAndPhone(user.id, role, user.correo, tenantSchema)
 
   return {
     id: user.id,
@@ -114,13 +126,16 @@ async function buildProfileByEmail(email: string): Promise<ProfileResponse | nul
 export async function GET(request: NextRequest) {
   try {
     const rawEmail = request.nextUrl.searchParams.get("email")
+    const tenantSchema = resolveTenantSchema(
+      request.nextUrl.searchParams.get("tenant") ?? request.headers.get("x-tenant"),
+    )
 
     if (!rawEmail) {
       return NextResponse.json({ error: "Debes indicar el correo del usuario" }, { status: 400 })
     }
 
     const email = emailSchema.parse(rawEmail.trim().toLowerCase())
-    const profile = await buildProfileByEmail(email)
+    const profile = await buildProfileByEmail(email, tenantSchema)
 
     if (!profile) {
       return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 })
@@ -146,12 +161,13 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: Request) {
   try {
     const payload = updateProfileSchema.parse(await request.json())
+    const tenantSchema = resolveTenantSchema(payload.tenantSchema)
     const currentEmail = payload.currentEmail.trim().toLowerCase()
     const nextEmail = payload.email.trim().toLowerCase()
     const nextName = payload.name.trim()
     const nextPhone = (payload.phone ?? "").trim()
 
-    const user = await getUserByEmail(currentEmail)
+    const user = await getUserByEmail(currentEmail, tenantSchema)
 
     if (!user) {
       return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 })
@@ -165,7 +181,7 @@ export async function PATCH(request: Request) {
       await client.query("BEGIN")
 
       await client.query(
-        `UPDATE tenant_base.users
+        `UPDATE ${tenantSchema}.users
             SET correo = $1,
                 ultima_actualizacion = NOW()
           WHERE id = $2`,
@@ -174,7 +190,7 @@ export async function PATCH(request: Request) {
 
       if (role === "client") {
         const updateResult = await client.query(
-          `UPDATE tenant_base.clientes
+          `UPDATE ${tenantSchema}.clientes
               SET nombre = $1,
                   telefono = NULLIF($2, ''),
                   ultima_actualizacion = NOW()
@@ -184,7 +200,7 @@ export async function PATCH(request: Request) {
 
         if (updateResult.rowCount === 0) {
           await client.query(
-            `INSERT INTO tenant_base.clientes (user_id, nombre, telefono)
+            `INSERT INTO ${tenantSchema}.clientes (user_id, nombre, telefono)
              VALUES ($1, $2, NULLIF($3, ''))`,
             [user.id, nextName, nextPhone],
           )
@@ -193,7 +209,7 @@ export async function PATCH(request: Request) {
 
       if (role === "barber") {
         const updateResult = await client.query(
-          `UPDATE tenant_base.empleados
+          `UPDATE ${tenantSchema}.empleados
               SET nombre = $1,
                   telefono = NULLIF($2, ''),
                   ultima_actualizacion = NOW()
@@ -203,7 +219,7 @@ export async function PATCH(request: Request) {
 
         if (updateResult.rowCount === 0) {
           await client.query(
-            `INSERT INTO tenant_base.empleados (user_id, nombre, telefono)
+            `INSERT INTO ${tenantSchema}.empleados (user_id, nombre, telefono)
              VALUES ($1, $2, NULLIF($3, ''))`,
             [user.id, nextName, nextPhone],
           )
@@ -218,7 +234,7 @@ export async function PATCH(request: Request) {
       client.release()
     }
 
-    const profile = await buildProfileByEmail(nextEmail)
+    const profile = await buildProfileByEmail(nextEmail, tenantSchema)
 
     if (!profile) {
       return NextResponse.json({ error: "No se pudo refrescar el perfil" }, { status: 500 })

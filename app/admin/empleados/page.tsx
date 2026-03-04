@@ -201,6 +201,14 @@ export default function AdminEmployeesPage() {
   }, [employees])
 
   const shouldShowErrorCard = Boolean(employeesError) && !areEmployeesLoading && employees.length === 0
+  const allServiceIds = useMemo(() => servicesCatalog.map((service) => service.id), [servicesCatalog])
+  const areAllServicesSelected = useMemo(() => {
+    if (allServiceIds.length === 0) {
+      return false
+    }
+
+    return allServiceIds.every((serviceId) => selectedServiceIds.includes(serviceId))
+  }, [allServiceIds, selectedServiceIds])
 
   const handleReload = useCallback(() => {
     void loadEmployees()
@@ -316,6 +324,16 @@ export default function AdminEmployeesPage() {
 
       return previous.filter((id) => id !== serviceId)
     })
+    setEditError(null)
+  }, [])
+
+  const handleSelectAllServices = useCallback(() => {
+    setSelectedServiceIds(allServiceIds)
+    setEditError(null)
+  }, [allServiceIds])
+
+  const handleClearAllServices = useCallback(() => {
+    setSelectedServiceIds([])
     setEditError(null)
   }, [])
 
@@ -641,6 +659,28 @@ export default function AdminEmployeesPage() {
                       </Field>
                       <Field>
                         <FieldLabel>Servicios asignados</FieldLabel>
+                        {!areServicesLoading && servicesCatalog.length > 0 && (
+                          <div className="mb-2 flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={handleSelectAllServices}
+                              disabled={areAllServicesSelected}
+                            >
+                              Seleccionar todos
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={handleClearAllServices}
+                              disabled={selectedServiceIds.length === 0}
+                            >
+                              Limpiar selección
+                            </Button>
+                          </div>
+                        )}
                         <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border p-3">
                           {areServicesLoading ? (
                             <p className="text-sm text-muted-foreground">Cargando servicios...</p>

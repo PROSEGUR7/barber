@@ -33,6 +33,11 @@ type CreateClientResponse = ClientsResponse & {
   client?: ClientSummary
 }
 
+type ClientResponse = {
+  client?: ClientSummary
+  error?: string
+}
+
 function sortClients(list: ClientSummary[]): ClientSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
@@ -51,6 +56,19 @@ export default function AdminClientsPage() {
   const [formPassword, setFormPassword] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const [profileClient, setProfileClient] = useState<ClientSummary | null>(null)
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
+
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [editingClient, setEditingClient] = useState<ClientSummary | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editEmail, setEditEmail] = useState("")
+  const [editPhone, setEditPhone] = useState("")
+  const [editError, setEditError] = useState<string | null>(null)
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false)
+
+  const [isDeletingClientId, setIsDeletingClientId] = useState<number | null>(null)
 
   const resetForm = useCallback(() => {
     setFormName("")
@@ -106,6 +124,17 @@ export default function AdminClientsPage() {
       setIsSubmitting(false)
     }
   }, [isRegisterOpen, resetForm])
+
+  useEffect(() => {
+    if (!isEditOpen) {
+      setEditingClient(null)
+      setEditName("")
+      setEditEmail("")
+      setEditPhone("")
+      setEditError(null)
+      setIsEditSubmitting(false)
+    }
+  }, [isEditOpen])
 
   const metrics = useMemo(() => {
     const totals = {
@@ -213,6 +242,151 @@ export default function AdminClientsPage() {
       setIsSubmitting(false)
     }
   }
+
+  const handleViewProfile = useCallback((client: ClientSummary) => {
+    setProfileClient(client)
+    setIsProfileOpen(true)
+  }, [])
+
+  const handleOpenEdit = useCallback((client: ClientSummary) => {
+    setEditingClient(client)
+    setEditName(client.name)
+    setEditEmail(client.email)
+    setEditPhone(client.phone ?? "")
+    setEditError(null)
+    setIsEditOpen(true)
+  }, [])
+
+  const handleEditSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setEditError(null)
+
+    if (!editingClient) {
+      setEditError("No hay cliente seleccionado para editar.")
+      return
+    }
+
+    const sanitizedName = editName.trim()
+    const sanitizedEmail = editEmail.trim().toLowerCase()
+    const sanitizedPhone = editPhone.trim()
+
+    if (sanitizedName.length < 2) {
+      setEditError("Ingresa un nombre válido.")
+      return
+    }
+
+    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
+      setEditError("Ingresa un correo válido.")
+      return
+    }
+
+    if (!sanitizedPhone) {
+      setEditError("Ingresa un teléfono válido.")
+      return
+    }
+
+    if (sanitizedPhone.length < 7 || sanitizedPhone.length > 20) {
+      setEditError("El teléfono debe tener entre 7 y 20 caracteres.")
+      return
+    }
+
+    if (!/^[0-9+\-\s]+$/.test(sanitizedPhone)) {
+      setEditError("El teléfono solo puede tener números y símbolos + -.")
+      return
+    }
+
+    setIsEditSubmitting(true)
+
+    try {
+      const response = await fetch(`/api/admin/clients/${editingClient.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: sanitizedName,
+          email: sanitizedEmail,
+          phone: sanitizedPhone,
+        }),
+      })
+
+      const data: ClientResponse = await response.json().catch(() => ({} as ClientResponse))
+
+      if (!response.ok || !data.client) {
+        setEditError(data.error ?? "No se pudo actualizar el cliente.")
+        return
+      }
+
+      setClients((previous) => {
+        const next = previous.filter((item) => item.id !== data.client!.id)
+        next.push(data.client!)
+        return sortClients(next)
+      })
+
+      setClientsError(null)
+      setIsEditOpen(false)
+
+      if (profileClient?.id === data.client.id) {
+        setProfileClient(data.client)
+      }
+
+      toast({
+        title: "Cliente actualizado",
+        description: `${data.client.name} fue actualizado correctamente.`,
+      })
+    } catch (error) {
+      console.error("Error updating client", error)
+      setEditError("Error de conexión con el servidor.")
+    } finally {
+      setIsEditSubmitting(false)
+    }
+  }
+
+  const handleDeleteClient = useCallback(
+    async (client: ClientSummary) => {
+      const confirmed = window.confirm(`¿Seguro que deseas eliminar a ${client.name}?`)
+      if (!confirmed) {
+        return
+      }
+
+      setIsDeletingClientId(client.id)
+
+      try {
+        const response = await fetch(`/api/admin/clients/${client.id}`, {
+          method: "DELETE",
+        })
+
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null
+
+        if (!response.ok) {
+          throw new Error(payload?.error ?? "No se pudo eliminar el cliente.")
+        }
+
+        setClients((previous) => previous.filter((item) => item.id !== client.id))
+        setClientsError(null)
+
+        if (profileClient?.id === client.id) {
+          setProfileClient(null)
+          setIsProfileOpen(false)
+        }
+
+        toast({
+          title: "Cliente eliminado",
+          description: `${client.name} fue eliminado correctamente.`,
+        })
+      } catch (error) {
+        console.error("Error deleting client", error)
+        toast({
+          variant: "destructive",
+          title: "No se pudo eliminar",
+          description: error instanceof Error ? error.message : "No se pudo eliminar el cliente.",
+        })
+      } finally {
+        setIsDeletingClientId(null)
+      }
+    },
+    [profileClient?.id, toast],
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -395,10 +569,130 @@ export default function AdminClientsPage() {
                   </AlertDescription>
                 </Alert>
               )}
-              <AdminClientsTable clients={clients} />
+              <AdminClientsTable
+                clients={clients}
+                onViewProfile={handleViewProfile}
+                onEditClient={handleOpenEdit}
+                onDeleteClient={handleDeleteClient}
+                deletingClientId={isDeletingClientId}
+              />
             </>
           )}
         </section>
+
+        <Sheet open={isEditOpen} onOpenChange={setIsEditOpen}>
+          <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+            <form onSubmit={handleEditSubmit} className="flex h-full flex-col">
+              <SheetHeader className="border-b px-6 py-4 text-left">
+                <SheetTitle>Editar cliente</SheetTitle>
+                <SheetDescription>Actualiza la información principal del cliente seleccionado.</SheetDescription>
+              </SheetHeader>
+              <div className="flex-1 overflow-y-auto px-6 py-4">
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="edit-client-name">Nombre completo</FieldLabel>
+                    <Input
+                      id="edit-client-name"
+                      value={editName}
+                      onChange={(event) => {
+                        setEditName(event.target.value)
+                        setEditError(null)
+                      }}
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="edit-client-email">Correo electrónico</FieldLabel>
+                    <Input
+                      id="edit-client-email"
+                      type="email"
+                      value={editEmail}
+                      onChange={(event) => {
+                        setEditEmail(event.target.value)
+                        setEditError(null)
+                      }}
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="edit-client-phone">Teléfono</FieldLabel>
+                    <Input
+                      id="edit-client-phone"
+                      type="tel"
+                      value={editPhone}
+                      onChange={(event) => {
+                        setEditPhone(event.target.value)
+                        setEditError(null)
+                      }}
+                      required
+                    />
+                  </Field>
+                </FieldGroup>
+              </div>
+              <SheetFooter className="border-t px-6 py-4">
+                {editError && <p className="text-sm text-destructive">{editError}</p>}
+                <Button type="submit" className="w-full" disabled={isEditSubmitting}>
+                  {isEditSubmitting ? "Guardando cambios..." : "Guardar cambios"}
+                </Button>
+              </SheetFooter>
+            </form>
+          </SheetContent>
+        </Sheet>
+
+        <Sheet open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+          <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
+            <div className="flex h-full flex-col">
+              <SheetHeader className="border-b px-6 py-4 text-left">
+                <SheetTitle>Perfil de cliente</SheetTitle>
+                <SheetDescription>Consulta la información y actividad principal del cliente.</SheetDescription>
+              </SheetHeader>
+              <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+                <Card>
+                  <CardHeader className="space-y-1">
+                    <CardTitle>{profileClient?.name ?? "Sin nombre"}</CardTitle>
+                    <CardDescription>{profileClient?.email ?? "Sin correo"}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm text-muted-foreground">
+                    <p>Teléfono: {profileClient?.phone ?? "Sin teléfono"}</p>
+                    <p>Tipo: {profileClient?.type ?? "Sin tipo"}</p>
+                  </CardContent>
+                </Card>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Card>
+                    <CardHeader className="space-y-1">
+                      <CardTitle className="text-sm font-medium text-muted-foreground">Citas totales</CardTitle>
+                      <CardDescription className="text-2xl font-bold text-foreground">
+                        {formatNumber(profileClient?.totalAppointments ?? 0)}
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                  <Card>
+                    <CardHeader className="space-y-1">
+                      <CardTitle className="text-sm font-medium text-muted-foreground">Monto invertido</CardTitle>
+                      <CardDescription className="text-2xl font-bold text-foreground">
+                        {formatCurrency(profileClient?.totalSpent ?? 0)}
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </div>
+              </div>
+              <SheetFooter className="border-t px-6 py-4">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (profileClient) {
+                      handleOpenEdit(profileClient)
+                    }
+                    setIsProfileOpen(false)
+                  }}
+                >
+                  Editar cliente
+                </Button>
+              </SheetFooter>
+            </div>
+          </SheetContent>
+        </Sheet>
       </main>
     </div>
   )
