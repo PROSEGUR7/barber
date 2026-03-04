@@ -344,6 +344,12 @@ export type TenantBillingChargeContext = {
 type PgLikeError = {
   code?: string
   message?: string
+  detail?: string
+  hint?: string
+  where?: string
+  schema?: string
+  table?: string
+  constraint?: string
 }
 
 type BillingRejectReason = "amount_mismatch" | "invalid_currency" | "invalid_cycle" | "payment_validation_failed"
@@ -776,6 +782,23 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
 
   const client = await pool.connect()
 
+  const dbTarget = (() => {
+    const raw = process.env.DATABASE_URL?.trim()
+    if (!raw) {
+      return "DATABASE_URL:not-set"
+    }
+
+    try {
+      const parsed = new URL(raw)
+      const dbName = parsed.pathname.replace(/^\//, "") || "unknown"
+      const host = parsed.hostname || "unknown"
+      const port = parsed.port || "5432"
+      return `${host}:${port}/${dbName}`
+    } catch {
+      return "DATABASE_URL:invalid"
+    }
+  })()
+
   try {
     await client.query("BEGIN")
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [normalizedReference])
@@ -798,29 +821,35 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
 
     const billingCycle = normalizeBillingCycle(input.billingCycle)
 
-    await client.query<RegisterTenantPaymentRow>(
-      `SELECT *
-         FROM admin_platform.registrar_pago_tenant(
-           $1,
-           $2,
-           $3,
-           $4,
-           $5,
-           $6,
-           $7::admin_platform.ciclo_facturacion_enum,
-           $8
-         )`,
-      [
-        tenantId,
-        input.amount,
-        input.currency,
-        input.paymentMethod,
-        input.paymentProvider,
-        normalizedReference,
-        billingCycle,
-        new Date().toISOString(),
-      ],
-    )
+    const paymentTimestamp = new Date().toISOString()
+    const registrarPagoSql = `SELECT *\n         FROM admin_platform.registrar_pago_tenant(\n           $1,\n           $2,\n           $3,\n           $4,\n           $5,\n           $6,\n           $7::admin_platform.ciclo_facturacion_enum,\n           $8\n         )`
+    const registrarPagoParams = [
+      tenantId,
+      input.amount,
+      input.currency,
+      input.paymentMethod,
+      input.paymentProvider,
+      normalizedReference,
+      billingCycle,
+      paymentTimestamp,
+    ]
+
+    console.info("[BILLING_REGISTRAR_PAGO_ATTEMPT]", {
+      dbTarget,
+      sql: "SELECT * FROM admin_platform.registrar_pago_tenant($1,$2,$3,$4,$5,$6,$7::admin_platform.ciclo_facturacion_enum,$8)",
+      params: {
+        tenant_id: tenantId,
+        monto: input.amount,
+        moneda: input.currency,
+        metodo_pago: input.paymentMethod,
+        proveedor_pago: input.paymentProvider,
+        referencia_externa: normalizedReference,
+        ciclo: billingCycle,
+        fecha_pago: paymentTimestamp,
+      },
+    })
+
+    await client.query<RegisterTenantPaymentRow>(registrarPagoSql, registrarPagoParams)
 
     await client.query("COMMIT")
 
@@ -848,6 +877,20 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
       }
     }
 
+    console.error("[BILLING_REGISTRAR_PAGO_ERROR]", {
+      dbTarget,
+      code: pgError?.code ?? null,
+      message: pgError?.message ?? null,
+      detail: pgError?.detail ?? null,
+      hint: pgError?.hint ?? null,
+      where: pgError?.where ?? null,
+      schema: pgError?.schema ?? null,
+      table: pgError?.table ?? null,
+      constraint: pgError?.constraint ?? null,
+      tenantId,
+      reference: normalizedReference,
+    })
+
     if (pgCode === "P0001") {
       const mapped = mapBillingValidationError(pgError?.message)
       const wrappedError = new Error("ADMIN_BILLING_PAYMENT_VALIDATION_FAILED")
@@ -856,6 +899,8 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
         reason: mapped.reason,
         businessMessage: mapped.businessMessage,
         pgMessage: pgError?.message ?? null,
+        pgDetail: pgError?.detail ?? null,
+        pgHint: pgError?.hint ?? null,
       }
       throw wrappedError
     }

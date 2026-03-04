@@ -36,6 +36,23 @@ type BillingValidationMeta = {
   businessMessage?: string
   pgCode?: string
   pgMessage?: string
+  pgDetail?: string
+  pgHint?: string
+}
+
+function getDbTargetForTrace() {
+  const raw = process.env.DATABASE_URL?.trim()
+  if (!raw) return "DATABASE_URL:not-set"
+
+  try {
+    const parsed = new URL(raw)
+    const dbName = parsed.pathname.replace(/^\//, "") || "unknown"
+    const host = parsed.hostname || "unknown"
+    const port = parsed.port || "5432"
+    return `${host}:${port}/${dbName}`
+  } catch {
+    return "DATABASE_URL:invalid"
+  }
 }
 
 function wompiMethodToAdminMethod(method: string | undefined): string {
@@ -61,10 +78,30 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const dbTarget = getDbTargetForTrace()
     const rawBody = await request.text()
     const payload = JSON.parse(rawBody) as WompiWebhookPayload
 
+    console.log("[WOMPI_WEBHOOK_TRACE_INPUT]", {
+      dbTarget,
+      contentLength: rawBody.length,
+      event: payload?.event ?? null,
+      transactionId: payload?.data?.transaction?.id ?? null,
+      reference: payload?.data?.transaction?.reference ?? null,
+      status: payload?.data?.transaction?.status ?? null,
+      amountInCents: payload?.data?.transaction?.amount_in_cents ?? null,
+      currency: payload?.data?.transaction?.currency ?? null,
+    })
+
     const signatureCheck = verifyWompiWebhookSignature(rawBody, payload)
+    console.log("[WOMPI_WEBHOOK_TRACE_SIGNATURE]", {
+      dbTarget,
+      valid: signatureCheck.valid,
+      reason: signatureCheck.reason,
+      signatureTimestamp: payload?.signature?.timestamp ?? payload?.timestamp ?? payload?.sent_at ?? null,
+      signatureProperties: payload?.signature?.properties ?? null,
+    })
+
     if (!signatureCheck.valid) {
       console.warn("[WOMPI_WEBHOOK_IGNORED_INVALID_SIGNATURE]", {
         reason: signatureCheck.reason,
@@ -99,6 +136,16 @@ export async function POST(request: Request) {
       if (latest) {
         transactionForReconciliation = latest
       }
+
+      console.log("[WOMPI_WEBHOOK_TRACE_FETCH_TRANSACTION]", {
+        dbTarget,
+        transactionId,
+        fetched: Boolean(latest),
+        fetchedStatus: latest?.status ?? null,
+        fetchedReference: latest?.reference ?? null,
+        fetchedAmountInCents: latest?.amount_in_cents ?? null,
+        fetchedCurrency: latest?.currency ?? null,
+      })
     }
 
     let reconciliation = null
@@ -154,6 +201,28 @@ export async function POST(request: Request) {
           requestedBillingCycle: parsedReference.billingCycle,
         })
 
+        console.log("[WOMPI_WEBHOOK_TRACE_REGISTER_PAYLOAD]", {
+          dbTarget,
+          transactionId,
+          wompi: {
+            status: normalizedStatus,
+            referenceFromWompi: transactionForReconciliation?.reference ?? null,
+            externalReferenceForDb: paymentReference,
+            amountInCents,
+            amountCop: amountInCents / 100,
+            currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
+            paymentMethodType: transactionForReconciliation?.payment_method_type ?? null,
+          },
+          parsedReference,
+          expectedBySubscription: {
+            tenantId: billingContext.tenantId,
+            planCode: billingContext.planCode,
+            billingCycle: billingContext.billingCycle,
+            amount: billingContext.amount,
+            currency: billingContext.currency,
+          },
+        })
+
         const result = await registerTenantPaymentWithIdempotency({
           tenantId: billingContext.tenantId,
           amount: amountInCents / 100,
@@ -182,6 +251,7 @@ export async function POST(request: Request) {
           billingRegistration.message =
             meta?.businessMessage ?? "Pago aprobado en pasarela, pero rechazado por validación de billing."
           console.warn("[WOMPI_WEBHOOK_BILLING_REJECTED]", {
+            dbTarget,
             transactionId,
             paymentReference,
             amountInCents,
@@ -189,6 +259,8 @@ export async function POST(request: Request) {
             reason: billingRegistration.reason,
             pgCode: meta?.pgCode ?? null,
             pgMessage: meta?.pgMessage ?? null,
+            pgDetail: meta?.pgDetail ?? null,
+            pgHint: meta?.pgHint ?? null,
           })
         } else {
           throw error

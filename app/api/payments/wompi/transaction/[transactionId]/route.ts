@@ -12,6 +12,23 @@ type BillingValidationMeta = {
   businessMessage?: string
   pgCode?: string
   pgMessage?: string
+  pgDetail?: string
+  pgHint?: string
+}
+
+function getDbTargetForTrace() {
+  const raw = process.env.DATABASE_URL?.trim()
+  if (!raw) return "DATABASE_URL:not-set"
+
+  try {
+    const parsed = new URL(raw)
+    const dbName = parsed.pathname.replace(/^\//, "") || "unknown"
+    const host = parsed.hostname || "unknown"
+    const port = parsed.port || "5432"
+    return `${host}:${port}/${dbName}`
+  } catch {
+    return "DATABASE_URL:invalid"
+  }
 }
 
 function wompiMethodToAdminMethod(method: string | undefined): string {
@@ -26,6 +43,7 @@ function wompiMethodToAdminMethod(method: string | undefined): string {
 
 export async function GET(_: Request, context: Params) {
   const { transactionId } = await context.params
+  const dbTarget = getDbTargetForTrace()
 
   if (!transactionId?.trim()) {
     return NextResponse.json({ error: "transactionId requerido" }, { status: 400 })
@@ -33,6 +51,16 @@ export async function GET(_: Request, context: Params) {
 
   try {
     const wompiTransaction = await fetchWompiTransactionById(transactionId)
+
+    console.log("[WOMPI_TX_TRACE_FETCH]", {
+      dbTarget,
+      transactionId,
+      fetched: Boolean(wompiTransaction),
+      status: wompiTransaction?.status ?? null,
+      reference: wompiTransaction?.reference ?? null,
+      amountInCents: wompiTransaction?.amount_in_cents ?? null,
+      currency: wompiTransaction?.currency ?? null,
+    })
 
     if (!wompiTransaction) {
       return NextResponse.json(
@@ -88,6 +116,28 @@ export async function GET(_: Request, context: Params) {
           requestedBillingCycle: parsedReference.billingCycle,
         })
 
+        console.log("[WOMPI_TX_TRACE_REGISTER_PAYLOAD]", {
+          dbTarget,
+          transactionId,
+          wompi: {
+            status: normalizedStatus,
+            referenceFromWompi: wompiTransaction.reference ?? null,
+            externalReferenceForDb: paymentReference,
+            amountInCents,
+            amountCop: amountInCents / 100,
+            currency: (wompiTransaction.currency ?? "COP").toUpperCase(),
+            paymentMethodType: wompiTransaction.payment_method_type ?? null,
+          },
+          parsedReference,
+          expectedBySubscription: {
+            tenantId: billingContext.tenantId,
+            planCode: billingContext.planCode,
+            billingCycle: billingContext.billingCycle,
+            amount: billingContext.amount,
+            currency: billingContext.currency,
+          },
+        })
+
         const result = await registerTenantPaymentWithIdempotency({
           tenantId: billingContext.tenantId,
           amount: amountInCents / 100,
@@ -117,6 +167,7 @@ export async function GET(_: Request, context: Params) {
             meta?.businessMessage ?? "Pago aprobado en pasarela, pero rechazado por validación de billing."
 
           console.warn("[WOMPI_TRANSACTION_BILLING_REJECTED]", {
+            dbTarget,
             transactionId,
             paymentReference,
             amountInCents,
@@ -124,6 +175,8 @@ export async function GET(_: Request, context: Params) {
             reason: billingRegistration.reason,
             pgCode: meta?.pgCode ?? null,
             pgMessage: meta?.pgMessage ?? null,
+            pgDetail: meta?.pgDetail ?? null,
+            pgHint: meta?.pgHint ?? null,
           })
         } else {
           throw error
