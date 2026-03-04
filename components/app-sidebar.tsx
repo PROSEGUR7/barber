@@ -84,36 +84,69 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim() || null
       const userEmail = (localStorage.getItem("userEmail") ?? "").trim() || null
 
-      const controller = new AbortController()
-      const query = new URLSearchParams()
-      if (tenantSchema) {
-        query.set("tenant", tenantSchema)
-      }
-      if (userEmail) {
-        query.set("email", userEmail)
-      }
+      let isDisposed = false
+      let activeController: AbortController | null = null
 
-      void fetch(`/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`, {
-        signal: controller.signal,
-        cache: "no-store",
-      })
-        .then(async (response) => {
+      const refreshBillingAccess = async () => {
+        activeController?.abort()
+        const controller = new AbortController()
+        activeController = controller
+
+        const query = new URLSearchParams()
+        if (tenantSchema) {
+          query.set("tenant", tenantSchema)
+        }
+        if (userEmail) {
+          query.set("email", userEmail)
+        }
+
+        try {
+          const response = await fetch(`/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`, {
+            signal: controller.signal,
+            cache: "no-store",
+          })
+
           const payload = (await response.json().catch(() => null)) as { canAccessSections?: boolean } | null
-          if (!response.ok) {
+          if (!response.ok || isDisposed) {
             return
           }
 
           setCanAccessAdminSections(Boolean(payload?.canAccessSections))
-        })
-        .catch((error) => {
-          if (controller.signal.aborted) {
+        } catch (error) {
+          if (controller.signal.aborted || isDisposed) {
             return
           }
 
           console.warn("No se pudo validar el acceso admin por suscripción", error)
-        })
+        }
+      }
 
-      return () => controller.abort()
+      void refreshBillingAccess()
+
+      const intervalId = window.setInterval(() => {
+        void refreshBillingAccess()
+      }, 30000)
+
+      const handleFocus = () => {
+        void refreshBillingAccess()
+      }
+
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === "visible") {
+          void refreshBillingAccess()
+        }
+      }
+
+      window.addEventListener("focus", handleFocus)
+      document.addEventListener("visibilitychange", handleVisibilityChange)
+
+      return () => {
+        isDisposed = true
+        activeController?.abort()
+        window.clearInterval(intervalId)
+        window.removeEventListener("focus", handleFocus)
+        document.removeEventListener("visibilitychange", handleVisibilityChange)
+      }
     }
   }, [])
 

@@ -6,6 +6,33 @@ import { findTenantSchemaByEmail } from "@/lib/auth"
 
 export const runtime = "nodejs"
 
+function normalizeTenantHint(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (!/^tenant_[a-z0-9_]+$/.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function tenantHintFromHost(host: string | null): string | null {
+  if (!host) {
+    return null
+  }
+
+  const hostname = host.split(":")[0]?.trim().toLowerCase()
+  if (!hostname) {
+    return null
+  }
+
+  const firstLabel = hostname.split(".")[0] ?? ""
+  return normalizeTenantHint(firstLabel)
+}
+
 function jsonError(status: number, payload: { error: string; code?: string }) {
   return NextResponse.json(
     {
@@ -19,7 +46,10 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url)
-    let tenantSchema = url.searchParams.get("tenant") ?? request.headers.get("x-tenant")
+    let tenantSchema =
+      normalizeTenantHint(url.searchParams.get("tenant")) ??
+      normalizeTenantHint(request.headers.get("x-tenant")) ??
+      tenantHintFromHost(request.headers.get("x-forwarded-host") ?? request.headers.get("host"))
     const userEmail =
       url.searchParams.get("email") ??
       request.headers.get("x-user-email") ??
