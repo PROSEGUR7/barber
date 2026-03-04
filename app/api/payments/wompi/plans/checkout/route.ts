@@ -65,6 +65,22 @@ export async function POST(request: Request) {
       requestedBillingCycle: resolvedBillingCycle,
     })
 
+    const normalizedRequestedPlan = planId.trim().toLowerCase()
+    const currentPlanCode = billingContext.currentSubscriptionPlanCode?.trim().toLowerCase() ?? null
+
+    if (currentPlanCode && normalizedRequestedPlan !== currentPlanCode) {
+      return NextResponse.json(
+        {
+          error:
+            "El cambio de plan aún no está habilitado en billing. Solo puedes pagar tu plan actual desde esta pantalla.",
+          code: "PLAN_CHANGE_NOT_SUPPORTED",
+          currentPlanCode,
+          requestedPlanCode: normalizedRequestedPlan,
+        },
+        { status: 409 },
+      )
+    }
+
     const wompiCheckout = await createWompiCheckoutDataForSaasPlan({
       tenantId: billingContext.tenantId,
       planCode: billingContext.planCode,

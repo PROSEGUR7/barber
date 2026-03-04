@@ -218,6 +218,7 @@ type TenantChargeContextRow = {
   tenant_schema: string | null
   tenant_subscription_status: string | null
   subscription_id: number | null
+  subscription_plan_code: string | null
   plan_id: number | null
   plan_code: string | null
   plan_name: string | null
@@ -315,6 +316,7 @@ export type TenantBillingChargeContext = {
   tenantSchema: string | null
   tenantSubscriptionStatus: string | null
   subscriptionId: number | null
+  currentSubscriptionPlanCode: string | null
   planId: number
   planCode: string
   planName: string
@@ -428,6 +430,7 @@ export async function resolveTenantBillingChargeContext(options?: {
             t.esquema AS tenant_schema,
             t.estado_suscripcion::text AS tenant_subscription_status,
             s.id AS subscription_id,
+            p.codigo AS subscription_plan_code,
             s.plan_id AS plan_id,
             p.codigo AS plan_code,
             p.nombre AS plan_name,
@@ -531,6 +534,7 @@ export async function resolveTenantBillingChargeContext(options?: {
     tenantSchema: effectiveRow.tenant_schema,
     tenantSubscriptionStatus: effectiveRow.tenant_subscription_status,
     subscriptionId: effectiveRow.subscription_id,
+    currentSubscriptionPlanCode: normalizeBillingPlanCode(row.subscription_plan_code),
     planId,
     planCode,
     planName,
