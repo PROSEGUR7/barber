@@ -128,6 +128,26 @@ export async function POST(request: Request) {
       )
     }
 
+    if (code === "WOMPI_CONFIG_CONFLICT") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as { meta?: { message?: string } }).meta ?? null)
+          : null
+
+      return NextResponse.json(
+        {
+          error:
+            meta?.message?.trim() ||
+            "La configuración de llaves/secretos de Wompi tiene conflicto entre variables sandbox y generales.",
+        },
+        { status: 503 },
+      )
+    }
+
     if (code === "AMOUNT_INVALID") {
       return NextResponse.json({ error: "El valor del plan es inválido." }, { status: 409 })
     }

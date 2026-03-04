@@ -208,6 +208,36 @@ function getRequiredWompiConfig() {
   const publicKey = resolveWompiPublicKey(configuredEnvironment)
   const inferredEnvironment = inferEnvironmentFromPublicKey(publicKey)
   const effectiveEnvironment = inferredEnvironment ?? configuredEnvironment
+
+  const sandboxPublicKey = process.env.WOMPI_SANDBOX_PUBLIC_KEY?.trim() ?? null
+  const generalPublicKey = process.env.WOMPI_PUBLIC_KEY?.trim() ?? null
+  const sandboxIntegritySecret = process.env.WOMPI_SANDBOX_INTEGRITY_SECRET?.trim() ?? null
+  const generalIntegritySecret = process.env.WOMPI_INTEGRITY_SECRET?.trim() ?? null
+
+  if (effectiveEnvironment === "sandbox") {
+    if (sandboxPublicKey && generalPublicKey && sandboxPublicKey !== generalPublicKey) {
+      const error = new Error("WOMPI_CONFIG_CONFLICT")
+      ;(error as { code?: string }).code = "WOMPI_CONFIG_CONFLICT"
+      ;(error as { meta?: unknown }).meta = {
+        environment: effectiveEnvironment,
+        field: "public_key",
+        message: "WOMPI_SANDBOX_PUBLIC_KEY y WOMPI_PUBLIC_KEY tienen valores diferentes.",
+      }
+      throw error
+    }
+
+    if (sandboxIntegritySecret && generalIntegritySecret && sandboxIntegritySecret !== generalIntegritySecret) {
+      const error = new Error("WOMPI_CONFIG_CONFLICT")
+      ;(error as { code?: string }).code = "WOMPI_CONFIG_CONFLICT"
+      ;(error as { meta?: unknown }).meta = {
+        environment: effectiveEnvironment,
+        field: "integrity_secret",
+        message: "WOMPI_SANDBOX_INTEGRITY_SECRET y WOMPI_INTEGRITY_SECRET tienen valores diferentes.",
+      }
+      throw error
+    }
+  }
+
   const integritySecret = resolveWompiIntegritySecret(effectiveEnvironment)
 
   if (!publicKey || !integritySecret) {
