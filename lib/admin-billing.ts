@@ -213,6 +213,22 @@ type BillingPlanRow = {
   activo: boolean
 }
 
+type TenantChargeContextRow = {
+  tenant_id: number
+  tenant_schema: string | null
+  tenant_subscription_status: string | null
+  subscription_id: number | null
+  plan_id: number | null
+  plan_code: string | null
+  plan_name: string | null
+  plan_currency: string | null
+  subscription_cycle: string | null
+  subscription_amount: string | null
+  plan_monthly: string | null
+  plan_quarterly: string | null
+  plan_yearly: string | null
+}
+
 type TenantBillingPaymentRow = {
   pago_id: number
   fecha_pago_registro: string | null
@@ -294,6 +310,19 @@ export type TenantSubscriptionSnapshot = {
   hasPaidAccess: boolean
 }
 
+export type TenantBillingChargeContext = {
+  tenantId: number
+  tenantSchema: string | null
+  tenantSubscriptionStatus: string | null
+  subscriptionId: number | null
+  planId: number
+  planCode: string
+  planName: string
+  billingCycle: "mensual" | "trimestral" | "anual"
+  amount: number
+  currency: string
+}
+
 type PgLikeError = {
   code?: string
   message?: string
@@ -334,18 +363,174 @@ function mapBillingValidationError(pgMessage: string | null | undefined): {
   }
 }
 
-function normalizeBillingCycle(value: string | null | undefined) {
+function normalizeBillingCycle(value: string | null | undefined): "mensual" | "trimestral" | "anual" {
   const normalized = (value ?? "").trim().toLowerCase()
-  if (BILLING_CYCLES.has(normalized)) {
+  if (normalized === "mensual" || normalized === "trimestral" || normalized === "anual") {
     return normalized
   }
 
   const fromEnv = (process.env.ADMIN_BILLING_DEFAULT_CYCLE ?? "mensual").trim().toLowerCase()
-  if (BILLING_CYCLES.has(fromEnv)) {
+  if (fromEnv === "mensual" || fromEnv === "trimestral" || fromEnv === "anual") {
     return fromEnv
   }
 
   return "mensual"
+}
+
+function normalizeBillingPlanCode(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const normalized = value.trim().toLowerCase()
+  return normalized ? normalized : null
+}
+
+function parseNumericAmount(value: string | null | undefined): number | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return parsed
+}
+
+function pickAmountByCycle(row: TenantChargeContextRow, cycle: "mensual" | "trimestral" | "anual"): number | null {
+  if (cycle === "trimestral") {
+    return parseNumericAmount(row.plan_quarterly)
+  }
+
+  if (cycle === "anual") {
+    return parseNumericAmount(row.plan_yearly)
+  }
+
+  return parseNumericAmount(row.plan_monthly)
+}
+
+export async function resolveTenantBillingChargeContext(options?: {
+  tenantSchema?: string | null
+  tenantId?: number | null
+  requestedPlanCode?: string | null
+  requestedBillingCycle?: string | null
+}): Promise<TenantBillingChargeContext> {
+  const tenantId = await resolveTenantIdWithFallback(options?.tenantSchema, options?.tenantId)
+
+  if (!tenantId) {
+    throw new Error("ADMIN_BILLING_TENANT_ID_REQUIRED")
+  }
+
+  const rowResult = await pool.query<TenantChargeContextRow>(
+    `SELECT t.id AS tenant_id,
+            t.esquema AS tenant_schema,
+            t.estado_suscripcion::text AS tenant_subscription_status,
+            s.id AS subscription_id,
+            s.plan_id AS plan_id,
+            p.codigo AS plan_code,
+            p.nombre AS plan_name,
+            p.moneda AS plan_currency,
+            s.ciclo_facturacion::text AS subscription_cycle,
+            s.monto_ciclo::text AS subscription_amount,
+            p.precio_mensual::text AS plan_monthly,
+            p.precio_trimestral::text AS plan_quarterly,
+            p.precio_anual::text AS plan_yearly
+       FROM admin_platform.tenants t
+       LEFT JOIN admin_platform.suscripciones_tenants s ON s.tenant_id = t.id
+       LEFT JOIN admin_platform.planes_suscripcion p ON p.id = s.plan_id
+      WHERE t.id = $1
+      LIMIT 1`,
+    [tenantId],
+  )
+
+  if (rowResult.rowCount === 0) {
+    throw new Error("ADMIN_BILLING_TENANT_NOT_FOUND")
+  }
+
+  const row = rowResult.rows[0]
+  const requestedPlanCode = normalizeBillingPlanCode(options?.requestedPlanCode)
+  const requestedCycle = normalizeBillingCycle(options?.requestedBillingCycle)
+  const subscriptionPlanCode = normalizeBillingPlanCode(row.plan_code)
+  const planCodeToUse = requestedPlanCode ?? subscriptionPlanCode
+
+  let effectiveRow = row
+
+  if (!effectiveRow.plan_id || !effectiveRow.plan_code || (requestedPlanCode && requestedPlanCode !== subscriptionPlanCode)) {
+    if (!planCodeToUse) {
+      throw new Error("ADMIN_BILLING_PLAN_NOT_RESOLVED")
+    }
+
+    const fallbackPlanResult = await pool.query<{
+      id: number
+      codigo: string
+      nombre: string
+      moneda: string | null
+      precio_mensual: string | null
+      precio_trimestral: string | null
+      precio_anual: string | null
+    }>(
+      `SELECT p.id,
+              p.codigo,
+              p.nombre,
+              p.moneda,
+              p.precio_mensual::text,
+              p.precio_trimestral::text,
+              p.precio_anual::text
+         FROM admin_platform.planes_suscripcion p
+        WHERE lower(trim(p.codigo)) = $1
+          AND p.activo = true
+        LIMIT 1`,
+      [planCodeToUse],
+    )
+
+    if (fallbackPlanResult.rowCount === 0) {
+      throw new Error("ADMIN_BILLING_PLAN_NOT_FOUND")
+    }
+
+    const fallback = fallbackPlanResult.rows[0]
+    effectiveRow = {
+      ...effectiveRow,
+      plan_id: fallback.id,
+      plan_code: fallback.codigo,
+      plan_name: fallback.nombre,
+      plan_currency: fallback.moneda,
+      plan_monthly: fallback.precio_mensual,
+      plan_quarterly: fallback.precio_trimestral,
+      plan_yearly: fallback.precio_anual,
+    }
+  }
+
+  const billingCycle = normalizeBillingCycle(effectiveRow.subscription_cycle ?? requestedCycle)
+  const amount =
+    parseNumericAmount(effectiveRow.subscription_amount) ??
+    pickAmountByCycle(effectiveRow, billingCycle)
+
+  if (!amount) {
+    throw new Error("ADMIN_BILLING_AMOUNT_NOT_RESOLVED")
+  }
+
+  const planId = effectiveRow.plan_id
+  const planCode = effectiveRow.plan_code?.trim()
+  const planName = effectiveRow.plan_name?.trim() || "Plan"
+
+  if (!planId || !planCode) {
+    throw new Error("ADMIN_BILLING_PLAN_NOT_RESOLVED")
+  }
+
+  return {
+    tenantId,
+    tenantSchema: effectiveRow.tenant_schema,
+    tenantSubscriptionStatus: effectiveRow.tenant_subscription_status,
+    subscriptionId: effectiveRow.subscription_id,
+    planId,
+    planCode,
+    planName,
+    billingCycle,
+    amount,
+    currency: (effectiveRow.plan_currency ?? "COP").trim().toUpperCase() || "COP",
+  }
 }
 
 export async function validateTenantAccess(options: {
@@ -469,6 +654,11 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
   ok: boolean
   skipped: boolean
 }> {
+  const transport = (process.env.BILLING_TRANSPORT ?? "db").trim().toLowerCase()
+  if (transport !== "db") {
+    throw new Error("ADMIN_BILLING_TRANSPORT_NOT_SUPPORTED")
+  }
+
   const normalizedReference = input.externalReference.trim()
   if (!normalizedReference) {
     throw new Error("ADMIN_BILLING_REFERENCE_REQUIRED")

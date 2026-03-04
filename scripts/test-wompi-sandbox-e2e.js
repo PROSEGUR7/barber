@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 
+const { createHash } = require("crypto")
 const fs = require("fs")
 const path = require("path")
 const { Pool } = require("pg")
@@ -160,18 +161,40 @@ async function createReservation(baseUrl, userId, serviceId, barberId, start) {
 }
 
 async function sendWebhook(baseUrl, { reference, amountInCents, status, methodType }) {
+  const eventsSecret = (process.env.WOMPI_EVENTS_SECRET || "").trim()
+  if (!eventsSecret) {
+    throw new Error("Falta WOMPI_EVENTS_SECRET para firmar webhook de prueba")
+  }
+
+  const timestamp = String(Date.now())
+  const transaction = {
+    reference,
+    status,
+    amount_in_cents: amountInCents,
+    currency: "COP",
+    payment_method_type: methodType,
+  }
+  const properties = [
+    "transaction.reference",
+    "transaction.status",
+    "transaction.amount_in_cents",
+    "transaction.currency",
+  ]
+  const signatureBase = `${transaction.reference}${transaction.status}${transaction.amount_in_cents}${transaction.currency}${timestamp}${eventsSecret}`
+  const checksum = createHash("sha256").update(signatureBase).digest("hex")
+
   return requestJson(baseUrl, "/api/payments/wompi/webhook", {
     method: "POST",
     body: JSON.stringify({
       event: "transaction.updated",
+      timestamp,
+      signature: {
+        checksum,
+        properties,
+        timestamp,
+      },
       data: {
-        transaction: {
-          reference,
-          status,
-          amount_in_cents: amountInCents,
-          currency: "COP",
-          payment_method_type: methodType,
-        },
+        transaction,
       },
     }),
   })

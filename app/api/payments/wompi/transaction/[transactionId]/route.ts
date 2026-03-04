@@ -1,21 +1,10 @@
 import { NextResponse } from "next/server"
 
-import { getWompiBaseUrl, reconcileWompiTransaction } from "@/lib/wompi"
-import { registerTenantPaymentWithIdempotency } from "@/lib/admin-billing"
+import { fetchWompiTransactionById, parseTenantBillingReference, reconcileWompiTransaction } from "@/lib/wompi"
+import { registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 
 type Params = {
   params: Promise<{ transactionId: string }>
-}
-
-type WompiTransactionResponse = {
-  data?: {
-    id?: string
-    status?: string
-    reference?: string
-    amount_in_cents?: number
-    currency?: string
-    payment_method_type?: string
-  }
 }
 
 type BillingValidationMeta = {
@@ -43,31 +32,27 @@ export async function GET(_: Request, context: Params) {
   }
 
   try {
-    const response = await fetch(`${getWompiBaseUrl()}/v1/transactions/${encodeURIComponent(transactionId)}`, {
-      method: "GET",
-      cache: "no-store",
-    })
+    const wompiTransaction = await fetchWompiTransactionById(transactionId)
 
-    const payload = (await response.json().catch(() => ({}))) as WompiTransactionResponse
-
-    if (!response.ok || !payload.data) {
+    if (!wompiTransaction) {
       return NextResponse.json(
         { error: "No se pudo consultar la transacción en Wompi" },
         { status: 502 },
       )
     }
 
-    const reconciliation = await reconcileWompiTransaction(payload.data, {
+    const reconciliation = await reconcileWompiTransaction(wompiTransaction, {
       source: "transaction_query",
       eventName: null,
     })
 
-    const normalizedStatus = (payload.data.status ?? "").trim().toUpperCase()
-    const amountInCents = payload.data.amount_in_cents
+    const normalizedStatus = (wompiTransaction.status ?? "").trim().toUpperCase()
+    const amountInCents = wompiTransaction.amount_in_cents
     const paymentReference =
-      (typeof payload.data.id === "string" && payload.data.id.trim()) ||
-      (typeof payload.data.reference === "string" && payload.data.reference.trim()) ||
+      (typeof wompiTransaction.id === "string" && wompiTransaction.id.trim()) ||
+      (typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim()) ||
       ""
+    const parsedReference = parseTenantBillingReference(wompiTransaction.reference)
 
     let billingRegistration: {
       attempted: boolean
@@ -97,12 +82,20 @@ export async function GET(_: Request, context: Params) {
       billingRegistration.attempted = true
 
       try {
+        const billingContext = await resolveTenantBillingChargeContext({
+          tenantId: parsedReference.tenantId,
+          requestedPlanCode: parsedReference.planCode,
+          requestedBillingCycle: parsedReference.billingCycle,
+        })
+
         const result = await registerTenantPaymentWithIdempotency({
+          tenantId: billingContext.tenantId,
           amount: amountInCents / 100,
-          currency: (payload.data.currency ?? "COP").toUpperCase(),
-          paymentMethod: wompiMethodToAdminMethod(payload.data.payment_method_type ?? undefined),
+          currency: (wompiTransaction.currency ?? "COP").toUpperCase(),
+          paymentMethod: wompiMethodToAdminMethod(wompiTransaction.payment_method_type ?? undefined),
           paymentProvider: "wompi",
           externalReference: paymentReference,
+          billingCycle: billingContext.billingCycle,
         })
 
         billingRegistration.registered = result.ok && !result.skipped
@@ -126,7 +119,7 @@ export async function GET(_: Request, context: Params) {
             transactionId,
             paymentReference,
             amountInCents,
-            currency: (payload.data.currency ?? "COP").toUpperCase(),
+            currency: (wompiTransaction.currency ?? "COP").toUpperCase(),
             reason: billingRegistration.reason,
             pgCode: meta?.pgCode ?? null,
             pgMessage: meta?.pgMessage ?? null,
@@ -139,12 +132,12 @@ export async function GET(_: Request, context: Params) {
 
     return NextResponse.json(
       {
-        id: payload.data.id ?? transactionId,
-        status: payload.data.status ?? "UNKNOWN",
-        reference: payload.data.reference ?? null,
-        amountInCents: payload.data.amount_in_cents ?? null,
-        currency: payload.data.currency ?? "COP",
-        paymentMethodType: payload.data.payment_method_type ?? null,
+        id: wompiTransaction.id ?? transactionId,
+        status: wompiTransaction.status ?? "UNKNOWN",
+        reference: wompiTransaction.reference ?? null,
+        amountInCents: wompiTransaction.amount_in_cents ?? null,
+        currency: wompiTransaction.currency ?? "COP",
+        paymentMethodType: wompiTransaction.payment_method_type ?? null,
         reconciliation,
         billingRegistration,
         billingRejected: billingRegistration.rejected,

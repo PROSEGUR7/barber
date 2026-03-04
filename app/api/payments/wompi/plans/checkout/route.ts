@@ -1,60 +1,86 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { getBillingPlans } from "@/lib/admin-billing"
-import { getSaasPlanById, type SaasPlanId } from "@/lib/saas-plans"
+import { resolveTenantBillingChargeContext } from "@/lib/admin-billing"
+import { findTenantSchemaByEmail } from "@/lib/auth"
 import { createWompiCheckoutDataForSaasPlan } from "@/lib/wompi"
 
 const checkoutSchema = z.object({
   planId: z.enum(["fullstack", "fullstack-sedes", "fullstack-ia", "fullstack-sedes-ia"]),
   billingCycle: z.enum(["mensual", "trimestral", "anual"]).optional(),
+  tenant: z.string().optional(),
+  email: z.string().email().optional(),
 })
+
+function normalizeTenantHint(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (!/^tenant_[a-z0-9_]+$/.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function tenantHintFromHost(host: string | null): string | null {
+  if (!host) {
+    return null
+  }
+
+  const hostname = host.split(":")[0]?.trim().toLowerCase()
+  if (!hostname) {
+    return null
+  }
+
+  const firstLabel = hostname.split(".")[0] ?? ""
+  return normalizeTenantHint(firstLabel)
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { planId, billingCycle } = checkoutSchema.parse(body)
+    const { planId, billingCycle, tenant, email } = checkoutSchema.parse(body)
     const resolvedBillingCycle = billingCycle ?? "mensual"
 
-    const fallbackPlan = getSaasPlanById(planId as SaasPlanId)
-    const billingPlans = await getBillingPlans({ activeOnly: true })
-    const billingPlan = billingPlans.find((item) => item.code === planId)
+    let tenantSchema =
+      normalizeTenantHint(tenant) ??
+      normalizeTenantHint(request.headers.get("x-tenant")) ??
+      tenantHintFromHost(request.headers.get("x-forwarded-host") ?? request.headers.get("host"))
 
-    const fallbackByCycle =
-      resolvedBillingCycle === "trimestral"
-        ? fallbackPlan.priceInCop * 3
-        : resolvedBillingCycle === "anual"
-          ? fallbackPlan.priceInCop * 12
-          : fallbackPlan.priceInCop
+    const emailHint =
+      (typeof email === "string" && email.trim()) ||
+      request.headers.get("x-user-email") ||
+      null
 
-    const billingPriceByCycle =
-      resolvedBillingCycle === "trimestral"
-        ? billingPlan?.quarterlyPrice
-        : resolvedBillingCycle === "anual"
-          ? billingPlan?.yearlyPrice
-          : billingPlan?.monthlyPrice
-
-    const plan = {
-      id: fallbackPlan.id,
-      title: billingPlan?.name ?? fallbackPlan.title,
-      priceInCop:
-        typeof billingPriceByCycle === "number" && Number.isFinite(billingPriceByCycle) && billingPriceByCycle > 0
-          ? Math.round(billingPriceByCycle)
-          : fallbackByCycle,
+    if (!tenantSchema && emailHint && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailHint)) {
+      tenantSchema = await findTenantSchemaByEmail(emailHint.trim().toLowerCase())
     }
 
+    const billingContext = await resolveTenantBillingChargeContext({
+      tenantSchema,
+      requestedPlanCode: planId,
+      requestedBillingCycle: resolvedBillingCycle,
+    })
+
     const wompiCheckout = await createWompiCheckoutDataForSaasPlan({
-      planId: plan.id,
-      amountInCop: plan.priceInCop,
+      tenantId: billingContext.tenantId,
+      planCode: billingContext.planCode,
+      billingCycle: billingContext.billingCycle,
+      amountInCop: billingContext.amount,
     })
 
     return NextResponse.json({
       plan: {
-        id: plan.id,
-        title: plan.title,
-        amountInCop: plan.priceInCop,
-        billingCycle: resolvedBillingCycle,
+        id: billingContext.planCode,
+        title: billingContext.planName,
+        amountInCop: Math.round(billingContext.amount),
+        billingCycle: billingContext.billingCycle,
+        currency: billingContext.currency,
       },
+      tenantId: billingContext.tenantId,
       wompiCheckout,
     })
   } catch (error) {
@@ -102,6 +128,24 @@ export async function POST(request: Request) {
 
     if (code === "AMOUNT_INVALID") {
       return NextResponse.json({ error: "El valor del plan es inválido." }, { status: 409 })
+    }
+
+    if (code === "ADMIN_BILLING_TENANT_ID_REQUIRED" || code === "ADMIN_BILLING_TENANT_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "No se pudo resolver el tenant para cobrar la suscripción." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "ADMIN_BILLING_PLAN_NOT_FOUND" || code === "ADMIN_BILLING_PLAN_NOT_RESOLVED") {
+      return NextResponse.json({ error: "No se pudo resolver el plan de suscripción en billing." }, { status: 409 })
+    }
+
+    if (code === "ADMIN_BILLING_AMOUNT_NOT_RESOLVED") {
+      return NextResponse.json(
+        { error: "No se pudo resolver el monto esperado para el ciclo de facturación." },
+        { status: 409 },
+      )
     }
 
     console.error("Error creating Wompi checkout for SaaS plan", error)

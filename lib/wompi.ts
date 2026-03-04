@@ -50,6 +50,20 @@ export type WompiCheckoutData = {
   personalDataAuthToken: string | null
 }
 
+type WompiWebhookSignature = {
+  checksum?: string | null
+  properties?: string[]
+  timestamp?: string | number | null
+}
+
+type WompiWebhookEvent = {
+  event?: string
+  sent_at?: string | null
+  timestamp?: string | number | null
+  signature?: WompiWebhookSignature | null
+  data?: Record<string, unknown>
+}
+
 type WompiEnvironment = "sandbox" | "production"
 
 function getWompiEnvironment(): WompiEnvironment {
@@ -107,6 +121,48 @@ function resolveWompiIntegritySecret(environment: WompiEnvironment): string | un
     process.env.WOMPI_INTEGRITY_SECRET?.trim() ??
     process.env.NEXT_PUBLIC_WOMPI_INTEGRITY_SECRET?.trim()
   )
+}
+
+function resolveWompiPrivateKey(environment: WompiEnvironment): string | undefined {
+  if (environment === "sandbox") {
+    return process.env.WOMPI_SANDBOX_PRIVATE_KEY?.trim() ?? process.env.WOMPI_PRIVATE_KEY?.trim()
+  }
+
+  return process.env.WOMPI_PRODUCTION_PRIVATE_KEY?.trim() ?? process.env.WOMPI_PRIVATE_KEY?.trim()
+}
+
+function resolveWompiEventsSecret(environment: WompiEnvironment): string | undefined {
+  if (environment === "sandbox") {
+    return process.env.WOMPI_SANDBOX_EVENTS_SECRET?.trim() ?? process.env.WOMPI_EVENTS_SECRET?.trim()
+  }
+
+  return process.env.WOMPI_PRODUCTION_EVENTS_SECRET?.trim() ?? process.env.WOMPI_EVENTS_SECRET?.trim()
+}
+
+function getRequiredWompiPrivateKey() {
+  const environment = getWompiEnvironment()
+  const privateKey = resolveWompiPrivateKey(environment)
+
+  if (!privateKey) {
+    const error = new Error("WOMPI_PRIVATE_KEY_NOT_CONFIGURED")
+    ;(error as { code?: string }).code = "WOMPI_PRIVATE_KEY_NOT_CONFIGURED"
+    throw error
+  }
+
+  return privateKey
+}
+
+function getRequiredWompiEventsSecret() {
+  const environment = getWompiEnvironment()
+  const eventsSecret = resolveWompiEventsSecret(environment)
+
+  if (!eventsSecret) {
+    const error = new Error("WOMPI_EVENTS_SECRET_NOT_CONFIGURED")
+    ;(error as { code?: string }).code = "WOMPI_EVENTS_SECRET_NOT_CONFIGURED"
+    throw error
+  }
+
+  return eventsSecret
 }
 
 export function getWompiBaseUrl() {
@@ -321,11 +377,15 @@ export async function createWompiCheckoutDataForReservation(options: {
 }
 
 export async function createWompiCheckoutDataForSaasPlan(options: {
-  planId: string
+  tenantId: number
+  planCode: string
+  billingCycle: "mensual" | "trimestral" | "anual"
   amountInCop: number
+  currency?: "COP"
 }): Promise<WompiCheckoutData> {
-  const { planId, amountInCop } = options
-  const normalizedPlanId = planId.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "-")
+  const { tenantId, planCode, billingCycle, amountInCop } = options
+  const normalizedPlanCode = planCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "-")
+  const normalizedCycle = billingCycle.trim().toLowerCase()
   const amountInCents = Math.round(amountInCop * 100)
 
   if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
@@ -335,7 +395,7 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
   }
 
   const { publicKey, integritySecret } = getRequiredWompiConfig()
-  const reference = `PLAN-${normalizedPlanId}-${Date.now()}`
+  const reference = `BILL-T${tenantId}-P${normalizedPlanCode}-C${normalizedCycle}-${Date.now()}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const signatureIntegrity = createHash("sha256")
     .update(`${reference}${amountInCents}COP${integritySecret}`)
@@ -356,6 +416,154 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
     customerEmail: fallbackCustomerEmail,
     acceptanceToken,
     personalDataAuthToken,
+  }
+}
+
+function getNestedValueByPath(source: Record<string, unknown>, path: string): string {
+  const segments = path
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+
+  let current: unknown = source
+
+  for (const segment of segments) {
+    if (typeof current !== "object" || current === null || !(segment in current)) {
+      return ""
+    }
+
+    current = (current as Record<string, unknown>)[segment]
+  }
+
+  if (current === null || typeof current === "undefined") {
+    return ""
+  }
+
+  if (typeof current === "string") {
+    return current
+  }
+
+  if (typeof current === "number" || typeof current === "boolean") {
+    return String(current)
+  }
+
+  return ""
+}
+
+function normalizeWebhookSignatureProperties(properties: unknown): string[] {
+  if (!Array.isArray(properties)) {
+    return []
+  }
+
+  return properties
+    .filter((property): property is string => typeof property === "string")
+    .map((property) => property.trim())
+    .filter(Boolean)
+}
+
+export function parseTenantBillingReference(reference: string | null | undefined): {
+  tenantId: number | null
+  planCode: string | null
+  billingCycle: "mensual" | "trimestral" | "anual" | null
+} {
+  if (typeof reference !== "string") {
+    return {
+      tenantId: null,
+      planCode: null,
+      billingCycle: null,
+    }
+  }
+
+  const trimmed = reference.trim().toUpperCase()
+  const match = /^BILL-T(\d+)-P([A-Z0-9_-]+)-C(MENSUAL|TRIMESTRAL|ANUAL)-\d+$/i.exec(trimmed)
+
+  if (!match) {
+    return {
+      tenantId: null,
+      planCode: null,
+      billingCycle: null,
+    }
+  }
+
+  const tenantId = Number.parseInt(match[1], 10)
+  const cycle = match[3].toLowerCase()
+
+  return {
+    tenantId: Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null,
+    planCode: match[2].toLowerCase(),
+    billingCycle: cycle === "mensual" || cycle === "trimestral" || cycle === "anual" ? cycle : null,
+  }
+}
+
+export async function fetchWompiTransactionById(transactionId: string): Promise<WompiTransactionData | null> {
+  const normalized = transactionId.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const privateKey = getRequiredWompiPrivateKey()
+  const response = await fetch(`${getWompiBaseUrl()}/v1/transactions/${encodeURIComponent(normalized)}`, {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${privateKey}`,
+    },
+  })
+
+  const payload = (await response.json().catch(() => ({}))) as { data?: WompiTransactionData }
+  if (!response.ok || !payload?.data) {
+    return null
+  }
+
+  return payload.data
+}
+
+export function verifyWompiWebhookSignature(rawBody: string, payload: WompiWebhookEvent): {
+  valid: boolean
+  reason: string | null
+} {
+  const eventsSecret = getRequiredWompiEventsSecret()
+  const signature = payload.signature
+
+  if (!signature || typeof signature !== "object") {
+    return { valid: false, reason: "missing_signature" }
+  }
+
+  const checksum = typeof signature.checksum === "string" ? signature.checksum.trim().toLowerCase() : ""
+  if (!checksum) {
+    return { valid: false, reason: "missing_checksum" }
+  }
+
+  const properties = normalizeWebhookSignatureProperties(signature.properties)
+  if (properties.length === 0) {
+    return { valid: false, reason: "missing_properties" }
+  }
+
+  const timestampRaw = signature.timestamp ?? payload.timestamp ?? payload.sent_at ?? ""
+  const timestamp = typeof timestampRaw === "number" ? String(timestampRaw) : String(timestampRaw ?? "").trim()
+  if (!timestamp) {
+    return { valid: false, reason: "missing_timestamp" }
+  }
+
+  const values = properties.map((propertyPath) => getNestedValueByPath((payload.data ?? {}) as Record<string, unknown>, propertyPath))
+  const expected = createHash("sha256")
+    .update(`${values.join("")}${timestamp}${eventsSecret}`)
+    .digest("hex")
+    .toLowerCase()
+
+  const valid = checksum === expected
+  if (valid) {
+    return { valid: true, reason: null }
+  }
+
+  const fallbackFromRaw = createHash("sha256")
+    .update(`${rawBody}${eventsSecret}`)
+    .digest("hex")
+    .toLowerCase()
+
+  return {
+    valid: checksum === fallbackFromRaw,
+    reason: checksum === fallbackFromRaw ? null : "checksum_mismatch",
   }
 }
 

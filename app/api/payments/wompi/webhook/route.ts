@@ -1,32 +1,33 @@
 import { NextResponse } from "next/server"
 
-import { getWompiBaseUrl, reconcileWompiTransaction } from "@/lib/wompi"
-import { registerTenantPaymentWithIdempotency } from "@/lib/admin-billing"
+import {
+  fetchWompiTransactionById,
+  parseTenantBillingReference,
+  reconcileWompiTransaction,
+  verifyWompiWebhookSignature,
+} from "@/lib/wompi"
+import { registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 
 export const runtime = "nodejs"
 
 type WompiWebhookPayload = {
   event?: string
+  sent_at?: string
+  timestamp?: string | number
+  signature?: {
+    checksum?: string
+    properties?: string[]
+    timestamp?: string | number
+  }
   data?: {
     transaction?: {
-      id?: string
-      status?: string
-      reference?: string
-      amount_in_cents?: number
-      currency?: string
-      payment_method_type?: string
+      id?: string | null
+      status?: string | null
+      reference?: string | null
+      amount_in_cents?: number | null
+      currency?: string | null
+      payment_method_type?: string | null
     }
-  }
-}
-
-type WompiTransactionResponse = {
-  data?: {
-    id?: string
-    status?: string
-    reference?: string
-    amount_in_cents?: number
-    currency?: string
-    payment_method_type?: string
   }
 }
 
@@ -60,7 +61,24 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const payload = (await request.json()) as WompiWebhookPayload
+    const rawBody = await request.text()
+    const payload = JSON.parse(rawBody) as WompiWebhookPayload
+
+    const signatureCheck = verifyWompiWebhookSignature(rawBody, payload)
+    if (!signatureCheck.valid) {
+      console.warn("[WOMPI_WEBHOOK_IGNORED_INVALID_SIGNATURE]", {
+        reason: signatureCheck.reason,
+      })
+
+      return NextResponse.json(
+        {
+          ok: true,
+          ignored: true,
+          reason: signatureCheck.reason ?? "invalid_signature",
+        },
+        { status: 200 },
+      )
+    }
 
     const eventName = payload?.event ?? "unknown"
     const transactionId = payload?.data?.transaction?.id ?? "unknown"
@@ -77,14 +95,9 @@ export async function POST(request: Request) {
     let transactionForReconciliation = payload?.data?.transaction ?? null
 
     if (transactionId !== "unknown") {
-      const response = await fetch(`${getWompiBaseUrl()}/v1/transactions/${encodeURIComponent(transactionId)}`, {
-        method: "GET",
-        cache: "no-store",
-      })
-
-      const latest = (await response.json().catch(() => ({}))) as WompiTransactionResponse
-      if (response.ok && latest.data) {
-        transactionForReconciliation = latest.data
+      const latest = await fetchWompiTransactionById(transactionId)
+      if (latest) {
+        transactionForReconciliation = latest
       }
     }
 
@@ -102,6 +115,10 @@ export async function POST(request: Request) {
       (typeof transactionForReconciliation?.id === "string" && transactionForReconciliation.id.trim()) ||
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
+    const referenceForTenantContext =
+      (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
+      ""
+    const parsedReference = parseTenantBillingReference(referenceForTenantContext)
 
     let billingRegistration: {
       attempted: boolean
@@ -131,12 +148,20 @@ export async function POST(request: Request) {
       billingRegistration.attempted = true
 
       try {
+        const billingContext = await resolveTenantBillingChargeContext({
+          tenantId: parsedReference.tenantId,
+          requestedPlanCode: parsedReference.planCode,
+          requestedBillingCycle: parsedReference.billingCycle,
+        })
+
         const result = await registerTenantPaymentWithIdempotency({
+          tenantId: billingContext.tenantId,
           amount: amountInCents / 100,
           currency: (transactionForReconciliation?.currency ?? "COP").toUpperCase(),
           paymentMethod: wompiMethodToAdminMethod(transactionForReconciliation?.payment_method_type ?? undefined),
           paymentProvider: "wompi",
           externalReference: paymentReference,
+          billingCycle: billingContext.billingCycle,
         })
 
         billingRegistration.registered = result.ok && !result.skipped
@@ -168,6 +193,13 @@ export async function POST(request: Request) {
           throw error
         }
       }
+    } else {
+      console.info("[WOMPI_WEBHOOK_NON_APPROVED]", {
+        event: eventName,
+        transactionId,
+        status: normalizedStatus || "UNKNOWN",
+        paymentReference: paymentReference || null,
+      })
     }
 
     console.log("[WOMPI_WEBHOOK_RECONCILED]", {
