@@ -353,7 +353,20 @@ export default function AdminPlanesScreen() {
         }),
       })
 
-      const payload = (await response.json().catch(() => null)) as { wompiCheckout?: WompiCheckoutData; error?: string } | null
+      const payload = (await response.json().catch(() => null)) as {
+        wompiCheckout?: WompiCheckoutData
+        error?: string
+        code?: string
+      } | null
+
+      if (response.status === 409 && payload?.code === "PLAN_CHANGE_NOT_SUPPORTED") {
+        window.alert(
+          payload.error?.trim() ||
+            "El cambio de plan aún no está habilitado en billing. Solo puedes pagar tu plan actual desde esta pantalla.",
+        )
+        return
+      }
+
       if (!response.ok || !payload?.wompiCheckout) {
         throw new Error(payload?.error?.trim() || "No se pudo iniciar el checkout del plan.")
       }
