@@ -50,6 +50,21 @@ export type WompiCheckoutData = {
   personalDataAuthToken: string | null
 }
 
+const PLAN_CODE_TO_REFERENCE_TOKEN: Record<string, string> = {
+  fullstack: "fs",
+  "fullstack-sedes": "fss",
+  "fullstack-ia": "fsi",
+  "fullstack-sedes-ia": "fssi",
+}
+
+const REFERENCE_TOKEN_TO_PLAN_CODE: Record<string, string> = Object.entries(PLAN_CODE_TO_REFERENCE_TOKEN).reduce(
+  (accumulator, [planCode, token]) => {
+    accumulator[token] = planCode
+    return accumulator
+  },
+  {} as Record<string, string>,
+)
+
 type WompiWebhookSignature = {
   checksum?: string | null
   properties?: string[]
@@ -65,6 +80,19 @@ type WompiWebhookEvent = {
 }
 
 type WompiEnvironment = "sandbox" | "production"
+
+function inferEnvironmentFromPublicKey(publicKey: string | undefined): WompiEnvironment | null {
+  const normalized = (publicKey ?? "").trim().toLowerCase()
+  if (normalized.startsWith("pub_test_")) {
+    return "sandbox"
+  }
+
+  if (normalized.startsWith("pub_prod_")) {
+    return "production"
+  }
+
+  return null
+}
 
 function getWompiEnvironment(): WompiEnvironment {
   const configuredEnvironment = process.env.WOMPI_ENV?.trim().toLowerCase()
@@ -176,16 +204,18 @@ export function getWompiBaseUrl() {
 }
 
 function getRequiredWompiConfig() {
-  const environment = getWompiEnvironment()
-  const publicKey = resolveWompiPublicKey(environment)
-  const integritySecret = resolveWompiIntegritySecret(environment)
+  const configuredEnvironment = getWompiEnvironment()
+  const publicKey = resolveWompiPublicKey(configuredEnvironment)
+  const inferredEnvironment = inferEnvironmentFromPublicKey(publicKey)
+  const effectiveEnvironment = inferredEnvironment ?? configuredEnvironment
+  const integritySecret = resolveWompiIntegritySecret(effectiveEnvironment)
 
   if (!publicKey || !integritySecret) {
     const missing: string[] = []
 
     if (!publicKey) {
       missing.push(
-        environment === "sandbox"
+        configuredEnvironment === "sandbox"
           ? "WOMPI_SANDBOX_PUBLIC_KEY (o WOMPI_PUBLIC_KEY)"
           : "WOMPI_PRODUCTION_PUBLIC_KEY (o WOMPI_PUBLIC_KEY)",
       )
@@ -193,7 +223,7 @@ function getRequiredWompiConfig() {
 
     if (!integritySecret) {
       missing.push(
-        environment === "sandbox"
+        effectiveEnvironment === "sandbox"
           ? "WOMPI_SANDBOX_INTEGRITY_SECRET (o WOMPI_INTEGRITY_SECRET)"
           : "WOMPI_PRODUCTION_INTEGRITY_SECRET (o WOMPI_INTEGRITY_SECRET)",
       )
@@ -202,7 +232,9 @@ function getRequiredWompiConfig() {
     const error = new Error("WOMPI_NOT_CONFIGURED")
     ;(error as { code?: string }).code = "WOMPI_NOT_CONFIGURED"
     ;(error as { meta?: unknown }).meta = {
-      environment,
+      environment: effectiveEnvironment,
+      configuredEnvironment,
+      inferredEnvironment,
       missing,
     }
     throw error
@@ -384,8 +416,10 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
   currency?: "COP"
 }): Promise<WompiCheckoutData> {
   const { tenantId, planCode, billingCycle, amountInCop } = options
-  const normalizedPlanCode = planCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "-")
+  const normalizedPlanCode = planCode.trim().toLowerCase()
   const normalizedCycle = billingCycle.trim().toLowerCase()
+  const planToken = PLAN_CODE_TO_REFERENCE_TOKEN[normalizedPlanCode] ?? "custom"
+  const cycleToken = normalizedCycle === "trimestral" ? "t" : normalizedCycle === "anual" ? "a" : "m"
   const amountInCents = Math.round(amountInCop * 100)
 
   if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
@@ -395,7 +429,7 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
   }
 
   const { publicKey, integritySecret } = getRequiredWompiConfig()
-  const reference = `BILL-T${tenantId}-P${normalizedPlanCode}-C${normalizedCycle}-${Date.now()}`
+  const reference = `BILL-T${tenantId}-P${planToken}-C${cycleToken}-${Date.now().toString(36)}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const signatureIntegrity = createHash("sha256")
     .update(`${reference}${amountInCents}COP${integritySecret}`)
@@ -474,8 +508,8 @@ export function parseTenantBillingReference(reference: string | null | undefined
     }
   }
 
-  const trimmed = reference.trim().toUpperCase()
-  const match = /^BILL-T(\d+)-P([A-Z0-9_-]+)-C(MENSUAL|TRIMESTRAL|ANUAL)-\d+$/i.exec(trimmed)
+  const trimmed = reference.trim().toLowerCase()
+  const match = /^bill-t(\d+)-p([a-z0-9_-]+)-c([mta])-([a-z0-9]+)$/i.exec(trimmed)
 
   if (!match) {
     return {
@@ -486,12 +520,15 @@ export function parseTenantBillingReference(reference: string | null | undefined
   }
 
   const tenantId = Number.parseInt(match[1], 10)
-  const cycle = match[3].toLowerCase()
+  const planToken = match[2]
+  const cycleToken = match[3]
+  const decodedPlanCode = REFERENCE_TOKEN_TO_PLAN_CODE[planToken] ?? null
+  const decodedCycle = cycleToken === "t" ? "trimestral" : cycleToken === "a" ? "anual" : "mensual"
 
   return {
     tenantId: Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null,
-    planCode: match[2].toLowerCase(),
-    billingCycle: cycle === "mensual" || cycle === "trimestral" || cycle === "anual" ? cycle : null,
+    planCode: decodedPlanCode,
+    billingCycle: decodedCycle,
   }
 }
 
