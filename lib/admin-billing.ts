@@ -451,6 +451,7 @@ export async function resolveTenantBillingChargeContext(options?: {
 
   const row = rowResult.rows[0]
   const requestedPlanCode = normalizeBillingPlanCode(options?.requestedPlanCode)
+  const hasRequestedBillingCycle = typeof options?.requestedBillingCycle === "string" && options.requestedBillingCycle.trim().length > 0
   const requestedCycle = normalizeBillingCycle(options?.requestedBillingCycle)
   const subscriptionPlanCode = normalizeBillingPlanCode(row.plan_code)
   const planCodeToUse = requestedPlanCode ?? subscriptionPlanCode
@@ -503,9 +504,13 @@ export async function resolveTenantBillingChargeContext(options?: {
   }
 
   const billingCycle = normalizeBillingCycle(effectiveRow.subscription_cycle ?? requestedCycle)
-  const amount =
-    parseNumericAmount(effectiveRow.subscription_amount) ??
-    pickAmountByCycle(effectiveRow, billingCycle)
+  const explicitPlanOrCycleRequested = Boolean(requestedPlanCode) || hasRequestedBillingCycle
+  const amountFromSelectedPlan = pickAmountByCycle(effectiveRow, billingCycle)
+  const amountFromCurrentSubscription = parseNumericAmount(effectiveRow.subscription_amount)
+
+  const amount = explicitPlanOrCycleRequested
+    ? amountFromSelectedPlan ?? amountFromCurrentSubscription
+    : amountFromCurrentSubscription ?? amountFromSelectedPlan
 
   if (!amount) {
     throw new Error("ADMIN_BILLING_AMOUNT_NOT_RESOLVED")
