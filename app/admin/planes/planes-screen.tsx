@@ -330,6 +330,14 @@ export default function AdminPlanesScreen() {
     setSelectedPlanId(planId)
     setCheckoutPlanId(planId)
     const billingCycle = cycleOverride ?? selectedBillingCycle
+    const tenantSchema =
+      typeof window !== "undefined"
+        ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+        : ""
+    const userEmail =
+      typeof window !== "undefined"
+        ? (localStorage.getItem("userEmail") ?? "").trim()
+        : ""
 
     try {
       const response = await fetch("/api/payments/wompi/plans/checkout", {
@@ -337,7 +345,12 @@ export default function AdminPlanesScreen() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ planId, billingCycle }),
+        body: JSON.stringify({
+          planId,
+          billingCycle,
+          tenant: tenantSchema || undefined,
+          email: userEmail || undefined,
+        }),
       })
 
       const payload = (await response.json().catch(() => null)) as { wompiCheckout?: WompiCheckoutData; error?: string } | null

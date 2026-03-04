@@ -88,13 +88,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Plan inválido", issues: error.flatten() }, { status: 400 })
     }
 
-    const code =
+    const codeFromProp =
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
       typeof (error as { code?: unknown }).code === "string"
         ? ((error as { code?: string }).code as string)
         : null
+    const codeFromMessage = error instanceof Error ? error.message : null
+    const code = codeFromProp ?? codeFromMessage
 
     if (code === "WOMPI_NOT_CONFIGURED") {
       const meta =
