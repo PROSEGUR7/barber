@@ -475,7 +475,7 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
 
   const { publicKey, integritySecret } = getRequiredWompiConfig()
   const timestampToken = Date.now().toString(36).toUpperCase()
-  const reference = `B${tenantId}P${planToken.toUpperCase()}C${cycleToken.toUpperCase()}${timestampToken}`
+  const reference = `B${tenantId}-P${planToken.toUpperCase()}-C${cycleToken.toUpperCase()}-${timestampToken}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const signatureIntegrity = createHash("sha256")
     .update(`${reference}${amountInCents}COP${integritySecret}`)
@@ -555,7 +555,15 @@ export function parseTenantBillingReference(reference: string | null | undefined
   }
 
   const trimmed = reference.trim().toUpperCase()
-  const match = /^B(\d+)P([A-Z0-9]+)C([MTA])([A-Z0-9]+)$/i.exec(trimmed)
+  const normalizedPlanTokens = Object.keys(REFERENCE_TOKEN_TO_PLAN_CODE)
+    .map((token) => token.toUpperCase())
+    .sort((left, right) => right.length - left.length)
+
+  const tokenPattern = normalizedPlanTokens.join("|")
+  const delimitedPattern = new RegExp(`^B(\\d+)-P(${tokenPattern})-C([MTA])-[A-Z0-9]+$`, "i")
+  const legacyCompactPattern = new RegExp(`^B(\\d+)P(${tokenPattern})C([MTA])[A-Z0-9]+$`, "i")
+
+  const match = delimitedPattern.exec(trimmed) ?? legacyCompactPattern.exec(trimmed)
 
   if (!match) {
     return {
@@ -567,9 +575,9 @@ export function parseTenantBillingReference(reference: string | null | undefined
 
   const tenantId = Number.parseInt(match[1], 10)
   const planToken = match[2].toLowerCase()
-  const cycleToken = match[3]
+  const cycleToken = match[3].toUpperCase()
   const decodedPlanCode = REFERENCE_TOKEN_TO_PLAN_CODE[planToken] ?? null
-  const decodedCycle = cycleToken === "t" ? "trimestral" : cycleToken === "a" ? "anual" : "mensual"
+  const decodedCycle = cycleToken === "T" ? "trimestral" : cycleToken === "A" ? "anual" : "mensual"
 
   return {
     tenantId: Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null,
