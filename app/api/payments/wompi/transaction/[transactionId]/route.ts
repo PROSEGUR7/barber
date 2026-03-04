@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { fetchWompiTransactionById, parseTenantBillingReference, reconcileWompiTransaction } from "@/lib/wompi"
-import { registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
+import { prepareTenantSubscriptionContext, registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 
 type Params = {
   params: Promise<{ transactionId: string }>
@@ -110,11 +110,18 @@ export async function GET(_: Request, context: Params) {
       billingRegistration.attempted = true
 
       try {
-        const billingContext = await resolveTenantBillingChargeContext({
-          tenantId: parsedReference.tenantId,
-          requestedPlanCode: parsedReference.planCode,
-          requestedBillingCycle: parsedReference.billingCycle,
-        })
+        const billingContext =
+          parsedReference.planCode && parsedReference.billingCycle
+            ? await prepareTenantSubscriptionContext({
+                tenantId: parsedReference.tenantId,
+                requestedPlanCode: parsedReference.planCode,
+                requestedBillingCycle: parsedReference.billingCycle,
+              })
+            : await resolveTenantBillingChargeContext({
+                tenantId: parsedReference.tenantId,
+                requestedPlanCode: parsedReference.planCode,
+                requestedBillingCycle: parsedReference.billingCycle,
+              })
 
         console.log("[WOMPI_TX_TRACE_REGISTER_PAYLOAD]", {
           dbTarget,
@@ -197,6 +204,7 @@ export async function GET(_: Request, context: Params) {
         billingRejected: billingRegistration.rejected,
         billingRejectReason: billingRegistration.reason,
         billingRejectMessage: billingRegistration.message,
+        debugDbTarget: dbTarget,
       },
       { status: 200 },
     )

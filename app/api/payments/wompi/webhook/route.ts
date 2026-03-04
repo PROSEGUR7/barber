@@ -6,7 +6,7 @@ import {
   reconcileWompiTransaction,
   verifyWompiWebhookSignature,
 } from "@/lib/wompi"
-import { registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
+import { prepareTenantSubscriptionContext, registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 
 export const runtime = "nodejs"
 
@@ -195,11 +195,18 @@ export async function POST(request: Request) {
       billingRegistration.attempted = true
 
       try {
-        const billingContext = await resolveTenantBillingChargeContext({
-          tenantId: parsedReference.tenantId,
-          requestedPlanCode: parsedReference.planCode,
-          requestedBillingCycle: parsedReference.billingCycle,
-        })
+        const billingContext =
+          parsedReference.planCode && parsedReference.billingCycle
+            ? await prepareTenantSubscriptionContext({
+                tenantId: parsedReference.tenantId,
+                requestedPlanCode: parsedReference.planCode,
+                requestedBillingCycle: parsedReference.billingCycle,
+              })
+            : await resolveTenantBillingChargeContext({
+                tenantId: parsedReference.tenantId,
+                requestedPlanCode: parsedReference.planCode,
+                requestedBillingCycle: parsedReference.billingCycle,
+              })
 
         console.log("[WOMPI_WEBHOOK_TRACE_REGISTER_PAYLOAD]", {
           dbTarget,

@@ -379,7 +379,7 @@ export default function AdminPlanesScreen() {
       const form = document.createElement("form")
       form.method = "GET"
       form.action = "https://checkout.wompi.co/p/"
-      form.target = "_blank"
+      form.target = "_self"
 
       const fields: Array<{ name: string; value: string }> = [
         { name: "public-key", value: checkout.publicKey },

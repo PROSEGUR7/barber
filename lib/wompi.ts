@@ -492,7 +492,7 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
     amountInCents,
     reference,
     signatureIntegrity,
-    redirectUrl: buildRedirectUrl(reference, "/"),
+    redirectUrl: buildRedirectUrl(reference, "/admin/planes"),
     customerEmail: fallbackCustomerEmail,
     acceptanceToken,
     personalDataAuthToken,
