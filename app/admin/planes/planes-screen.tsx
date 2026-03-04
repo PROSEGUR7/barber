@@ -511,6 +511,7 @@ export default function AdminPlanesScreen() {
               const isCheckingOut = checkoutPlanId === plan.id
               const priceByCycle = getPriceByCycle(plan, selectedBillingCycle)
               const durationLabel = getCycleDurationLabel(selectedBillingCycle)
+              const isPlanChangeBlocked = Boolean(hasPaidAccess && activePlanCode && plan.id !== activePlanCode)
 
               return (
                 <Card key={plan.id} className={`relative h-full overflow-hidden group transition-shadow hover:shadow-lg flex flex-col gap-1.5 py-3 ${isSelected ? "border-primary" : ""}`}>
@@ -533,9 +534,24 @@ export default function AdminPlanesScreen() {
                         <li key={feature}>• {feature}</li>
                       ))}
                     </ul>
-                    <Button className="mt-auto h-8 w-full text-sm" onClick={() => void handleSelectPlan(plan.id)} disabled={checkoutPlanId === plan.id}>
-                      {isCheckingOut ? "Cargando..." : isSelected ? "Plan seleccionado" : "Escoger plan"}
+                    <Button
+                      className="mt-auto h-8 w-full text-sm"
+                      onClick={() => void handleSelectPlan(plan.id)}
+                      disabled={checkoutPlanId === plan.id || isPlanChangeBlocked}
+                    >
+                      {isCheckingOut
+                        ? "Cargando..."
+                        : isSelected
+                          ? "Plan seleccionado"
+                          : isPlanChangeBlocked
+                            ? "Cambio no habilitado"
+                            : "Escoger plan"}
                     </Button>
+                    {isPlanChangeBlocked && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Debes pagar tu plan actual antes de cambiar de plan.
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               )
