@@ -12,11 +12,30 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import type { AdminPaymentSummary } from "@/lib/admin"
 import { formatCurrency, formatDateTime, formatNumber } from "@/lib/formatters"
 
+type AdminBillingPaymentSummary = {
+  paymentId: number
+  amount: number
+  currency: string
+  paymentStatus: string | null
+  paidAt: string | null
+  createdAt: string | null
+  paymentMethod: string | null
+  paymentProvider: string | null
+  externalReference: string | null
+  billingCycle: string | null
+  planCode: string | null
+  planName: string | null
+  invoiceNumber: string | null
+  invoiceStatus: string | null
+  tenantId: number
+  tenantName: string
+  tenantSchema: string | null
+}
+
 type PaymentsResponse = {
-  payments?: AdminPaymentSummary[]
+  payments?: AdminBillingPaymentSummary[]
   error?: string
 }
 
@@ -68,13 +87,13 @@ function isPaidStatus(status: string | null): boolean {
   )
 }
 
-function sortPayments(list: AdminPaymentSummary[]): AdminPaymentSummary[] {
+function sortPayments(list: AdminBillingPaymentSummary[]): AdminBillingPaymentSummary[] {
   return [...list].sort((a, b) => {
-    const aDate = a.appointmentDate ? new Date(a.appointmentDate).getTime() : 0
-    const bDate = b.appointmentDate ? new Date(b.appointmentDate).getTime() : 0
+    const aDate = a.paidAt ? new Date(a.paidAt).getTime() : a.createdAt ? new Date(a.createdAt).getTime() : 0
+    const bDate = b.paidAt ? new Date(b.paidAt).getTime() : b.createdAt ? new Date(b.createdAt).getTime() : 0
 
     if (aDate === bDate) {
-      return b.rowId - a.rowId
+      return b.paymentId - a.paymentId
     }
 
     return bDate - aDate
@@ -82,12 +101,22 @@ function sortPayments(list: AdminPaymentSummary[]): AdminPaymentSummary[] {
 }
 
 export default function AdminPagosPage() {
-  const [payments, setPayments] = useState<AdminPaymentSummary[]>([])
+  const [payments, setPayments] = useState<AdminBillingPaymentSummary[]>([])
   const [arePaymentsLoading, setArePaymentsLoading] = useState(true)
   const [paymentsError, setPaymentsError] = useState<string | null>(null)
+  const [tenantSchema, setTenantSchema] = useState<string | null>(null)
 
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const stored = localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant")
+    setTenantSchema(stored?.trim() || null)
+  }, [])
 
   const loadPayments = useCallback(
     async (signal?: AbortSignal) => {
@@ -95,7 +124,12 @@ export default function AdminPagosPage() {
       setPaymentsError(null)
 
       try {
-        const response = await fetch("/api/admin/payments", { signal, cache: "no-store" })
+        const query = new URLSearchParams()
+        if (tenantSchema) {
+          query.set("tenant", tenantSchema)
+        }
+
+        const response = await fetch(`/api/admin/payments${query.toString() ? `?${query.toString()}` : ""}`, { signal, cache: "no-store" })
         const data: PaymentsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -119,7 +153,7 @@ export default function AdminPagosPage() {
         }
       }
     },
-    [],
+    [tenantSchema],
   )
 
   useEffect(() => {
@@ -133,7 +167,7 @@ export default function AdminPagosPage() {
     const values = new Set<string>()
 
     for (const payment of payments) {
-      const normalized = payment.status?.trim().toLowerCase()
+      const normalized = payment.paymentStatus?.trim().toLowerCase()
       if (normalized) {
         values.add(normalized)
       }
@@ -146,7 +180,7 @@ export default function AdminPagosPage() {
     const search = searchTerm.trim().toLowerCase()
 
     return payments.filter((payment) => {
-      const statusMatches = statusFilter === "all" || (payment.status?.trim().toLowerCase() ?? "") === statusFilter
+      const statusMatches = statusFilter === "all" || (payment.paymentStatus?.trim().toLowerCase() ?? "") === statusFilter
       if (!statusMatches) {
         return false
       }
@@ -156,11 +190,12 @@ export default function AdminPagosPage() {
       }
 
       const searchableText = [
-        payment.clientName,
-        payment.employeeName,
-        payment.serviceName,
-        payment.status ?? "",
-        String(payment.appointmentId ?? ""),
+        payment.tenantName,
+        payment.planName ?? "",
+        payment.planCode ?? "",
+        payment.invoiceNumber ?? "",
+        payment.externalReference ?? "",
+        payment.paymentStatus ?? "",
       ]
         .join(" ")
         .toLowerCase()
@@ -181,7 +216,7 @@ export default function AdminPagosPage() {
     for (const payment of filteredPayments) {
       totals.totalAmount += payment.amount
 
-      if (isPaidStatus(payment.status)) {
+      if (isPaidStatus(payment.paymentStatus)) {
         totals.paidRecords += 1
         totals.paidAmount += payment.amount
       } else {
@@ -204,7 +239,7 @@ export default function AdminPagosPage() {
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Pagos y facturación</h1>
           <p className="text-muted-foreground">
-            Visualiza el historial de pagos, abonos y facturas asociados a las reservas de clientes.
+            Visualiza los pagos de suscripción Fullstack registrados en admin_platform para tu tenant.
           </p>
         </header>
 
@@ -255,7 +290,7 @@ export default function AdminPagosPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1">
               <h2 className="text-2xl font-semibold">Movimientos de pagos</h2>
-              <p className="text-muted-foreground">Consulta cobros por cita, cliente, empleado y estado.</p>
+              <p className="text-muted-foreground">Consulta cobros de suscripción por plan, estado y referencia.</p>
             </div>
             <Button variant="outline" onClick={handleReload}>
               Recargar
@@ -266,7 +301,7 @@ export default function AdminPagosPage() {
             <Input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Buscar por cliente, empleado, servicio o # cita"
+              placeholder="Buscar por tenant, plan, factura o referencia"
             />
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger>
@@ -310,7 +345,7 @@ export default function AdminPagosPage() {
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent className="text-sm text-muted-foreground">
-                  Ajusta filtros o registra pagos asociados a nuevas citas.
+                  Ajusta filtros o registra pagos de suscripción desde el flujo de planes.
                 </EmptyContent>
               </Empty>
             </CardContent>
@@ -336,26 +371,26 @@ export default function AdminPagosPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead># Cita</TableHead>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Empleado</TableHead>
-                      <TableHead>Servicio</TableHead>
+                      <TableHead>Pago</TableHead>
+                      <TableHead>Plan</TableHead>
+                      <TableHead>Ciclo</TableHead>
                       <TableHead>Estado pago</TableHead>
-                      <TableHead>Fecha referencia</TableHead>
+                      <TableHead>Factura</TableHead>
+                      <TableHead>Fecha pago</TableHead>
                       <TableHead className="text-right">Monto</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredPayments.map((payment) => (
-                      <TableRow key={payment.rowId}>
-                        <TableCell className="font-medium">{payment.appointmentId ?? "Sin cita"}</TableCell>
-                        <TableCell>{payment.clientName}</TableCell>
-                        <TableCell>{payment.employeeName}</TableCell>
-                        <TableCell>{payment.serviceName}</TableCell>
+                      <TableRow key={payment.paymentId}>
+                        <TableCell className="font-medium">#{payment.paymentId}</TableCell>
+                        <TableCell>{payment.planName ?? payment.planCode ?? "Sin plan"}</TableCell>
+                        <TableCell>{payment.billingCycle ?? "Sin ciclo"}</TableCell>
                         <TableCell>
-                          <Badge variant={getStatusVariant(payment.status)}>{getStatusLabel(payment.status)}</Badge>
+                          <Badge variant={getStatusVariant(payment.paymentStatus)}>{getStatusLabel(payment.paymentStatus)}</Badge>
                         </TableCell>
-                        <TableCell>{payment.appointmentDate ? formatDateTime(payment.appointmentDate) : "Sin fecha"}</TableCell>
+                        <TableCell>{payment.invoiceNumber ?? "Sin factura"}</TableCell>
+                        <TableCell>{payment.paidAt ? formatDateTime(payment.paidAt) : payment.createdAt ? formatDateTime(payment.createdAt) : "Sin fecha"}</TableCell>
                         <TableCell className="text-right">{formatCurrency(payment.amount)}</TableCell>
                       </TableRow>
                     ))}

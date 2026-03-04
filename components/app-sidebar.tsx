@@ -50,6 +50,7 @@ function formatDisplayName(raw: string): string {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [role, setRole] = React.useState<RoleKey>("client")
+  const [canAccessAdminSections, setCanAccessAdminSections] = React.useState(true)
   const [userInfo, setUserInfo] = React.useState({
     name: "Usuario Hair Salon",
     email: "",
@@ -77,6 +78,43 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       name: formattedName,
       email: storedEmail,
     }))
+
+    if (storedRole === "admin") {
+      const tenantSchema =
+        (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim() || null
+      const userEmail = (localStorage.getItem("userEmail") ?? "").trim() || null
+
+      const controller = new AbortController()
+      const query = new URLSearchParams()
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+      if (userEmail) {
+        query.set("email", userEmail)
+      }
+
+      void fetch(`/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`, {
+        signal: controller.signal,
+        cache: "no-store",
+      })
+        .then(async (response) => {
+          const payload = (await response.json().catch(() => null)) as { canAccessSections?: boolean } | null
+          if (!response.ok) {
+            return
+          }
+
+          setCanAccessAdminSections(Boolean(payload?.canAccessSections))
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) {
+            return
+          }
+
+          console.warn("No se pudo validar el acceso admin por suscripción", error)
+        })
+
+      return () => controller.abort()
+    }
   }, [])
 
   React.useEffect(() => {
@@ -115,16 +153,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       { title: "Empleados", url: "/admin/empleados", icon: Users },
       { title: "Clientes", url: "/admin/clientes", icon: Users },
       { title: "Servicios", url: "/admin/servicios", icon: Scissors },
+      { title: "Planes", url: "/admin/planes", icon: DollarSign },
       { title: "Pagos y Facturación", url: "/admin/pagos", icon: Receipt },
       { title: "Ajustes / Configuración", url: "/admin/ajustes", icon: Settings2 },
-    ]
+    ].map((item) => {
+      if (canAccessAdminSections) {
+        return item
+      }
+
+      const isEnabledWithoutPayment = item.url === "/admin/planes"
+      if (isEnabledWithoutPayment) {
+        return item
+      }
+
+      return {
+        ...item,
+        disabled: true,
+        disabledReason: "Debes tener un pago aprobado del plan para habilitar esta sección.",
+      }
+    })
 
     return {
       client: { nav: clientNav },
       barber: { nav: barberNav },
       admin: { nav: adminNav },
     }
-  }, [])
+  }, [canAccessAdminSections])
 
   const current = menusByRole[role]
 

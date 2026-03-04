@@ -27,6 +27,8 @@ export function NavMain({
     url: string
     icon?: LucideIcon
     isActive?: boolean
+    disabled?: boolean
+    disabledReason?: string
     items?: { title: string; url: string }[]
   }[]
   label?: string
@@ -44,8 +46,25 @@ export function NavMain({
           if (!hasChildren) {
             return (
               <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild tooltip={item.title} isActive={item.isActive}>
-                  <a href={item.url}>
+                <SidebarMenuButton
+                  asChild
+                  tooltip={item.title}
+                  isActive={item.isActive}
+                  className={item.disabled ? "opacity-45" : undefined}
+                >
+                  <a
+                    href={item.url}
+                    aria-disabled={item.disabled ? "true" : undefined}
+                    onClick={
+                      item.disabled
+                        ? (event) => {
+                            event.preventDefault()
+                            const message = item.disabledReason?.trim() || "Debes tener un plan activo para acceder a esta sección."
+                            window.alert(message)
+                          }
+                        : undefined
+                    }
+                  >
                     {item.icon && <item.icon />}
                     <span>{item.title}</span>
                   </a>

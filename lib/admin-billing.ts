@@ -77,12 +77,21 @@ function resolveTenantId(tenantSchema?: string | null, explicitTenantId?: number
     return explicitTenantId as number
   }
 
+  const normalizedSchema = resolveTenantSchema(tenantSchema)
+  if (tenantSchema && TENANT_SCHEMA_PATTERN.test(normalizedSchema)) {
+    const suffixMatch = /^tenant_(\d+)$/i.exec(normalizedSchema)
+    if (suffixMatch) {
+      return parseTenantId(suffixMatch[1])
+    }
+
+    return null
+  }
+
   const fromEnv = parseTenantId(process.env.ADMIN_PLATFORM_TENANT_ID ?? process.env.TENANT_ADMIN_ID)
   if (fromEnv) {
     return fromEnv
   }
 
-  const normalizedSchema = resolveTenantSchema(tenantSchema)
   const suffixMatch = /^tenant_(\d+)$/i.exec(normalizedSchema)
   if (!suffixMatch) {
     return null
@@ -150,6 +159,19 @@ function isBillingEnforcementDisabled() {
   return (process.env.ADMIN_BILLING_ENFORCEMENT_DISABLED ?? "").trim().toLowerCase() === "true"
 }
 
+function shouldBypassTenantNotFoundInDevelopment() {
+  const fromEnv = (process.env.ADMIN_BILLING_ALLOW_TENANT_NOT_FOUND_IN_DEV ?? "").trim().toLowerCase()
+  if (fromEnv === "true") {
+    return true
+  }
+
+  if (fromEnv === "false") {
+    return false
+  }
+
+  return process.env.NODE_ENV !== "production"
+}
+
 type TenantCanLoginRow = {
   can_login: boolean
   reason: string | null
@@ -177,6 +199,99 @@ type SyncBillingRow = {
   a_past_due: number
   a_unpaid: number
   a_paused: number
+}
+
+type BillingPlanRow = {
+  id: number
+  nombre: string
+  codigo: string
+  descripcion: string | null
+  precio_mensual: string | null
+  precio_trimestral: string | null
+  precio_anual: string | null
+  moneda: string | null
+  activo: boolean
+}
+
+type TenantBillingPaymentRow = {
+  pago_id: number
+  fecha_pago_registro: string | null
+  pagado_en: string | null
+  estado_pago: string | null
+  monto: string | null
+  moneda: string | null
+  metodo_pago: string | null
+  proveedor_pago: string | null
+  referencia_externa: string | null
+  tenant_id: number
+  tenant_nombre: string | null
+  tenant_esquema: string | null
+  suscripcion_id: number | null
+  ciclo_facturacion: string | null
+  plan_codigo: string | null
+  plan_nombre: string | null
+  factura_id: number | null
+  numero_factura: string | null
+  estado_factura: string | null
+}
+
+type TenantSubscriptionSnapshotRow = {
+  tenant_id: number
+  tenant_name: string | null
+  tenant_schema: string | null
+  subscription_id: number | null
+  plan_code: string | null
+  plan_name: string | null
+  subscription_status: string | null
+  billing_cycle: string | null
+  period_end: string | null
+  next_charge_at: string | null
+}
+
+export type BillingPlanSummary = {
+  id: number
+  name: string
+  code: string
+  description: string | null
+  monthlyPrice: number
+  quarterlyPrice: number
+  yearlyPrice: number
+  currency: string
+  active: boolean
+}
+
+export type TenantBillingPaymentSummary = {
+  paymentId: number
+  amount: number
+  currency: string
+  paymentStatus: string | null
+  paidAt: string | null
+  createdAt: string | null
+  paymentMethod: string | null
+  paymentProvider: string | null
+  externalReference: string | null
+  billingCycle: string | null
+  planCode: string | null
+  planName: string | null
+  invoiceNumber: string | null
+  invoiceStatus: string | null
+  tenantId: number
+  tenantName: string
+  tenantSchema: string | null
+}
+
+export type TenantSubscriptionSnapshot = {
+  tenantId: number
+  tenantName: string
+  tenantSchema: string | null
+  subscriptionId: number | null
+  planCode: string | null
+  planName: string | null
+  subscriptionStatus: string | null
+  billingCycle: string | null
+  periodEnd: string | null
+  nextChargeAt: string | null
+  hasPaidAccess: boolean
 }
 
 type PgLikeError = {
@@ -299,6 +414,18 @@ export async function validateTenantAccess(options: {
         code: "ALLOWED",
         reason,
         message: "Acceso permitido.",
+        status,
+        graceUntil,
+        tenantId,
+      }
+    }
+
+    if (reason === "tenant_not_found" && shouldBypassTenantNotFoundInDevelopment()) {
+      return {
+        allowed: true,
+        code: "TENANT_NOT_FOUND_FAIL_OPEN_DEV",
+        reason,
+        message: "Tenant no registrado en billing local; acceso temporal permitido en entorno no productivo.",
         status,
         graceUntil,
         tenantId,
@@ -455,5 +582,205 @@ export async function triggerBillingSyncStatus(): Promise<unknown> {
     a_past_due: 0,
     a_unpaid: 0,
     a_paused: 0,
+  }
+}
+
+function mapBillingPlanRow(row: BillingPlanRow): BillingPlanSummary {
+  return {
+    id: row.id,
+    name: row.nombre,
+    code: row.codigo,
+    description: row.descripcion,
+    monthlyPrice: Number(row.precio_mensual ?? 0),
+    quarterlyPrice: Number(row.precio_trimestral ?? 0),
+    yearlyPrice: Number(row.precio_anual ?? 0),
+    currency: row.moneda?.trim() || "COP",
+    active: Boolean(row.activo),
+  }
+}
+
+function mapTenantBillingPaymentRow(row: TenantBillingPaymentRow): TenantBillingPaymentSummary {
+  return {
+    paymentId: row.pago_id,
+    amount: Number(row.monto ?? 0),
+    currency: row.moneda?.trim() || "COP",
+    paymentStatus: row.estado_pago,
+    paidAt: row.pagado_en,
+    createdAt: row.fecha_pago_registro,
+    paymentMethod: row.metodo_pago,
+    paymentProvider: row.proveedor_pago,
+    externalReference: row.referencia_externa,
+    billingCycle: row.ciclo_facturacion,
+    planCode: row.plan_codigo,
+    planName: row.plan_nombre,
+    invoiceNumber: row.numero_factura,
+    invoiceStatus: row.estado_factura,
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_nombre?.trim() || "Sin tenant",
+    tenantSchema: row.tenant_esquema,
+  }
+}
+
+export async function getBillingPlans(options?: { activeOnly?: boolean }): Promise<BillingPlanSummary[]> {
+  const activeOnly = options?.activeOnly !== false
+  const conditions: string[] = []
+  const parameters: Array<boolean> = []
+
+  if (activeOnly) {
+    parameters.push(true)
+    conditions.push(`p.activo = $${parameters.length}`)
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
+
+  const result = await pool.query<BillingPlanRow>(
+    `SELECT p.id,
+            p.nombre,
+            p.codigo,
+            p.descripcion,
+            p.precio_mensual::text AS precio_mensual,
+          p.precio_trimestral::text AS precio_trimestral,
+          p.precio_anual::text AS precio_anual,
+            p.moneda,
+            p.activo
+       FROM admin_platform.planes_suscripcion p
+      ${whereClause}
+      ORDER BY p.precio_mensual ASC, p.id ASC`,
+    parameters,
+  )
+
+  return result.rows.map(mapBillingPlanRow)
+}
+
+export async function getTenantBillingPayments(options?: {
+  tenantSchema?: string | null
+  tenantId?: number | null
+  status?: string | null
+  limit?: number
+}): Promise<TenantBillingPaymentSummary[]> {
+  const tenantId = await resolveTenantIdWithFallback(options?.tenantSchema, options?.tenantId)
+  if (!tenantId) {
+    return []
+  }
+
+  const conditions: string[] = ["v.tenant_id = $1"]
+  const parameters: Array<number | string> = [tenantId]
+
+  if (options?.status && options.status.trim().length > 0 && options.status !== "all") {
+    parameters.push(options.status.trim().toLowerCase())
+    conditions.push(`LOWER(COALESCE(v.estado_pago::text, '')) = $${parameters.length}`)
+  }
+
+  const limit =
+    typeof options?.limit === "number" && Number.isFinite(options.limit)
+      ? Math.min(Math.max(Math.trunc(options.limit), 1), 1000)
+      : 300
+
+  parameters.push(limit)
+  const limitPlaceholder = `$${parameters.length}`
+
+  const result = await pool.query<TenantBillingPaymentRow>(
+    `SELECT v.pago_id,
+            v.fecha_pago_registro::text,
+            v.pagado_en::text,
+            v.estado_pago::text,
+            v.monto::text,
+            v.moneda,
+            v.metodo_pago,
+            v.proveedor_pago,
+            v.referencia_externa,
+            v.tenant_id,
+            v.tenant_nombre,
+            v.tenant_esquema,
+            v.suscripcion_id,
+            v.ciclo_facturacion::text,
+            v.plan_codigo,
+            v.plan_nombre,
+            v.factura_id,
+            v.numero_factura,
+            v.estado_factura::text
+       FROM admin_platform.vw_hechos_pagos_tenants v
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY COALESCE(v.pagado_en, v.fecha_pago_registro) DESC, v.pago_id DESC
+      LIMIT ${limitPlaceholder}`,
+    parameters,
+  )
+
+  return result.rows.map(mapTenantBillingPaymentRow)
+}
+
+type TenantPaidAccessRow = {
+  has_paid_access: boolean
+}
+
+export async function hasTenantPaidSubscription(options?: {
+  tenantSchema?: string | null
+  tenantId?: number | null
+}): Promise<boolean> {
+  const tenantId = await resolveTenantIdWithFallback(options?.tenantSchema, options?.tenantId)
+  if (!tenantId) {
+    return false
+  }
+
+  const result = await pool.query<TenantPaidAccessRow>(
+    `SELECT EXISTS (
+        SELECT 1
+          FROM admin_platform.pagos_tenants p
+         WHERE p.tenant_id = $1
+           AND LOWER(COALESCE(p.estado::text, '')) IN ('aprobado', 'pagado', 'completo', 'paid', 'success', 'succeeded')
+      ) AS has_paid_access`,
+    [tenantId],
+  )
+
+  return Boolean(result.rows[0]?.has_paid_access)
+}
+
+export async function getTenantSubscriptionSnapshot(options?: {
+  tenantSchema?: string | null
+  tenantId?: number | null
+}): Promise<TenantSubscriptionSnapshot | null> {
+  const tenantId = await resolveTenantIdWithFallback(options?.tenantSchema, options?.tenantId)
+  if (!tenantId) {
+    return null
+  }
+
+  const result = await pool.query<TenantSubscriptionSnapshotRow>(
+    `SELECT t.id AS tenant_id,
+            t.nombre AS tenant_name,
+            t.esquema AS tenant_schema,
+            s.id AS subscription_id,
+            p.codigo AS plan_code,
+            p.nombre AS plan_name,
+            t.estado_suscripcion::text AS subscription_status,
+              s.ciclo_facturacion::text AS billing_cycle,
+            s.fecha_fin_periodo::text AS period_end,
+            s.proximo_cobro::text AS next_charge_at
+       FROM admin_platform.tenants t
+       LEFT JOIN admin_platform.suscripciones_tenants s ON s.tenant_id = t.id
+       LEFT JOIN admin_platform.planes_suscripcion p ON p.id = s.plan_id
+      WHERE t.id = $1
+      LIMIT 1`,
+    [tenantId],
+  )
+
+  if (result.rowCount === 0) {
+    return null
+  }
+
+  const hasPaidAccess = await hasTenantPaidSubscription({ tenantId })
+  const row = result.rows[0]
+
+  return {
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_name?.trim() || "Sin tenant",
+    tenantSchema: row.tenant_schema,
+    subscriptionId: row.subscription_id,
+    planCode: row.plan_code,
+    planName: row.plan_name,
+    subscriptionStatus: row.subscription_status,
+    billingCycle: row.billing_cycle,
+    periodEnd: row.period_end,
+    nextChargeAt: row.next_charge_at,
+    hasPaidAccess,
   }
 }

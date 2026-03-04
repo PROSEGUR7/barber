@@ -159,14 +159,15 @@ function getDefaultAppUrl() {
   return process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000"
 }
 
-function buildRedirectUrl(reference: string): string {
+function buildRedirectUrl(reference: string, path: string = "/booking"): string {
   const configured = process.env.WOMPI_REDIRECT_URL?.trim()
   if (configured) {
     return configured
   }
 
   const appUrl = getDefaultAppUrl().replace(/\/$/, "")
-  return `${appUrl}/booking?paymentProvider=wompi&reference=${encodeURIComponent(reference)}`
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`
+  return `${appUrl}${normalizedPath}?paymentProvider=wompi&reference=${encodeURIComponent(reference)}`
 }
 
 async function getTotalAmountInCents(serviceIds: number[]): Promise<number> {
@@ -314,6 +315,45 @@ export async function createWompiCheckoutDataForReservation(options: {
     signatureIntegrity,
     redirectUrl,
     customerEmail: user.email,
+    acceptanceToken,
+    personalDataAuthToken,
+  }
+}
+
+export async function createWompiCheckoutDataForSaasPlan(options: {
+  planId: string
+  amountInCop: number
+}): Promise<WompiCheckoutData> {
+  const { planId, amountInCop } = options
+  const normalizedPlanId = planId.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "-")
+  const amountInCents = Math.round(amountInCop * 100)
+
+  if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
+    const error = new Error("AMOUNT_INVALID")
+    ;(error as { code?: string }).code = "AMOUNT_INVALID"
+    throw error
+  }
+
+  const { publicKey, integritySecret } = getRequiredWompiConfig()
+  const reference = `PLAN-${normalizedPlanId}-${Date.now()}`
+  const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
+  const signatureIntegrity = createHash("sha256")
+    .update(`${reference}${amountInCents}COP${integritySecret}`)
+    .digest("hex")
+
+  const fallbackCustomerEmail =
+    process.env.WOMPI_DEFAULT_CUSTOMER_EMAIL?.trim() ||
+    process.env.NEXT_PUBLIC_SUPPORT_EMAIL?.trim() ||
+    "cliente@softdatai.co"
+
+  return {
+    publicKey,
+    currency: "COP",
+    amountInCents,
+    reference,
+    signatureIntegrity,
+    redirectUrl: buildRedirectUrl(reference, "/"),
+    customerEmail: fallbackCustomerEmail,
     acceptanceToken,
     personalDataAuthToken,
   }

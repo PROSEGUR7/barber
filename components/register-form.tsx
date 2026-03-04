@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 
 import {
   AlertDialog,
@@ -22,6 +22,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { getSaasPlanById, isSaasPlanId, type SaasPlanId } from "@/lib/saas-plans"
 import { cn } from "@/lib/utils"
 
 type AlertState = {
@@ -41,6 +42,7 @@ type RegisterErrorResponse = {
 
 export function RegisterForm({ className, ...props }: React.ComponentProps<"div">) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [fullName, setFullName] = useState("")
   const [phone, setPhone] = useState("")
   const [email, setEmail] = useState("")
@@ -54,6 +56,75 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
     description: "",
     actionLabel: "Aceptar",
   })
+
+  const selectedPlanParam = searchParams.get("plan")
+  const selectedPlanId: SaasPlanId | null = isSaasPlanId(selectedPlanParam) ? selectedPlanParam : null
+  const selectedPlan = selectedPlanId ? getSaasPlanById(selectedPlanId) : null
+
+  const persistTenant = (tenantValue: string | null | undefined) => {
+    const normalized = typeof tenantValue === "string" ? tenantValue.trim().toLowerCase() : ""
+    if (/^tenant_[a-z0-9_]+$/.test(normalized)) {
+      localStorage.setItem("userTenant", normalized)
+      localStorage.setItem("tenantSchema", normalized)
+      return
+    }
+
+    localStorage.removeItem("userTenant")
+    localStorage.removeItem("tenantSchema")
+  }
+
+  const tryAutoLoginAfterRegister = async (options: { email: string; password: string; planId: SaasPlanId }) => {
+    const { email: userEmail, password: userPassword, planId } = options
+
+    const loginResponse = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: userEmail,
+        password: userPassword,
+      }),
+    })
+
+    const loginData = (await loginResponse.json().catch(() => ({}))) as {
+      user?: {
+        id?: number
+        email?: string
+        role?: string
+        displayName?: string | null
+        tenant?: string | null
+      }
+      error?: string
+    }
+
+    if (!loginResponse.ok || !loginData.user) {
+      throw new Error(loginData.error ?? "Cuenta creada, pero no se pudo iniciar sesión automáticamente.")
+    }
+
+    const user = loginData.user
+
+    if (user.email) {
+      localStorage.setItem("userEmail", user.email)
+    }
+
+    if (typeof user.id === "number") {
+      localStorage.setItem("userId", String(user.id))
+    }
+
+    if (user.role) {
+      localStorage.setItem("userRole", user.role)
+    }
+
+    if (user.displayName) {
+      localStorage.setItem("userDisplayName", user.displayName)
+    }
+
+    persistTenant(user.tenant)
+    localStorage.setItem("onboardingPlanId", planId)
+
+    router.push(`/admin?plan=${encodeURIComponent(planId)}`)
+  }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -96,7 +167,8 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
           phone: sanitizedPhone,
           email: sanitizedEmail,
           password,
-          role: "client",
+          role: selectedPlan ? "admin" : "client",
+          onboardingPlanId: selectedPlan?.id,
         }),
       })
 
@@ -155,6 +227,30 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
 
       localStorage.setItem("registeredEmail", sanitizedEmail)
 
+      if (selectedPlan) {
+        try {
+          await tryAutoLoginAfterRegister({
+            email: sanitizedEmail,
+            password,
+            planId: selectedPlan.id,
+          })
+          return
+        } catch (autoLoginError) {
+          console.error("Auto login after register failed", autoLoginError)
+          setAlertState({
+            open: true,
+            title: "Cuenta creada",
+            description:
+              "Tu cuenta admin fue creada, pero no pudimos iniciar sesión automáticamente. Inicia sesión para continuar con tu plan.",
+            actionLabel: "Ir a iniciar sesión",
+            onConfirm: () => {
+              router.push(`/login?plan=${encodeURIComponent(selectedPlan.id)}`)
+            },
+          })
+          return
+        }
+      }
+
       setAlertState({
         open: true,
         title: "Cuenta creada",
@@ -184,6 +280,11 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
                 <p className="text-muted-foreground text-balance">
                   Ingresa tu correo para crear tu cuenta
                 </p>
+                {selectedPlan && (
+                  <p className="text-xs text-muted-foreground">
+                    Plan seleccionado: <span className="font-medium text-foreground">{selectedPlan.title}</span>
+                  </p>
+                )}
               </div>
               <Field>
                 <FieldLabel htmlFor="fullName">Nombre completo</FieldLabel>

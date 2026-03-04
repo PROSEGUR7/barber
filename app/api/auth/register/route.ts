@@ -6,6 +6,7 @@ import {
   UserAlreadyExistsError,
   type AppUserRole,
 } from "@/lib/auth"
+import { isSaasPlanId } from "@/lib/saas-plans"
 
 type RegisterBody = {
   name?: unknown
@@ -13,6 +14,7 @@ type RegisterBody = {
   email?: unknown
   password?: unknown
   role?: unknown
+  onboardingPlanId?: unknown
 }
 
 function jsonError(
@@ -55,8 +57,10 @@ export async function POST(request: Request) {
     : ""
   const password = typeof body.password === "string" ? body.password : ""
 
-  // Public signup: do not allow privilege escalation via role.
-  const role: AppUserRole = "client"
+  const requestedRole = isNonEmptyString(body.role) ? body.role.trim().toLowerCase() : ""
+  const onboardingPlanId = isNonEmptyString(body.onboardingPlanId) ? body.onboardingPlanId.trim() : ""
+
+  const role: AppUserRole = requestedRole === "admin" && isSaasPlanId(onboardingPlanId) ? "admin" : "client"
 
   if (!name) {
     return jsonError(400, {
