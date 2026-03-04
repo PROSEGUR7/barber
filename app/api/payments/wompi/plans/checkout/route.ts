@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { isPlanChangeBillingEnabled, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
+import { prepareTenantSubscriptionContext } from "@/lib/admin-billing"
 import { findTenantSchemaByEmail } from "@/lib/auth"
 import { createWompiCheckoutDataForSaasPlan } from "@/lib/wompi"
 
@@ -59,30 +59,11 @@ export async function POST(request: Request) {
       tenantSchema = await findTenantSchemaByEmail(emailHint.trim().toLowerCase())
     }
 
-    const billingContext = await resolveTenantBillingChargeContext({
+    const billingContext = await prepareTenantSubscriptionContext({
       tenantSchema,
       requestedPlanCode: planId,
       requestedBillingCycle: resolvedBillingCycle,
     })
-
-    const normalizedRequestedPlan = planId.trim().toLowerCase()
-    const currentPlanCode = billingContext.currentSubscriptionPlanCode?.trim().toLowerCase() ?? null
-
-    if (currentPlanCode && normalizedRequestedPlan !== currentPlanCode) {
-      const planChangeEnabled = await isPlanChangeBillingEnabled()
-      if (!planChangeEnabled) {
-        return NextResponse.json(
-          {
-            error:
-              "El cambio de plan aún no está habilitado en billing. Debes aplicar la función SQL registrar_pago_tenant_con_plan.",
-            code: "PLAN_CHANGE_NOT_SUPPORTED",
-            currentPlanCode,
-            requestedPlanCode: normalizedRequestedPlan,
-          },
-          { status: 409 },
-        )
-      }
-    }
 
     const wompiCheckout = await createWompiCheckoutDataForSaasPlan({
       tenantId: billingContext.tenantId,
@@ -204,6 +185,16 @@ export async function POST(request: Request) {
 
     if (code === "ADMIN_BILLING_PLAN_NOT_FOUND" || code === "ADMIN_BILLING_PLAN_NOT_RESOLVED") {
       return NextResponse.json({ error: "No se pudo resolver el plan de suscripción en billing." }, { status: 409 })
+    }
+
+    if (code === "ADMIN_BILLING_PREPARE_CONTEXT_FUNCTION_MISSING") {
+      return NextResponse.json(
+        {
+          error:
+            "Falta la función de preparación de contexto en billing. Ejecuta: pnpm run db:apply:prepare-subscription-context",
+        },
+        { status: 503 },
+      )
     }
 
     if (code === "ADMIN_BILLING_AMOUNT_NOT_RESOLVED") {

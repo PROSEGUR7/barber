@@ -235,6 +235,17 @@ type TenantChargeContextRow = {
   plan_yearly: string | null
 }
 
+type PreparedSubscriptionContextRow = {
+  tenant_id: number
+  suscripcion_id: number | null
+  plan_id: number
+  plan_codigo: string
+  plan_nombre: string | null
+  ciclo_facturacion: string
+  monto_ciclo: string
+  moneda: string | null
+}
+
 type TenantBillingPaymentRow = {
   pago_id: number
   fecha_pago_registro: string | null
@@ -549,6 +560,83 @@ export async function resolveTenantBillingChargeContext(options?: {
   }
 }
 
+export async function prepareTenantSubscriptionContext(options: {
+  tenantSchema?: string | null
+  tenantId?: number | null
+  requestedPlanCode: string
+  requestedBillingCycle: string
+}): Promise<TenantBillingChargeContext> {
+  const tenantId = await resolveTenantIdWithFallback(options.tenantSchema, options.tenantId)
+
+  if (!tenantId) {
+    throw new Error("ADMIN_BILLING_TENANT_ID_REQUIRED")
+  }
+
+  const requestedPlanCode = normalizeBillingPlanCode(options.requestedPlanCode)
+  if (!requestedPlanCode) {
+    throw new Error("ADMIN_BILLING_PLAN_NOT_RESOLVED")
+  }
+
+  const requestedCycle = normalizeBillingCycle(options.requestedBillingCycle)
+
+  let result
+  try {
+    result = await pool.query<PreparedSubscriptionContextRow>(
+      `SELECT ctx.tenant_id,
+              ctx.suscripcion_id,
+              ctx.plan_id,
+              ctx.plan_codigo,
+              ctx.plan_nombre,
+              ctx.ciclo_facturacion::text AS ciclo_facturacion,
+              ctx.monto_ciclo::text AS monto_ciclo,
+              ctx.moneda
+         FROM admin_platform.preparar_contexto_suscripcion_tenant(
+                $1,
+                $2,
+                $3::admin_platform.ciclo_facturacion_enum
+              ) ctx
+        LIMIT 1`,
+      [tenantId, requestedPlanCode, requestedCycle],
+    )
+  } catch (error) {
+    const pgError = error as PgLikeError
+    if (pgError?.code === "42883") {
+      throw new Error("ADMIN_BILLING_PREPARE_CONTEXT_FUNCTION_MISSING")
+    }
+
+    throw error
+  }
+
+  if (result.rowCount === 0) {
+    throw new Error("ADMIN_BILLING_CONTEXT_PREPARATION_FAILED")
+  }
+
+  const row = result.rows[0]
+  const amount = Number(row.monto_ciclo)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("ADMIN_BILLING_AMOUNT_NOT_RESOLVED")
+  }
+
+  const planCode = row.plan_codigo?.trim()
+  if (!planCode) {
+    throw new Error("ADMIN_BILLING_PLAN_NOT_RESOLVED")
+  }
+
+  return {
+    tenantId: row.tenant_id,
+    tenantSchema: options.tenantSchema ?? null,
+    tenantSubscriptionStatus: null,
+    subscriptionId: row.suscripcion_id,
+    currentSubscriptionPlanCode: normalizeBillingPlanCode(row.plan_codigo),
+    planId: row.plan_id,
+    planCode,
+    planName: row.plan_nombre?.trim() || "Plan",
+    billingCycle: normalizeBillingCycle(row.ciclo_facturacion),
+    amount,
+    currency: (row.moneda ?? "COP").trim().toUpperCase() || "COP",
+  }
+}
+
 export async function validateTenantAccess(options: {
   tenantSchema?: string | null
   tenantId?: number | null
@@ -709,67 +797,30 @@ export async function registerTenantPaymentWithIdempotency(input: RegisterTenant
     }
 
     const billingCycle = normalizeBillingCycle(input.billingCycle)
-    const requestedPlanCode = normalizeBillingPlanCode(input.requestedPlanCode)
 
-    if (requestedPlanCode) {
-      const fnAvailability = await client.query<FunctionAvailabilityRow>(
-        "SELECT to_regprocedure('admin_platform.registrar_pago_tenant_con_plan(integer,text,numeric,text,text,text,text,admin_platform.ciclo_facturacion_enum,timestamp with time zone)')::text AS fn",
-      )
-
-      if (!fnAvailability.rows[0]?.fn) {
-        throw new Error("PLAN_CHANGE_NOT_SUPPORTED")
-      }
-
-      await client.query<RegisterTenantPaymentRow>(
-        `SELECT *
-           FROM admin_platform.registrar_pago_tenant_con_plan(
-             $1,
-             $2,
-             $3,
-             $4,
-             $5,
-             $6,
-             $7,
-             $8::admin_platform.ciclo_facturacion_enum,
-             $9
-           )`,
-        [
-          tenantId,
-          requestedPlanCode,
-          input.amount,
-          input.currency,
-          input.paymentMethod,
-          input.paymentProvider,
-          normalizedReference,
-          billingCycle,
-          new Date().toISOString(),
-        ],
-      )
-    } else {
-      await client.query<RegisterTenantPaymentRow>(
-        `SELECT *
-           FROM admin_platform.registrar_pago_tenant(
-             $1,
-             $2,
-             $3,
-             $4,
-             $5,
-             $6,
-             $7::admin_platform.ciclo_facturacion_enum,
-             $8
-           )`,
-        [
-          tenantId,
-          input.amount,
-          input.currency,
-          input.paymentMethod,
-          input.paymentProvider,
-          normalizedReference,
-          billingCycle,
-          new Date().toISOString(),
-        ],
-      )
-    }
+    await client.query<RegisterTenantPaymentRow>(
+      `SELECT *
+         FROM admin_platform.registrar_pago_tenant(
+           $1,
+           $2,
+           $3,
+           $4,
+           $5,
+           $6,
+           $7::admin_platform.ciclo_facturacion_enum,
+           $8
+         )`,
+      [
+        tenantId,
+        input.amount,
+        input.currency,
+        input.paymentMethod,
+        input.paymentProvider,
+        normalizedReference,
+        billingCycle,
+        new Date().toISOString(),
+      ],
+    )
 
     await client.query("COMMIT")
 

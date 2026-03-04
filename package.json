@@ -13,6 +13,7 @@
     "db:apply:senior-hardening": "node scripts/apply-senior-hardening-schema.js",
     "db:apply:meta-credenciales": "node scripts/apply-meta-credenciales-schema.js",
     "db:apply:plan-change-payment": "node scripts/apply-admin-platform-plan-change-payment.js",
+    "db:apply:prepare-subscription-context": "node scripts/apply-admin-platform-preparar-contexto-suscripcion.js",
     "billing:sync-status": "node scripts/sync-billing-status.js",
     "billing:verify": "node scripts/verify-billing-db-direct.js"
   },
