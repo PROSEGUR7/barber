@@ -429,7 +429,8 @@ export async function createWompiCheckoutDataForSaasPlan(options: {
   }
 
   const { publicKey, integritySecret } = getRequiredWompiConfig()
-  const reference = `BILL-T${tenantId}-P${planToken}-C${cycleToken}-${Date.now().toString(36)}`
+  const timestampToken = Date.now().toString(36).toUpperCase()
+  const reference = `B${tenantId}P${planToken.toUpperCase()}C${cycleToken.toUpperCase()}${timestampToken}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const signatureIntegrity = createHash("sha256")
     .update(`${reference}${amountInCents}COP${integritySecret}`)
@@ -508,8 +509,8 @@ export function parseTenantBillingReference(reference: string | null | undefined
     }
   }
 
-  const trimmed = reference.trim().toLowerCase()
-  const match = /^bill-t(\d+)-p([a-z0-9_-]+)-c([mta])-([a-z0-9]+)$/i.exec(trimmed)
+  const trimmed = reference.trim().toUpperCase()
+  const match = /^B(\d+)P([A-Z0-9]+)C([MTA])([A-Z0-9]+)$/i.exec(trimmed)
 
   if (!match) {
     return {
@@ -520,7 +521,7 @@ export function parseTenantBillingReference(reference: string | null | undefined
   }
 
   const tenantId = Number.parseInt(match[1], 10)
-  const planToken = match[2]
+  const planToken = match[2].toLowerCase()
   const cycleToken = match[3]
   const decodedPlanCode = REFERENCE_TOKEN_TO_PLAN_CODE[planToken] ?? null
   const decodedCycle = cycleToken === "t" ? "trimestral" : cycleToken === "a" ? "anual" : "mensual"
