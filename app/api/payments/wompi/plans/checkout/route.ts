@@ -183,6 +183,16 @@ export async function POST(request: Request) {
       )
     }
 
+    if (code === "ADMIN_BILLING_TENANT_HINT_REQUIRED") {
+      return NextResponse.json(
+        {
+          error:
+            "No se pudo resolver el tenant desde tu sesión. Cierra sesión y vuelve a ingresar para refrescar tenant/email.",
+        },
+        { status: 409 },
+      )
+    }
+
     if (code === "ADMIN_BILLING_PLAN_NOT_FOUND" || code === "ADMIN_BILLING_PLAN_NOT_RESOLVED") {
       return NextResponse.json({ error: "No se pudo resolver el plan de suscripción en billing." }, { status: 409 })
     }

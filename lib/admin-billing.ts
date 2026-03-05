@@ -572,6 +572,14 @@ export async function prepareTenantSubscriptionContext(options: {
   requestedPlanCode: string
   requestedBillingCycle: string
 }): Promise<TenantBillingChargeContext> {
+  const hasExplicitTenantId = Number.isInteger(options.tenantId) && (options.tenantId as number) > 0
+  const hasExplicitTenantSchema =
+    typeof options.tenantSchema === "string" && options.tenantSchema.trim().length > 0
+
+  if (!hasExplicitTenantId && !hasExplicitTenantSchema) {
+    throw new Error("ADMIN_BILLING_TENANT_HINT_REQUIRED")
+  }
+
   const tenantId = await resolveTenantIdWithFallback(options.tenantSchema, options.tenantId)
 
   if (!tenantId) {

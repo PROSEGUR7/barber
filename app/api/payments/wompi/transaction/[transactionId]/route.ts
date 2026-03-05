@@ -105,7 +105,8 @@ export async function GET(_: Request, context: Params) {
       typeof amountInCents === "number" &&
       Number.isFinite(amountInCents) &&
       amountInCents > 0 &&
-      paymentReference
+      paymentReference &&
+      parsedReference.tenantId
     ) {
       billingRegistration.attempted = true
 
@@ -189,6 +190,13 @@ export async function GET(_: Request, context: Params) {
           throw error
         }
       }
+    } else if (normalizedStatus === "APPROVED" && !parsedReference.tenantId) {
+      billingRegistration.attempted = true
+      billingRegistration.rejected = true
+      billingRegistration.code = "ADMIN_BILLING_REFERENCE_TENANT_MISSING"
+      billingRegistration.reason = "invalid_reference"
+      billingRegistration.message =
+        "La referencia aprobada no contiene tenantId válido para registrar en admin_platform."
     }
 
     return NextResponse.json(
