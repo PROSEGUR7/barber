@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Building, Building2, Bot, Sparkles } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -55,6 +56,8 @@ const ICON_BY_PLAN: Record<SaasPlanId, typeof Building2> = {
 }
 
 export default function AdminPlanesScreen() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [plans, setPlans] = useState<PlanCatalogItem[]>(
     SAAS_PLANS.map((plan) => ({
       ...plan,
@@ -78,6 +81,7 @@ export default function AdminPlanesScreen() {
   const [showPlanCatalog, setShowPlanCatalog] = useState(false)
   const [checkoutTenantSchema, setCheckoutTenantSchema] = useState<string | null>(null)
   const [checkoutEmail, setCheckoutEmail] = useState<string | null>(null)
+  const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
 
   const cycleOptions: Array<{ value: BillingCycle; label: string }> = [
     { value: "mensual", label: "Mensual" },
@@ -433,6 +437,83 @@ export default function AdminPlanesScreen() {
     }
   }, [checkoutEmail, checkoutTenantSchema, selectedBillingCycle])
 
+  useEffect(() => {
+    const paymentProvider = (searchParams.get("paymentProvider") ?? "").trim().toLowerCase()
+    const reference = (searchParams.get("reference") ?? "").trim()
+
+    if (paymentProvider !== "wompi" || !reference) {
+      return
+    }
+
+    let isCancelled = false
+
+    const reconcilePayment = async () => {
+      if (!isCancelled) {
+        setIsReconcilingPayment(true)
+      }
+
+      try {
+        const byReferenceResponse = await fetch(`/api/payments/wompi/reference/${encodeURIComponent(reference)}`, {
+          cache: "no-store",
+        })
+
+        const byReferencePayload = (await byReferenceResponse.json().catch(() => null)) as {
+          transactionId?: string | null
+          error?: string
+        } | null
+
+        if (!byReferenceResponse.ok || !byReferencePayload?.transactionId) {
+          throw new Error(byReferencePayload?.error?.trim() || "No se pudo resolver la transacción de Wompi.")
+        }
+
+        const transactionResponse = await fetch(
+          `/api/payments/wompi/transaction/${encodeURIComponent(byReferencePayload.transactionId)}`,
+          { cache: "no-store" },
+        )
+
+        const transactionPayload = (await transactionResponse.json().catch(() => null)) as {
+          billingRegistration?: {
+            registered?: boolean
+            skipped?: boolean
+            rejected?: boolean
+            message?: string | null
+          }
+          billingRejectMessage?: string | null
+          error?: string
+        } | null
+
+        if (!transactionResponse.ok) {
+          throw new Error(transactionPayload?.error?.trim() || "No se pudo conciliar el pago de Wompi.")
+        }
+
+        if (transactionPayload?.billingRegistration?.registered || transactionPayload?.billingRegistration?.skipped) {
+          window.alert("Pago conciliado correctamente. Tu suscripción fue actualizada.")
+        } else if (transactionPayload?.billingRegistration?.rejected) {
+          window.alert(
+            transactionPayload.billingRejectMessage?.trim() ||
+              transactionPayload.billingRegistration.message?.trim() ||
+              "El pago fue aprobado en pasarela pero rechazado por billing.",
+          )
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          window.alert(error instanceof Error ? error.message : "No se pudo validar el pago de Wompi")
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsReconcilingPayment(false)
+          router.replace("/admin/planes")
+        }
+      }
+    }
+
+    void reconcilePayment()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [router, searchParams])
+
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-4 px-4 py-4">
@@ -441,6 +522,9 @@ export default function AdminPlanesScreen() {
           <p className="text-muted-foreground">
             Escoge uno de los 4 planes disponibles para gestionar tu suscripción.
           </p>
+          {isReconcilingPayment && (
+            <p className="text-sm text-muted-foreground">Validando pago en Wompi y actualizando billing...</p>
+          )}
           {isSubscriptionStateLoading && (
             <p className="text-sm text-muted-foreground">Cargando estado de tu plan...</p>
           )}

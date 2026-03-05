@@ -609,6 +609,54 @@ export async function fetchWompiTransactionById(transactionId: string): Promise<
   return payload.data
 }
 
+export async function fetchLatestWompiTransactionByReference(reference: string): Promise<WompiTransactionData | null> {
+  const normalized = reference.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const privateKey = getRequiredWompiPrivateKey()
+  const response = await fetch(
+    `${getWompiBaseUrl()}/v1/transactions?reference=${encodeURIComponent(normalized)}`,
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${privateKey}`,
+      },
+    },
+  )
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: WompiTransactionData[]
+  }
+
+  if (!response.ok || !Array.isArray(payload?.data) || payload.data.length === 0) {
+    return null
+  }
+
+  const sorted = [...payload.data].sort((left, right) => {
+    const leftRecord = left as Record<string, unknown>
+    const rightRecord = right as Record<string, unknown>
+    const leftDate =
+      typeof leftRecord.finalized_at === "string"
+        ? new Date(leftRecord.finalized_at).getTime()
+        : typeof leftRecord.created_at === "string"
+          ? new Date(leftRecord.created_at).getTime()
+          : 0
+    const rightDate =
+      typeof rightRecord.finalized_at === "string"
+        ? new Date(rightRecord.finalized_at).getTime()
+        : typeof rightRecord.created_at === "string"
+          ? new Date(rightRecord.created_at).getTime()
+          : 0
+
+    return rightDate - leftDate
+  })
+
+  return sorted[0] ?? null
+}
+
 export function verifyWompiWebhookSignature(rawBody: string, payload: WompiWebhookEvent): {
   valid: boolean
   reason: string | null
