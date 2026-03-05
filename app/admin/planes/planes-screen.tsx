@@ -1,9 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Building, Building2, Bot, Sparkles } from "lucide-react"
+import { Building, Building2, Bot, Sparkles, CircleCheck, TriangleAlert, X } from "lucide-react"
 import { useRouter, useSearchParams } from "next/navigation"
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatCop, isSaasPlanId, SAAS_PLANS, type SaasPlanId } from "@/lib/saas-plans"
