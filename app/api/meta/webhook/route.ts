@@ -54,6 +54,8 @@ type MetaWebhookBody = {
 }
 
 const DEFAULT_N8N_TEST_WEBHOOK_URL =
+  process.env.N8N_WEBHOOK_TEST_URL?.trim() ||
+  process.env.N8N_WEBHOOK_URL?.trim() ||
   "https://n8n-production-d829.up.railway.app/webhook-test/21a5c328-b92c-4bf1-af6b-a4888d27db98"
 
 type N8nInboundMessagePayload = {
