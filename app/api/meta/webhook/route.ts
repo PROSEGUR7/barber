@@ -53,6 +53,32 @@ type MetaWebhookBody = {
   }>
 }
 
+const DEFAULT_N8N_TEST_WEBHOOK_URL =
+  "https://n8n-production-d829.up.railway.app/webhook-test/21a5c328-b92c-4bf1-af6b-a4888d27db98"
+
+type N8nInboundMessagePayload = {
+  source: "meta-webhook"
+  tenantSchema: string
+  conversationId: string | null
+  phoneNumberId: string | null
+  displayPhoneNumber: string | null
+  contact: {
+    waId: string | null
+    name: string | null
+  }
+  message: {
+    wamid: string | null
+    direction: "inbound"
+    type: string
+    text: string | null
+    mediaId: string | null
+    mediaMimeType: string | null
+    mediaCaption: string | null
+    mediaFilename: string | null
+    sentAt: string | null
+  }
+}
+
 function parseUnixTimestampToIso(value: string | undefined): string | null {
   if (!value) {
     return null
@@ -130,6 +156,34 @@ function getMessagePayload(message: MetaMessage): {
   }
 }
 
+async function sendInboundMessageToN8n(
+  url: string,
+  payload: N8nInboundMessagePayload,
+  apiKey: string | null,
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+
+  if (apiKey?.trim()) {
+    headers["x-api-key"] = apiKey.trim()
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8_000),
+  })
+
+  if (!response.ok) {
+    const responseBody = await response.text().catch(() => "")
+    throw new Error(
+      `n8n webhook responded with ${response.status}${responseBody ? `: ${responseBody.slice(0, 300)}` : ""}`,
+    )
+  }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const mode = searchParams.get("hub.mode")
@@ -168,6 +222,7 @@ export async function POST(request: Request) {
     const entries = Array.isArray(payload.entry) ? payload.entry : []
     let storedMessages = 0
     let updatedStatuses = 0
+    let forwardedToN8n = 0
 
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : []
@@ -183,6 +238,8 @@ export async function POST(request: Request) {
         const configByPhone = phoneNumberId ? await getMetaConfigByPhoneNumberId(phoneNumberId) : null
 
         const tenantSchema = configByPhone?.tenantSchema ?? null
+        const n8nWebhookUrl = configByPhone?.n8nWebhookUrl?.trim() || DEFAULT_N8N_TEST_WEBHOOK_URL
+        const n8nApiKey = configByPhone?.n8nApiKey?.trim() || null
 
         if (!tenantSchema) {
           console.warn("Meta webhook ignorado: phone_number_id sin configuración tenant", {
@@ -200,6 +257,7 @@ export async function POST(request: Request) {
           const contactName = contact?.profile?.name?.trim() || null
           const sentAt = parseUnixTimestampToIso(message.timestamp)
           const normalized = getMessagePayload(message)
+          const conversationId = waId || null
 
           await pool.query(
             `INSERT INTO tenant_base.meta_webhook_messages (
@@ -253,6 +311,44 @@ export async function POST(request: Request) {
           )
 
           storedMessages += 1
+
+          try {
+            await sendInboundMessageToN8n(
+              n8nWebhookUrl,
+              {
+                source: "meta-webhook",
+                tenantSchema,
+                conversationId,
+                phoneNumberId: metadata?.phone_number_id?.trim() || null,
+                displayPhoneNumber: metadata?.display_phone_number?.trim() || null,
+                contact: {
+                  waId,
+                  name: contactName,
+                },
+                message: {
+                  wamid: message.id?.trim() || null,
+                  direction: "inbound",
+                  type: normalized.type,
+                  text: normalized.text,
+                  mediaId: normalized.mediaId,
+                  mediaMimeType: normalized.mediaMimeType,
+                  mediaCaption: normalized.mediaCaption,
+                  mediaFilename: normalized.mediaFilename,
+                  sentAt,
+                },
+              },
+              n8nApiKey,
+            )
+
+            forwardedToN8n += 1
+          } catch (forwardError) {
+            console.error("Meta webhook: no se pudo reenviar mensaje entrante a n8n", {
+              tenantSchema,
+              wamid: message.id?.trim() || null,
+              webhookUrl: n8nWebhookUrl,
+              error: forwardError,
+            })
+          }
         }
 
         for (const status of statuses) {
@@ -291,10 +387,11 @@ export async function POST(request: Request) {
        object: payload.object,
        entries: entries.length,
        storedMessages,
+       forwardedToN8n,
        updatedStatuses,
      })
 
-     return NextResponse.json({ ok: true, storedMessages, updatedStatuses }, { status: 200 })
+     return NextResponse.json({ ok: true, storedMessages, forwardedToN8n, updatedStatuses }, { status: 200 })
    } catch (error) {
      console.error("Meta webhook parse error", error)
      return NextResponse.json(
