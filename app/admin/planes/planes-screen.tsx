@@ -82,6 +82,7 @@ export default function AdminPlanesScreen() {
   const [checkoutTenantSchema, setCheckoutTenantSchema] = useState<string | null>(null)
   const [checkoutEmail, setCheckoutEmail] = useState<string | null>(null)
   const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
+  const [inlineNotice, setInlineNotice] = useState<InlineNotice | null>(null)
 
   const cycleOptions: Array<{ value: BillingCycle; label: string }> = [
     { value: "mensual", label: "Mensual" },
@@ -354,7 +355,11 @@ export default function AdminPlanesScreen() {
     const userEmail = checkoutEmail?.trim() || userEmailFromStorage
 
     if (!tenantSchema || !userEmail) {
-      window.alert("No se pudo resolver tu contexto de sesión (tenant/email). Cierra sesión y vuelve a ingresar.")
+      setInlineNotice({
+        type: "error",
+        title: "Sesión incompleta",
+        message: "No se pudo resolver tu contexto de sesión (tenant/email). Cierra sesión y vuelve a ingresar.",
+      })
       setCheckoutPlanId(null)
       return
     }
@@ -380,10 +385,13 @@ export default function AdminPlanesScreen() {
       } | null
 
       if (response.status === 409 && payload?.code === "PLAN_CHANGE_NOT_SUPPORTED") {
-        window.alert(
-          payload.error?.trim() ||
+        setInlineNotice({
+          type: "error",
+          title: "Cambio de plan no habilitado",
+          message:
+            payload.error?.trim() ||
             "El cambio de plan aún no está habilitado en billing. Solo puedes pagar tu plan actual desde esta pantalla.",
-        )
+        })
         return
       }
 
@@ -431,7 +439,11 @@ export default function AdminPlanesScreen() {
       form.remove()
     } catch (error) {
       console.error("Error starting admin plan checkout", error)
-      window.alert(error instanceof Error ? error.message : "No se pudo iniciar el pago del plan")
+      setInlineNotice({
+        type: "error",
+        title: "No se pudo iniciar el pago",
+        message: error instanceof Error ? error.message : "No se pudo iniciar el pago del plan",
+      })
     } finally {
       setCheckoutPlanId(null)
     }
@@ -487,17 +499,28 @@ export default function AdminPlanesScreen() {
         }
 
         if (transactionPayload?.billingRegistration?.registered || transactionPayload?.billingRegistration?.skipped) {
-          window.alert("Pago conciliado correctamente. Tu suscripción fue actualizada.")
+          setInlineNotice({
+            type: "success",
+            title: "Pago conciliado",
+            message: "Tu suscripción fue actualizada correctamente.",
+          })
         } else if (transactionPayload?.billingRegistration?.rejected) {
-          window.alert(
-            transactionPayload.billingRejectMessage?.trim() ||
+          setInlineNotice({
+            type: "error",
+            title: "Pago rechazado por billing",
+            message:
+              transactionPayload.billingRejectMessage?.trim() ||
               transactionPayload.billingRegistration.message?.trim() ||
               "El pago fue aprobado en pasarela pero rechazado por billing.",
-          )
+          })
         }
       } catch (error) {
         if (!isCancelled) {
-          window.alert(error instanceof Error ? error.message : "No se pudo validar el pago de Wompi")
+          setInlineNotice({
+            type: "error",
+            title: "No se pudo validar el pago",
+            message: error instanceof Error ? error.message : "No se pudo validar el pago de Wompi",
+          })
         }
       } finally {
         if (!isCancelled) {
@@ -522,6 +545,24 @@ export default function AdminPlanesScreen() {
           <p className="text-muted-foreground">
             Escoge uno de los 4 planes disponibles para gestionar tu suscripción.
           </p>
+          {inlineNotice && (
+            <Alert variant={inlineNotice.type === "error" ? "destructive" : "default"}>
+              {inlineNotice.type === "error" ? <TriangleAlert /> : <CircleCheck />}
+              <AlertTitle className="flex items-center justify-between gap-2">
+                <span>{inlineNotice.title}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setInlineNotice(null)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </AlertTitle>
+              <AlertDescription>{inlineNotice.message}</AlertDescription>
+            </Alert>
+          )}
           {isReconcilingPayment && (
             <p className="text-sm text-muted-foreground">Validando pago en Wompi y actualizando billing...</p>
           )}
