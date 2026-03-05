@@ -25,6 +25,8 @@ type BillingAccessResponse = {
   canAccessSections?: boolean
   accessReason?: string | null
   subscription?: {
+    tenantId?: number | null
+    tenantSchema?: string | null
     planCode?: string | null
     planName?: string | null
     billingCycle?: string | null
@@ -74,6 +76,8 @@ export default function AdminPlanesScreen() {
   const [planValidUntil, setPlanValidUntil] = useState<string | null>(null)
   const [nextChargeAt, setNextChargeAt] = useState<string | null>(null)
   const [showPlanCatalog, setShowPlanCatalog] = useState(false)
+  const [checkoutTenantSchema, setCheckoutTenantSchema] = useState<string | null>(null)
+  const [checkoutEmail, setCheckoutEmail] = useState<string | null>(null)
 
   const cycleOptions: Array<{ value: BillingCycle; label: string }> = [
     { value: "mensual", label: "Mensual" },
@@ -194,6 +198,10 @@ export default function AdminPlanesScreen() {
         setHasPaidAccess(nextHasPaidAccess)
         setCanAccessSections(Boolean(payload?.canAccessSections))
         setAccessReason(payload?.accessReason ?? null)
+        const resolvedTenantSchema = payload?.subscription?.tenantSchema?.trim() || tenantSchema || null
+        const resolvedEmail = userEmail || null
+        setCheckoutTenantSchema(resolvedTenantSchema)
+        setCheckoutEmail(resolvedEmail)
         setActivePlanCode(isSaasPlanId(payload?.subscription?.planCode ?? "") ? (payload?.subscription?.planCode as SaasPlanId) : null)
         setActivePlanName(payload?.subscription?.planName?.trim() || null)
         const nextBillingCycle = payload?.subscription?.billingCycle?.trim()?.toLowerCase() || null
@@ -330,14 +338,22 @@ export default function AdminPlanesScreen() {
     setSelectedPlanId(planId)
     setCheckoutPlanId(planId)
     const billingCycle = cycleOverride ?? selectedBillingCycle
-    const tenantSchema =
+    const tenantSchemaFromStorage =
       typeof window !== "undefined"
         ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
         : ""
-    const userEmail =
+    const userEmailFromStorage =
       typeof window !== "undefined"
         ? (localStorage.getItem("userEmail") ?? "").trim()
         : ""
+    const tenantSchema = checkoutTenantSchema?.trim() || tenantSchemaFromStorage
+    const userEmail = checkoutEmail?.trim() || userEmailFromStorage
+
+    if (!tenantSchema || !userEmail) {
+      window.alert("No se pudo resolver tu contexto de sesión (tenant/email). Cierra sesión y vuelve a ingresar.")
+      setCheckoutPlanId(null)
+      return
+    }
 
     try {
       const response = await fetch("/api/payments/wompi/plans/checkout", {
@@ -348,8 +364,8 @@ export default function AdminPlanesScreen() {
         body: JSON.stringify({
           planId,
           billingCycle,
-          tenant: tenantSchema || undefined,
-          email: userEmail || undefined,
+          tenant: tenantSchema,
+          email: userEmail,
         }),
       })
 
@@ -415,7 +431,7 @@ export default function AdminPlanesScreen() {
     } finally {
       setCheckoutPlanId(null)
     }
-  }, [selectedBillingCycle])
+  }, [checkoutEmail, checkoutTenantSchema, selectedBillingCycle])
 
   return (
     <div className="min-h-screen bg-background">
