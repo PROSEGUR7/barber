@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { fetchMetaMedia } from "@/lib/meta-chat"
-import { resolveTenantSchemaForRequest } from "@/lib/meta-tenant-config"
+import { resolveTenantSchemaForRequest, resolveTenantSchemaFromRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
 
@@ -11,7 +11,11 @@ type Params = {
 
 export async function GET(request: Request, context: Params) {
   const { mediaId } = await context.params
-  const tenantSchema = await resolveTenantSchemaForRequest(request)
+  // <img>/<video>/<audio> requests cannot include custom auth headers like x-user-email.
+  // Fall back to explicit tenant hints from query/header so media previews can load.
+  const tenantSchema =
+    (await resolveTenantSchemaForRequest(request)) ??
+    resolveTenantSchemaFromRequest(request)
 
   if (!tenantSchema) {
     return NextResponse.json(
