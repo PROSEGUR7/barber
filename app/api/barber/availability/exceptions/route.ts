@@ -9,6 +9,7 @@ import {
   listAvailabilityExceptions,
   type AvailabilityException,
 } from "@/lib/availability"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -36,6 +37,7 @@ const bodySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const params = querySchema.parse({
       userId: url.searchParams.get("userId"),
@@ -43,8 +45,8 @@ export async function GET(request: Request) {
       to: url.searchParams.get("to"),
     })
 
-    const employeeId = await resolveEmployeeIdForUser(params.userId)
-    const exceptions = await listAvailabilityExceptions({ employeeId, fromDate: params.from, toDate: params.to })
+    const employeeId = await resolveEmployeeIdForUser(params.userId, tenantSchema)
+    const exceptions = await listAvailabilityExceptions({ employeeId, fromDate: params.from, toDate: params.to, tenantSchema })
 
     return NextResponse.json({ exceptions })
   } catch (error) {
@@ -71,6 +73,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = bodySchema.parse(await request.json())
 
     if (body.exception.type === "custom") {
@@ -84,12 +87,12 @@ export async function POST(request: Request) {
       }
     }
 
-    const employeeId = await resolveEmployeeIdForUser(body.userId)
+    const employeeId = await resolveEmployeeIdForUser(body.userId, tenantSchema)
 
     if (body.exception.type === "custom") {
       // Ensure the exception is within the weekly working window for that weekday.
       // If the weekly table isn't deployed yet, getWeeklyAvailability returns [].
-      const weekly = await getWeeklyAvailability(employeeId)
+      const weekly = await getWeeklyAvailability(employeeId, tenantSchema)
       if (weekly.length > 0) {
         const [y, m, d] = body.exception.date.split("-").map((v) => Number(v))
         const dt = new Date(Date.UTC(y, m - 1, d))
@@ -116,6 +119,7 @@ export async function POST(request: Request) {
       employeeId,
       fromDate: body.exception.date,
       toDate: body.exception.date,
+      tenantSchema,
     })
 
     if (existing.length > 0) {
@@ -133,10 +137,10 @@ export async function POST(request: Request) {
       )
     }
 
-    await addAvailabilityException({ employeeId, exception: body.exception as AvailabilityException })
+    await addAvailabilityException({ employeeId, exception: body.exception as AvailabilityException, tenantSchema })
 
     // Re-materialize around the exception date.
-    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate: body.exception.date, days: 7 })
+    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate: body.exception.date, days: 7, tenantSchema })
 
     return NextResponse.json({ ok: true }, { status: 201 })
   } catch (error) {

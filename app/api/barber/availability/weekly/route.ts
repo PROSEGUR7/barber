@@ -8,6 +8,7 @@ import {
   setWeeklyAvailability,
   type WeeklyAvailabilityRule,
 } from "@/lib/availability"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -29,11 +30,12 @@ const bodySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const { userId } = querySchema.parse({ userId: url.searchParams.get("userId") })
 
-    const employeeId = await resolveEmployeeIdForUser(userId)
-    const rules = await getWeeklyAvailability(employeeId)
+    const employeeId = await resolveEmployeeIdForUser(userId, tenantSchema)
+    const rules = await getWeeklyAvailability(employeeId, tenantSchema)
 
     return NextResponse.json({ rules })
   } catch (error) {
@@ -60,10 +62,11 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = bodySchema.parse(await request.json())
 
-    const employeeId = await resolveEmployeeIdForUser(body.userId)
-    await setWeeklyAvailability({ employeeId, rules: body.rules as WeeklyAvailabilityRule[] })
+    const employeeId = await resolveEmployeeIdForUser(body.userId, tenantSchema)
+    await setWeeklyAvailability({ employeeId, rules: body.rules as WeeklyAvailabilityRule[], tenantSchema })
 
     // Re-materialize next 14 days from today to reflect changes.
     const today = new Date()
@@ -72,7 +75,7 @@ export async function PUT(request: Request) {
     const dd = String(today.getUTCDate()).padStart(2, "0")
     const fromDate = `${yyyy}-${mm}-${dd}`
 
-    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate, days: 14 })
+    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate, days: 14, tenantSchema })
 
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {

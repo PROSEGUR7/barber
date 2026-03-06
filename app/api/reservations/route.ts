@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { cancelAppointment, reserveAppointments } from "@/lib/bookings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { createWompiCheckoutDataForReservation } from "@/lib/wompi"
 
 const reservationSchema = z
@@ -36,6 +37,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const json = await request.json()
     const { userId, serviceId, serviceIds, barberId, paymentMethod, start } = reservationSchema.parse(json)
 
@@ -52,6 +54,7 @@ export async function POST(request: Request) {
       employeeId: barberId,
       serviceIds: resolvedServiceIds,
       start,
+      tenantSchema,
     })
 
     if (resolvedPaymentMethod === "wompi") {
@@ -72,7 +75,7 @@ export async function POST(request: Request) {
             }
 
             try {
-              await cancelAppointment({ appointmentId, userId })
+              await cancelAppointment({ appointmentId, userId, tenantSchema })
             } catch (cancelError) {
               console.error("Error canceling appointment after Wompi checkout failure", {
                 appointmentId,

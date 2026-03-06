@@ -168,6 +168,26 @@ export default function AppointmentsPage() {
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<AvailabilitySlot | null>(null)
   const [isSubmittingReschedule, setIsSubmittingReschedule] = useState(false)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   useEffect(() => {
     try {
       const storedUserId = localStorage.getItem("userId")
@@ -204,6 +224,7 @@ export default function AppointmentsPage() {
         const response = await fetch(`/api/appointments?${params.toString()}`, {
           method: "GET",
           cache: "no-store",
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -282,6 +303,7 @@ export default function AppointmentsPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({ userId }),
       })
@@ -360,6 +382,7 @@ export default function AppointmentsPage() {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -417,6 +440,7 @@ export default function AppointmentsPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           userId,

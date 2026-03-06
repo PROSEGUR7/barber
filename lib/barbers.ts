@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { getAvailabilitySlots } from "@/lib/bookings"
+import { tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
 
@@ -23,13 +24,13 @@ function addDays(date: Date, days: number): Date {
   return next
 }
 
-async function getAnyActiveServiceId(): Promise<number | null> {
+async function getAnyActiveServiceId(tenantSchema?: string | null): Promise<number | null> {
   const result = await pool.query<{ id: number }>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.servicios
       WHERE estado = 'activo'
       ORDER BY id ASC
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
   )
 
   return result.rows[0]?.id ?? null
@@ -38,8 +39,9 @@ async function getAnyActiveServiceId(): Promise<number | null> {
 async function computeNextAvailabilityISO(options: {
   employeeId: number
   serviceId: number
+  tenantSchema?: string | null
 }): Promise<string | null> {
-  const { employeeId, serviceId } = options
+  const { employeeId, serviceId, tenantSchema } = options
 
   const now = new Date()
   const today = formatDateInTimeZone(now, BOOKING_TIME_ZONE)
@@ -49,6 +51,7 @@ async function computeNextAvailabilityISO(options: {
     serviceId,
     employeeId,
     date: today,
+    tenantSchema,
   })
 
   const firstToday = todaysSlots.find((slot) => new Date(slot.start).getTime() > now.getTime())
@@ -60,6 +63,7 @@ async function computeNextAvailabilityISO(options: {
     serviceId,
     employeeId,
     date: tomorrow,
+    tenantSchema,
   })
 
   return tomorrowSlots[0]?.start ?? null
@@ -85,13 +89,14 @@ export type BarberCard = {
 export async function listBarbersForUser(options: {
   userId: number | null
   serviceId: number | null
+  tenantSchema?: string | null
 }): Promise<BarberCard[]> {
-  const { userId, serviceId } = options
+  const { userId, serviceId, tenantSchema } = options
 
-  const availabilityServiceId = serviceId ?? (await getAnyActiveServiceId())
+  const availabilityServiceId = serviceId ?? (await getAnyActiveServiceId(tenantSchema))
 
   const result = await pool.query<BarberRow>(
-    `WITH client AS (
+    tenantSql(`WITH client AS (
         SELECT id
           FROM tenant_base.clientes
          WHERE user_id = $1
@@ -120,7 +125,7 @@ export async function listBarbersForUser(options: {
                WHERE es.empleado_id = e.id
                  AND es.servicio_id = $2::int
          ))
-       ORDER BY e.nombre ASC`,
+       ORDER BY e.nombre ASC`, tenantSchema),
     [userId, serviceId],
   )
 
@@ -142,6 +147,7 @@ export async function listBarbersForUser(options: {
       nextAvailabilityISO: await computeNextAvailabilityISO({
         employeeId: barber.id,
         serviceId: availabilityServiceId,
+        tenantSchema,
       }),
     })),
   )

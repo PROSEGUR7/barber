@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db"
+import { tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
 
@@ -50,12 +51,12 @@ export type BarberAppointment = {
 
 export type BarberAppointmentScope = "today" | "upcoming" | "history"
 
-export async function resolveEmployeeIdForUser(userId: number): Promise<number> {
+export async function resolveEmployeeIdForUser(userId: number, tenantSchema?: string | null): Promise<number> {
   const result = await pool.query<EmployeeRow>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.empleados
       WHERE user_id = $1
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
     [userId],
   )
 
@@ -74,9 +75,10 @@ export async function getAppointmentsForEmployee(options: {
   scope: BarberAppointmentScope
   date?: string
   limit?: number
+  tenantSchema?: string | null
 }): Promise<BarberAppointment[]> {
-  const { userId, scope, date } = options
-  const employeeId = await resolveEmployeeIdForUser(userId)
+  const { userId, scope, date, tenantSchema } = options
+  const employeeId = await resolveEmployeeIdForUser(userId, tenantSchema)
 
   const limit =
     typeof options.limit === "number" && Number.isFinite(options.limit)
@@ -103,7 +105,7 @@ export async function getAppointmentsForEmployee(options: {
 
   parameters.push(limit)
 
-  const query = `
+  const query = tenantSql(`
     SELECT a.id,
            a.estado::text AS estado,
            a.fecha_cita,
@@ -129,7 +131,7 @@ export async function getAppointmentsForEmployee(options: {
      WHERE ${conditions.join(" AND ")}
      ORDER BY a.fecha_cita ASC
      LIMIT $${parameters.length}
-  `
+    `, tenantSchema)
 
   const result = await pool.query<EmployeeAppointmentRow>(query, parameters)
 
@@ -151,8 +153,9 @@ export async function updateEmployeeAppointmentStatus(options: {
   userId: number
   appointmentId: number
   status: "cancelada" | "completada"
+  tenantSchema?: string | null
 }): Promise<void> {
-  const employeeId = await resolveEmployeeIdForUser(options.userId)
+  const employeeId = await resolveEmployeeIdForUser(options.userId, options.tenantSchema)
 
   const allowedCurrentStates: Record<typeof options.status, string[]> = {
     completada: ["pendiente"],
@@ -162,12 +165,12 @@ export async function updateEmployeeAppointmentStatus(options: {
   const allowed = allowedCurrentStates[options.status]
 
   const result = await pool.query(
-    `UPDATE tenant_base.agendamientos
+    tenantSql(`UPDATE tenant_base.agendamientos
         SET estado = $1::tenant_base.estado_agendamiento_enum
       WHERE id = $2
         AND empleado_id = $3
         AND estado::text = ANY($4::text[])
-      RETURNING id`,
+      RETURNING id`, options.tenantSchema),
     [options.status, options.appointmentId, employeeId, allowed],
   )
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getAppointmentsForUser } from "@/lib/bookings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -29,6 +30,7 @@ function parseStatuses(searchParams: URLSearchParams, scope: "upcoming" | "histo
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const searchParams = url.searchParams
 
@@ -45,6 +47,7 @@ export async function GET(request: Request) {
       scope: parsed.scope,
       statuses,
       limit: parsed.limit,
+      tenantSchema,
     })
 
     return NextResponse.json({ appointments })

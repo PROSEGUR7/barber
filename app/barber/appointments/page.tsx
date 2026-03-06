@@ -39,6 +39,26 @@ export default function BarberAppointmentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<number | null>(null)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem("userId")
@@ -72,6 +92,7 @@ export default function BarberAppointmentsPage() {
       const response = await fetch(`/api/barber/appointments?${params.toString()}`, {
         method: "GET",
         cache: "no-store",
+        headers: buildTenantHeaders(),
       })
 
       const data = await response.json().catch(() => ({}))
@@ -115,7 +136,7 @@ export default function BarberAppointmentsPage() {
     try {
       const response = await fetch(`/api/barber/appointments/${appointmentId}/status`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({ userId, status }),
       })
 

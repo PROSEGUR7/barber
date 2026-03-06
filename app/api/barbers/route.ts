@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { listBarbersForUser } from "@/lib/barbers"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive().optional(),
@@ -10,6 +11,7 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const rawParams = {
       userId: url.searchParams.get("userId") ?? undefined,
@@ -21,6 +23,7 @@ export async function GET(request: Request) {
     const barbers = await listBarbersForUser({
       userId: params.userId ?? null,
       serviceId: params.serviceId ?? null,
+      tenantSchema,
     })
 
     return NextResponse.json({ barbers })

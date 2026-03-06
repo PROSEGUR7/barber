@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db"
+import { tenantSql } from "@/lib/tenant"
 
 export type WeeklyAvailabilityRule = {
   dow: number // 0=Sunday ... 6=Saturday
@@ -63,13 +64,13 @@ function addDays(date: string, days: number): string {
   return `${yyyy}-${mm}-${dd}`
 }
 
-export async function getWeeklyAvailability(employeeId: number): Promise<WeeklyAvailabilityRule[]> {
+export async function getWeeklyAvailability(employeeId: number, tenantSchema?: string | null): Promise<WeeklyAvailabilityRule[]> {
   try {
     const result = await pool.query<WeeklyRuleRow>(
-      `SELECT dow, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin, activo
+      tenantSql(`SELECT dow, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin, activo
          FROM tenant_base.empleados_disponibilidad_semanal
         WHERE empleado_id = $1
-        ORDER BY dow ASC, hora_inicio ASC`,
+        ORDER BY dow ASC, hora_inicio ASC`, tenantSchema),
       [employeeId],
     )
 
@@ -90,8 +91,9 @@ export async function getWeeklyAvailability(employeeId: number): Promise<WeeklyA
 export async function setWeeklyAvailability(options: {
   employeeId: number
   rules: WeeklyAvailabilityRule[]
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { employeeId, rules } = options
+  const { employeeId, rules, tenantSchema } = options
 
   const client = await pool.connect()
 
@@ -102,7 +104,7 @@ export async function setWeeklyAvailability(options: {
     // Keeps behavior predictable and simple.
     try {
       await client.query(
-        `DELETE FROM tenant_base.empleados_disponibilidad_semanal WHERE empleado_id = $1`,
+        tenantSql(`DELETE FROM tenant_base.empleados_disponibilidad_semanal WHERE empleado_id = $1`, tenantSchema),
         [employeeId],
       )
     } catch (error) {
@@ -117,9 +119,10 @@ export async function setWeeklyAvailability(options: {
 
     for (const rule of activeRules) {
       await client.query(
-        `INSERT INTO tenant_base.empleados_disponibilidad_semanal
+        tenantSql(`INSERT INTO tenant_base.empleados_disponibilidad_semanal
           (empleado_id, dow, hora_inicio, hora_fin, activo)
          VALUES ($1, $2, $3::time, $4::time, TRUE)`,
+         tenantSchema),
         [employeeId, rule.dow, rule.startTime, rule.endTime],
       )
     }
@@ -136,26 +139,27 @@ export async function setWeeklyAvailability(options: {
 export async function addAvailabilityException(options: {
   employeeId: number
   exception: AvailabilityException
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { employeeId, exception } = options
+  const { employeeId, exception, tenantSchema } = options
 
   try {
     if (exception.type === "off") {
       await pool.query(
-        `INSERT INTO tenant_base.empleados_disponibilidad_excepciones
+        tenantSql(`INSERT INTO tenant_base.empleados_disponibilidad_excepciones
           (empleado_id, fecha, tipo, hora_inicio, hora_fin, nota)
          VALUES ($1, $2::date, 'off', NULL, NULL, $3)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT DO NOTHING`, tenantSchema),
         [employeeId, exception.date, exception.note ?? null],
       )
       return
     }
 
     await pool.query(
-      `INSERT INTO tenant_base.empleados_disponibilidad_excepciones
+      tenantSql(`INSERT INTO tenant_base.empleados_disponibilidad_excepciones
         (empleado_id, fecha, tipo, hora_inicio, hora_fin, nota)
        VALUES ($1, $2::date, 'custom', $3::time, $4::time, $5)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING`, tenantSchema),
       [employeeId, exception.date, exception.startTime, exception.endTime, exception.note ?? null],
     )
   } catch (error) {
@@ -170,16 +174,17 @@ export async function listAvailabilityExceptions(options: {
   employeeId: number
   fromDate: string
   toDate: string
+  tenantSchema?: string | null
 }): Promise<AvailabilityException[]> {
-  const { employeeId, fromDate, toDate } = options
+  const { employeeId, fromDate, toDate, tenantSchema } = options
 
   try {
     const result = await pool.query<ExceptionRow>(
-      `SELECT fecha::text as fecha, tipo, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin, nota::text as nota
+      tenantSql(`SELECT fecha::text as fecha, tipo, hora_inicio::text as hora_inicio, hora_fin::text as hora_fin, nota::text as nota
          FROM tenant_base.empleados_disponibilidad_excepciones
         WHERE empleado_id = $1
           AND fecha BETWEEN $2::date AND $3::date
-        ORDER BY fecha ASC, tipo ASC, hora_inicio ASC NULLS FIRST`,
+        ORDER BY fecha ASC, tipo ASC, hora_inicio ASC NULLS FIRST`, tenantSchema),
       [employeeId, fromDate, toDate],
     )
 
@@ -204,15 +209,15 @@ export async function listAvailabilityExceptions(options: {
   }
 }
 
-async function hasMaterializedBlocks(employeeId: number, date: string): Promise<boolean> {
+async function hasMaterializedBlocks(employeeId: number, date: string, tenantSchema?: string | null): Promise<boolean> {
   const result = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS(
+    tenantSql(`SELECT EXISTS(
        SELECT 1
          FROM tenant_base.horarios_empleados he
         WHERE he.empleado_id = $1
           AND DATE(he.fecha_hora_inicio) = $2::date
         LIMIT 1
-     ) as exists`,
+     ) as exists`, tenantSchema),
     [employeeId, date],
   )
 
@@ -223,17 +228,18 @@ export async function ensureMaterializedEmployeeAvailability(options: {
   employeeId: number
   fromDate: string
   days: number
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { employeeId, fromDate, days } = options
+  const { employeeId, fromDate, days, tenantSchema } = options
 
   // If weekly tables don't exist, do nothing (keeps existing behavior).
-  const weeklyRules = await getWeeklyAvailability(employeeId)
+  const weeklyRules = await getWeeklyAvailability(employeeId, tenantSchema)
   if (weeklyRules.length === 0) {
     return
   }
 
   const toDate = addDays(fromDate, Math.max(0, days - 1))
-  const exceptions = await listAvailabilityExceptions({ employeeId, fromDate, toDate })
+  const exceptions = await listAvailabilityExceptions({ employeeId, fromDate, toDate, tenantSchema })
 
   const exceptionsByDate = new Map<string, AvailabilityException[]>()
   for (const ex of exceptions) {
@@ -273,16 +279,16 @@ export async function ensureMaterializedEmployeeAvailability(options: {
 
       // Replace any existing blocks for that date (idempotent and keeps queries simple).
       await client.query(
-        `DELETE FROM tenant_base.horarios_empleados
+        tenantSql(`DELETE FROM tenant_base.horarios_empleados
           WHERE empleado_id = $1
-            AND DATE(fecha_hora_inicio) = $2::date`,
+            AND DATE(fecha_hora_inicio) = $2::date`, tenantSchema),
         [employeeId, date],
       )
 
       for (const block of blocks) {
         await client.query(
-          `INSERT INTO tenant_base.horarios_empleados (empleado_id, disponible, fecha_hora_inicio, fecha_hora_fin)
-           VALUES ($1, TRUE, ($2::date + $3::time), ($2::date + $4::time))`,
+          tenantSql(`INSERT INTO tenant_base.horarios_empleados (empleado_id, disponible, fecha_hora_inicio, fecha_hora_fin)
+           VALUES ($1, TRUE, ($2::date + $3::time), ($2::date + $4::time))`, tenantSchema),
           [employeeId, date, block.startTime, block.endTime],
         )
       }
@@ -300,16 +306,17 @@ export async function ensureMaterializedEmployeeAvailability(options: {
 export async function ensureMaterializedEmployeeDay(options: {
   employeeId: number
   date: string
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { employeeId, date } = options
+  const { employeeId, date, tenantSchema } = options
 
   try {
-    const exists = await hasMaterializedBlocks(employeeId, date)
+    const exists = await hasMaterializedBlocks(employeeId, date, tenantSchema)
     if (exists) {
       return
     }
 
-    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate: date, days: 1 })
+    await ensureMaterializedEmployeeAvailability({ employeeId, fromDate: date, days: 1, tenantSchema })
   } catch (error) {
     // Don't break booking flows if the new tables aren't deployed yet.
     if (isMissingTableError(error)) {

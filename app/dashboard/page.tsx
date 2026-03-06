@@ -113,6 +113,26 @@ export default function Page() {
     "Solo puedes reprogramar máximo 2 veces al día.",
   )
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   const quickLinks = useMemo(
     () => [
       {
@@ -221,9 +241,10 @@ export default function Page() {
         fetch(`/api/appointments?userId=${userId}&scope=upcoming&status=pendiente&limit=1`, {
           method: "GET",
           cache: "no-store",
+          headers: buildTenantHeaders(),
         }),
-        fetch(`/api/wallet?userId=${userId}`, { method: "GET", cache: "no-store" }),
-        fetch(`/api/favorites?userId=${userId}`, { method: "GET", cache: "no-store" }),
+        fetch(`/api/wallet?userId=${userId}`, { method: "GET", cache: "no-store", headers: buildTenantHeaders() }),
+        fetch(`/api/favorites?userId=${userId}`, { method: "GET", cache: "no-store", headers: buildTenantHeaders() }),
       ])
 
       const appointmentsData = await appointmentsRes.json().catch(() => ({}))
@@ -318,6 +339,7 @@ export default function Page() {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -363,7 +385,7 @@ export default function Page() {
     try {
       const response = await fetch(`/api/appointments/${nextAppointment.id}/reschedule`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({ userId, start: selectedRescheduleSlot.start }),
       })
 
@@ -415,7 +437,7 @@ export default function Page() {
     try {
       const response = await fetch(`/api/appointments/${nextAppointment.id}/cancel`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({ userId }),
       })
 

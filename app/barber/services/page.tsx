@@ -34,6 +34,26 @@ export default function BarberServicesPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [search, setSearch] = useState("")
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem("userId")
@@ -48,8 +68,8 @@ export default function BarberServicesPage() {
     setIsLoading(true)
     try {
       const [servicesRes, barberRes] = await Promise.all([
-        fetch(`/api/services`, { cache: "no-store" }),
-        fetch(`/api/barber/services?userId=${uid}`, { cache: "no-store" }),
+        fetch(`/api/services`, { cache: "no-store", headers: buildTenantHeaders() }),
+        fetch(`/api/barber/services?userId=${uid}`, { cache: "no-store", headers: buildTenantHeaders() }),
       ])
 
       const servicesData = await servicesRes.json().catch(() => ({}))
@@ -127,7 +147,7 @@ export default function BarberServicesPage() {
       const enabledServiceIds = Array.from(enabledSet)
       const response = await fetch(`/api/barber/services`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({ userId, serviceIds: enabledServiceIds }),
       })
       const data = await response.json().catch(() => ({}))

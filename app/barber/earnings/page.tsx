@@ -47,6 +47,26 @@ export default function BarberEarningsPage() {
   const [summary, setSummary] = useState<EarningsSummary | null>(null)
   const [analytics, setAnalytics] = useState<EarningsAnalytics | null>(null)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem("userId")
@@ -63,7 +83,10 @@ export default function BarberEarningsPage() {
     const load = async () => {
       setIsLoading(true)
       try {
-        const response = await fetch(`/api/barber/earnings?userId=${userId}`, { cache: "no-store" })
+        const response = await fetch(`/api/barber/earnings?userId=${userId}`, {
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data = await response.json().catch(() => ({}))
         if (!response.ok) {
           toast({ title: "Error", description: data.error ?? "No se pudieron cargar las ganancias", variant: "destructive" })

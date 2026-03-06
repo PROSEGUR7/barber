@@ -6,6 +6,7 @@ import {
   setWeeklyAvailability,
   ensureMaterializedEmployeeAvailability,
 } from "@/lib/availability"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida")
 
@@ -36,10 +37,11 @@ function todayYmdUtc(): string {
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const employeeId = z.coerce.number().int().positive().parse(url.searchParams.get("employeeId"))
 
-    const rules = await getWeeklyAvailability(employeeId)
+    const rules = await getWeeklyAvailability(employeeId, tenantSchema)
     return NextResponse.json({ rules })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -53,18 +55,20 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const payload = putSchema.parse(await request.json())
 
     // NOTE: This project currently does not enforce auth on API routes.
     // Consider restricting this route to admin/employee sessions.
 
-    await setWeeklyAvailability({ employeeId: payload.employeeId, rules: payload.rules })
+    await setWeeklyAvailability({ employeeId: payload.employeeId, rules: payload.rules, tenantSchema })
 
     const fromDate = payload.fromDate ?? todayYmdUtc()
     await ensureMaterializedEmployeeAvailability({
       employeeId: payload.employeeId,
       fromDate,
       days: payload.materializeDays,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true })

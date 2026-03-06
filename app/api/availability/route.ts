@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getAvailabilitySlots } from "@/lib/bookings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   serviceId: z.coerce.number().int().positive(),
@@ -15,6 +16,7 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const rawParams = {
       serviceId: url.searchParams.get("serviceId"),
@@ -30,6 +32,7 @@ export async function GET(request: Request) {
       employeeId: params.barberId,
       date: params.date,
       excludeAppointmentId: params.excludeAppointmentId,
+      tenantSchema,
     })
 
     return NextResponse.json({ slots })

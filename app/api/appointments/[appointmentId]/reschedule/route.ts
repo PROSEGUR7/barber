@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { rescheduleAppointment } from "@/lib/bookings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const paramsSchema = z.object({
   appointmentId: z.coerce.number().int().positive(),
@@ -19,6 +20,7 @@ export async function POST(
   context: { params: Promise<{ appointmentId: string }> },
 ) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const rawParams = await context.params
     const { appointmentId } = paramsSchema.parse(rawParams)
     const body = bodySchema.parse(await request.json())
@@ -27,6 +29,7 @@ export async function POST(
       appointmentId,
       userId: body.userId,
       start: body.start,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true }, { status: 200 })

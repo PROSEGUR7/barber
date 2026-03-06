@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { resolveEmployeeIdForUser } from "@/lib/barber-dashboard"
+import { tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
 
@@ -83,11 +84,12 @@ export async function getBarberEarnings(options: {
   userId: number
   fromDate: string
   toDate: string
+  tenantSchema?: string | null
 }): Promise<BarberEarningsSummary> {
-  const employeeId = await resolveEmployeeIdForUser(options.userId)
+  const employeeId = await resolveEmployeeIdForUser(options.userId, options.tenantSchema)
 
   const result = await pool.query<EarningsRow>(
-    `SELECT
+    tenantSql(`SELECT
        COALESCE(SUM(COALESCE(s.precio, 0)) FILTER (WHERE a.estado::text = 'completada'), 0)::text AS earned_amount,
        COALESCE(COUNT(*) FILTER (WHERE a.estado::text = 'completada'), 0)::text AS completed_count,
        COALESCE(COUNT(*), 0)::text AS total_count
@@ -95,7 +97,7 @@ export async function getBarberEarnings(options: {
      LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
     WHERE a.empleado_id = $1
       AND a.fecha_cita >= $2::timestamptz
-      AND a.fecha_cita <= $3::timestamptz`,
+      AND a.fecha_cita <= $3::timestamptz`, options.tenantSchema),
     [employeeId, `${options.fromDate} 00:00:00`, `${options.toDate} 23:59:59`],
   )
 
@@ -110,8 +112,9 @@ export async function getBarberEarnings(options: {
 export async function getMonthlyEarningsForBarber(options: {
   userId: number
   monthsBack?: number
+  tenantSchema?: string | null
 }): Promise<BarberMonthlyEarningsPoint[]> {
-  const employeeId = await resolveEmployeeIdForUser(options.userId)
+  const employeeId = await resolveEmployeeIdForUser(options.userId, options.tenantSchema)
   const today = getTodayInBusinessTZ()
 
   const months = monthsBackList({ todayYMD: today, monthsBack: options.monthsBack ?? 6 })
@@ -121,7 +124,7 @@ export async function getMonthlyEarningsForBarber(options: {
   const toDate = endOfMonthFromYYYYMM(toMonth)
 
   const result = await pool.query<MonthlyRow>(
-    `SELECT to_char(date_trunc('month', a.fecha_cita), 'YYYY-MM') AS month,
+    tenantSql(`SELECT to_char(date_trunc('month', a.fecha_cita), 'YYYY-MM') AS month,
             COALESCE(SUM(COALESCE(s.precio, 0)) FILTER (WHERE a.estado::text = 'completada'), 0)::text AS amount,
             COALESCE(COUNT(*) FILTER (WHERE a.estado::text = 'completada'), 0)::text AS count
        FROM tenant_base.agendamientos a
@@ -130,7 +133,7 @@ export async function getMonthlyEarningsForBarber(options: {
         AND a.fecha_cita >= $2::timestamptz
         AND a.fecha_cita <= $3::timestamptz
       GROUP BY 1
-      ORDER BY 1 ASC`,
+      ORDER BY 1 ASC`, options.tenantSchema),
     [employeeId, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
   )
 
@@ -152,15 +155,16 @@ export async function getTopClientsForBarber(options: {
   fromDate: string
   toDate: string
   limit?: number
+  tenantSchema?: string | null
 }): Promise<BarberTopClient[]> {
-  const employeeId = await resolveEmployeeIdForUser(options.userId)
+  const employeeId = await resolveEmployeeIdForUser(options.userId, options.tenantSchema)
   const limit =
     typeof options.limit === "number" && Number.isFinite(options.limit)
       ? Math.min(Math.max(Math.trunc(options.limit), 1), 20)
       : 5
 
   const result = await pool.query<TopClientRow>(
-    `SELECT c.id AS client_id,
+    tenantSql(`SELECT c.id AS client_id,
             c.nombre AS client_name,
             COALESCE(COUNT(*), 0)::text AS count,
             COALESCE(SUM(COALESCE(s.precio, 0)), 0)::text AS amount
@@ -173,7 +177,7 @@ export async function getTopClientsForBarber(options: {
         AND a.fecha_cita <= $3::timestamptz
       GROUP BY c.id, c.nombre
       ORDER BY COUNT(*) DESC, SUM(COALESCE(s.precio, 0)) DESC
-      LIMIT $4`,
+      LIMIT $4`, options.tenantSchema),
     [employeeId, `${options.fromDate} 00:00:00`, `${options.toDate} 23:59:59`, limit],
   )
 

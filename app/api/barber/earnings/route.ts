@@ -7,6 +7,7 @@ import {
   getTodayInBusinessTZ,
   getTopClientsForBarber,
 } from "@/lib/barber-earnings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -69,6 +70,7 @@ function endOfMonthYMD(date: string): string {
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const params = querySchema.parse({
       userId: url.searchParams.get("userId"),
@@ -87,26 +89,28 @@ export async function GET(request: Request) {
         userId: params.userId,
         fromDate: params.from!,
         toDate: params.to!,
+        tenantSchema,
       })
 
       return NextResponse.json({ summary }, { status: 200 })
     }
 
     const today = getTodayInBusinessTZ()
-    const todaySummary = await getBarberEarnings({ userId: params.userId, fromDate: today, toDate: today })
+    const todaySummary = await getBarberEarnings({ userId: params.userId, fromDate: today, toDate: today, tenantSchema })
     const weekFrom = startOfWeekMondayYMD(today)
     const weekTo = endOfWeekMondayYMD(today)
-    const weekSummary = await getBarberEarnings({ userId: params.userId, fromDate: weekFrom, toDate: weekTo })
+    const weekSummary = await getBarberEarnings({ userId: params.userId, fromDate: weekFrom, toDate: weekTo, tenantSchema })
     const monthFrom = startOfMonthYMD(today)
     const monthTo = endOfMonthYMD(today)
-    const monthSummary = await getBarberEarnings({ userId: params.userId, fromDate: monthFrom, toDate: monthTo })
+    const monthSummary = await getBarberEarnings({ userId: params.userId, fromDate: monthFrom, toDate: monthTo, tenantSchema })
 
-    const monthlyEarnings = await getMonthlyEarningsForBarber({ userId: params.userId, monthsBack: 6 })
+    const monthlyEarnings = await getMonthlyEarningsForBarber({ userId: params.userId, monthsBack: 6, tenantSchema })
     const topClients = await getTopClientsForBarber({
       userId: params.userId,
       fromDate: monthFrom,
       toDate: monthTo,
       limit: 5,
+      tenantSchema,
     })
 
     return NextResponse.json(

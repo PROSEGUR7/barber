@@ -113,6 +113,26 @@ export default function BookingPage() {
   const [isLoadingWompiSdk, setIsLoadingWompiSdk] = useState(false)
   const wompiSdkPromiseRef = useRef<Promise<void> | null>(null)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   const loadWompiSdk = async () => {
     if (typeof window === "undefined") {
       return
@@ -185,6 +205,7 @@ export default function BookingPage() {
         const response = await fetch("/api/services", {
           method: "GET",
           cache: "no-store",
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -244,6 +265,7 @@ export default function BookingPage() {
             fetch(`/api/services/${serviceId}/barbers`, {
               method: "GET",
               cache: "no-store",
+              headers: buildTenantHeaders(),
             }),
           ),
         )
@@ -352,6 +374,7 @@ export default function BookingPage() {
         const response = await fetch(`/api/payments/wompi/transaction/${encodeURIComponent(transactionId)}`, {
           method: "GET",
           cache: "no-store",
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -448,6 +471,7 @@ export default function BookingPage() {
               method: "GET",
               cache: "no-store",
               signal: controller.signal,
+              headers: buildTenantHeaders(),
             })
           }),
         )
@@ -697,6 +721,7 @@ export default function BookingPage() {
       const response = await fetch(`/api/payments/wompi/transaction/${encodeURIComponent(transactionId)}`, {
         method: "GET",
         cache: "no-store",
+        headers: buildTenantHeaders(),
       })
 
       const data = await response.json().catch(() => ({}))
@@ -854,6 +879,7 @@ export default function BookingPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           userId,

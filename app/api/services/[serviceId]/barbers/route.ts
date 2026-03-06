@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getBarbersForService } from "@/lib/bookings"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -15,7 +16,7 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ serviceId: string }> },
 ) {
   const { serviceId } = await params
@@ -29,7 +30,8 @@ export async function GET(
   }
 
   try {
-    const barbers = await getBarbersForService(parsedServiceId)
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const barbers = await getBarbersForService(parsedServiceId, tenantSchema)
     return NextResponse.json({ ok: true, barbers }, { status: 200 })
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {

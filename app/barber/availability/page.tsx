@@ -79,6 +79,26 @@ export default function BarberAvailabilityPage() {
   const [isDuplicateExceptionOpen, setIsDuplicateExceptionOpen] = useState(false)
   const [duplicateExceptionMessage, setDuplicateExceptionMessage] = useState<string | null>(null)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   const selectedWorkingWindow = useMemo(() => {
     const dow = exceptionDate.getDay()
     const rule = weeklyRules.find((r) => r.dayOfWeek === dow)
@@ -140,7 +160,10 @@ export default function BarberAvailabilityPage() {
   const loadWeekly = async (uid: number) => {
     setIsLoadingWeekly(true)
     try {
-      const response = await fetch(`/api/barber/availability/weekly?userId=${uid}`, { cache: "no-store" })
+      const response = await fetch(`/api/barber/availability/weekly?userId=${uid}`, {
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
         toast({ title: "Error", description: data.error ?? "No se pudo cargar la disponibilidad", variant: "destructive" })
@@ -185,7 +208,7 @@ export default function BarberAvailabilityPage() {
       const to = format(endOfMonth(exceptionDate), "yyyy-MM-dd")
       const response = await fetch(
         `/api/barber/availability/exceptions?userId=${uid}&from=${from}&to=${to}`,
-        { cache: "no-store" },
+        { cache: "no-store", headers: buildTenantHeaders() },
       )
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -264,7 +287,7 @@ export default function BarberAvailabilityPage() {
     try {
       const response = await fetch(`/api/barber/availability/weekly`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({
           userId,
           rules: weeklyRules.map((rule) => ({
@@ -318,7 +341,7 @@ export default function BarberAvailabilityPage() {
 
       const response = await fetch(`/api/barber/availability/exceptions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({
           userId,
           exception,

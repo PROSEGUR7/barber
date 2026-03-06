@@ -65,6 +65,26 @@ export default function FavoritesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem("userId")
@@ -85,6 +105,7 @@ export default function FavoritesPage() {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -124,6 +145,7 @@ export default function FavoritesPage() {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
+          headers: buildTenantHeaders(),
         })
 
         const data = await response.json().catch(() => ({}))
@@ -189,6 +211,7 @@ export default function FavoritesPage() {
         method: nextValue ? "POST" : "DELETE",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({ userId, barberId }),
       })
