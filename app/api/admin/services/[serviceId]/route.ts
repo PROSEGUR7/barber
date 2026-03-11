@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { ServiceRecordNotFoundError, deleteService, updateService } from "@/lib/admin"
-import { resolveTenantSchemaForRequest } from "@/lib/tenant"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -59,7 +59,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ servi
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     const service = await updateService(parsedParams.data.serviceId, {
       name: parsed.data.name,
       description: parsed.data.description ?? null,
@@ -105,7 +111,13 @@ export async function DELETE(_request: Request, context: { params: Promise<{ ser
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(_request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(_request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     await deleteService(parsedParams.data.serviceId, tenantSchema)
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {

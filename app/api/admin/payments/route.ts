@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getTenantBillingPayments } from "@/lib/admin-billing"
-import { resolveTenantSchemaForRequest } from "@/lib/tenant"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -35,7 +35,13 @@ export async function GET(request: Request) {
 
     const status = searchParams.get("status") ?? undefined
     const limit = parsePositiveInt(searchParams.get("limit"))
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
 
     const payments = await getTenantBillingPayments({
       tenantSchema,

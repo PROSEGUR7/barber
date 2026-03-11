@@ -51,6 +51,20 @@ export async function resolveTenantSchemaForRequest(request: Request): Promise<s
   return hint ?? BASE_TENANT_SCHEMA
 }
 
+export async function resolveTenantSchemaForAdminRequest(request: Request): Promise<string | null> {
+  const hint = resolveTenantHintFromRequest(request)
+  const userEmail = request.headers.get("x-user-email")?.trim().toLowerCase() ?? ""
+
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail)) {
+    const byEmail = await findTenantSchemaByEmail(userEmail, hint)
+    if (byEmail) {
+      return byEmail
+    }
+  }
+
+  return hint
+}
+
 export function tenantSql(sql: string, tenantSchema: string | null | undefined): string {
   const resolved = normalizeTenantSchema(tenantSchema) ?? BASE_TENANT_SCHEMA
   const schemaIdentifier = quotePgIdentifier(resolved)

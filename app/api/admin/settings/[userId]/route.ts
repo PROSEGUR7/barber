@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { AdminUserRecordNotFoundError, updateAdminUserEmail } from "@/lib/admin"
-import { resolveTenantSchemaForRequest } from "@/lib/tenant"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -55,7 +55,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     const adminUser = await updateAdminUserEmail({
       userId: parsedParams.data.userId,
       email: parsedBody.data.email.toLowerCase(),

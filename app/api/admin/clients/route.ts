@@ -3,7 +3,7 @@ import { z } from "zod"
 
 import { getClientsWithStats, registerClient } from "@/lib/admin"
 import { UserAlreadyExistsError } from "@/lib/auth"
-import { resolveTenantSchemaForRequest } from "@/lib/tenant"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -31,7 +31,13 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
 
 export async function GET(request: Request) {
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     const clients = await getClientsWithStats({ tenantSchema })
     return NextResponse.json({ ok: true, clients }, { status: 200 })
   } catch (error) {
@@ -71,7 +77,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     const client = await registerClient({
       name: parsed.data.name,
       email: parsed.data.email.toLowerCase(),

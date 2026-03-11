@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { ClientRecordNotFoundError, deleteClient, updateClient } from "@/lib/admin"
-import { resolveTenantSchemaForRequest } from "@/lib/tenant"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -62,7 +62,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ clien
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     const client = await updateClient({
       clientId: parsedParams.data.clientId,
       name: parsedBody.data.name,
@@ -119,7 +125,13 @@ export async function DELETE(_request: Request, context: { params: Promise<{ cli
   }
 
   try {
-    const tenantSchema = await resolveTenantSchemaForRequest(_request)
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(_request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
     await deleteClient(parsedParams.data.clientId, tenantSchema)
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
