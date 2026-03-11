@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getAdminAppointments } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -39,6 +40,8 @@ export async function GET(request: Request) {
     const toDate = searchParams.get("toDate") ?? undefined
     const limit = parsePositiveInt(searchParams.get("limit"))
 
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
+
     const appointments = await getAdminAppointments({
       status,
       employeeId,
@@ -46,6 +49,7 @@ export async function GET(request: Request) {
       fromDate,
       toDate,
       limit,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, appointments }, { status: 200 })

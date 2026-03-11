@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { createUser, type AuthUser, UserAlreadyExistsError } from "@/lib/auth"
+import { tenantSql } from "@/lib/tenant"
 
 export type EmployeeSummary = {
   id: number
@@ -397,7 +398,11 @@ function mapAdminSettingsSummaryRow(row: AdminSettingsSummaryRow): AdminSettings
   }
 }
 
-export async function getEmployeesWithStats(filter?: { employeeId?: number; userId?: number }): Promise<EmployeeSummary[]> {
+export async function getEmployeesWithStats(filter?: {
+  employeeId?: number
+  userId?: number
+  tenantSchema?: string | null
+}): Promise<EmployeeSummary[]> {
   const conditions: string[] = []
   const parameters: (number)[] = []
 
@@ -461,7 +466,7 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
   `
 
   try {
-    const result = await pool.query<EmployeeSummaryRow>(query, parameters)
+    const result = await pool.query<EmployeeSummaryRow>(tenantSql(query, filter?.tenantSchema), parameters)
     return result.rows.map(mapEmployeeRow)
   } catch (error) {
     console.warn("Falling back to basic employee query", { filter, error })
@@ -481,7 +486,7 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
       ORDER BY e.nombre ASC
     `
 
-    const fallbackResult = await pool.query<EmployeeBasicRow>(fallbackQuery, parameters)
+    const fallbackResult = await pool.query<EmployeeBasicRow>(tenantSql(fallbackQuery, filter?.tenantSchema), parameters)
     return fallbackResult.rows.map((row) => ({
       id: row.id,
       userId: row.user_id,
@@ -501,8 +506,8 @@ export async function getEmployeesWithStats(filter?: { employeeId?: number; user
   }
 }
 
-export async function getEmployeeByUserId(userId: number): Promise<EmployeeSummary | null> {
-  const employees = await getEmployeesWithStats({ userId })
+export async function getEmployeeByUserId(userId: number, tenantSchema?: string | null): Promise<EmployeeSummary | null> {
+  const employees = await getEmployeesWithStats({ userId, tenantSchema })
   return employees[0] ?? null
 }
 
@@ -511,6 +516,7 @@ export async function registerEmployee(input: {
   email: string
   password: string
   phone: string
+  tenantSchema?: string | null
 }): Promise<EmployeeSummary> {
   let user: AuthUser
 
@@ -521,6 +527,7 @@ export async function registerEmployee(input: {
       email: input.email,
       password: input.password,
       role: "barber",
+      tenantSchema: input.tenantSchema ?? undefined,
       profile: {
         name: input.name,
         phone: sanitizedPhone,
@@ -534,7 +541,7 @@ export async function registerEmployee(input: {
     throw error
   }
 
-  const employee = await getEmployeeByUserId(user.id)
+  const employee = await getEmployeeByUserId(user.id, input.tenantSchema)
   if (!employee) {
     throw new EmployeeRecordNotFoundError()
   }
@@ -548,6 +555,7 @@ export async function updateEmployee(input: {
   email: string
   phone: string
   serviceIds?: number[]
+  tenantSchema?: string | null
 }): Promise<EmployeeSummary> {
   const client = await pool.connect()
 
@@ -555,11 +563,11 @@ export async function updateEmployee(input: {
     await client.query("BEGIN")
 
     const employeeResult = await client.query<{ user_id: number }>(
-      `UPDATE tenant_base.empleados
+      tenantSql(`UPDATE tenant_base.empleados
           SET nombre = $2,
               telefono = $3
         WHERE id = $1
-        RETURNING user_id`,
+        RETURNING user_id`, input.tenantSchema),
       [input.employeeId, input.name, input.phone],
     )
 
@@ -570,9 +578,9 @@ export async function updateEmployee(input: {
     const userId = employeeResult.rows[0].user_id
 
     await client.query(
-      `UPDATE tenant_base.users
+      tenantSql(`UPDATE tenant_base.users
           SET correo = $2
-        WHERE id = $1`,
+        WHERE id = $1`, input.tenantSchema),
       [userId, input.email],
     )
 
@@ -582,17 +590,18 @@ export async function updateEmployee(input: {
       )
 
       await client.query(
-        `DELETE FROM tenant_base.empleados_servicios
+        tenantSql(`DELETE FROM tenant_base.empleados_servicios
           WHERE empleado_id = $1`,
+          input.tenantSchema),
         [input.employeeId],
       )
 
       if (uniqueServiceIds.length > 0) {
         const insertResult = await client.query(
-          `INSERT INTO tenant_base.empleados_servicios (empleado_id, servicio_id)
+          tenantSql(`INSERT INTO tenant_base.empleados_servicios (empleado_id, servicio_id)
             SELECT $1, s.id
               FROM tenant_base.servicios s
-             WHERE s.id = ANY($2::int[])`,
+             WHERE s.id = ANY($2::int[])`, input.tenantSchema),
           [input.employeeId, uniqueServiceIds],
         )
 
@@ -615,7 +624,7 @@ export async function updateEmployee(input: {
     client.release()
   }
 
-  const updatedEmployee = await getEmployeesWithStats({ employeeId: input.employeeId })
+  const updatedEmployee = await getEmployeesWithStats({ employeeId: input.employeeId, tenantSchema: input.tenantSchema })
   if (!updatedEmployee[0]) {
     throw new EmployeeRecordNotFoundError()
   }
@@ -623,16 +632,16 @@ export async function updateEmployee(input: {
   return updatedEmployee[0]
 }
 
-export async function deleteEmployee(employeeId: number): Promise<void> {
+export async function deleteEmployee(employeeId: number, tenantSchema?: string | null): Promise<void> {
   const client = await pool.connect()
 
   try {
     await client.query("BEGIN")
 
     const employeeResult = await client.query<{ user_id: number }>(
-      `DELETE FROM tenant_base.empleados
+      tenantSql(`DELETE FROM tenant_base.empleados
         WHERE id = $1
-        RETURNING user_id`,
+        RETURNING user_id`, tenantSchema),
       [employeeId],
     )
 
@@ -643,8 +652,9 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
     const userId = employeeResult.rows[0].user_id
 
     await client.query(
-      `DELETE FROM tenant_base.users
+      tenantSql(`DELETE FROM tenant_base.users
         WHERE id = $1`,
+        tenantSchema),
       [userId],
     )
 
@@ -662,7 +672,11 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
   }
 }
 
-export async function getClientsWithStats(filter?: { clientId?: number; userId?: number }): Promise<ClientSummary[]> {
+export async function getClientsWithStats(filter?: {
+  clientId?: number
+  userId?: number
+  tenantSchema?: string | null
+}): Promise<ClientSummary[]> {
   const conditions: string[] = []
   const parameters: number[] = []
 
@@ -718,7 +732,7 @@ export async function getClientsWithStats(filter?: { clientId?: number; userId?:
   `
 
   try {
-    const result = await pool.query<ClientSummaryRow>(query, parameters)
+    const result = await pool.query<ClientSummaryRow>(tenantSql(query, filter?.tenantSchema), parameters)
     return result.rows.map(mapClientRow)
   } catch (error) {
     console.warn("Falling back to basic client query", { filter, error })
@@ -738,7 +752,7 @@ export async function getClientsWithStats(filter?: { clientId?: number; userId?:
       ORDER BY c.nombre ASC
     `
 
-    const fallbackResult = await pool.query<ClientBasicRow>(fallbackQuery, parameters)
+    const fallbackResult = await pool.query<ClientBasicRow>(tenantSql(fallbackQuery, filter?.tenantSchema), parameters)
     return fallbackResult.rows.map((row) => ({
       id: row.id,
       userId: row.user_id,
@@ -757,8 +771,8 @@ export async function getClientsWithStats(filter?: { clientId?: number; userId?:
   }
 }
 
-export async function getClientByUserId(userId: number): Promise<ClientSummary | null> {
-  const clients = await getClientsWithStats({ userId })
+export async function getClientByUserId(userId: number, tenantSchema?: string | null): Promise<ClientSummary | null> {
+  const clients = await getClientsWithStats({ userId, tenantSchema })
   return clients[0] ?? null
 }
 
@@ -767,6 +781,7 @@ export async function registerClient(input: {
   email: string
   password: string
   phone: string
+  tenantSchema?: string | null
 }): Promise<ClientSummary> {
   let user: AuthUser
 
@@ -777,6 +792,7 @@ export async function registerClient(input: {
       email: input.email,
       password: input.password,
       role: "client",
+      tenantSchema: input.tenantSchema ?? undefined,
       profile: {
         name: input.name,
         phone: sanitizedPhone,
@@ -790,7 +806,7 @@ export async function registerClient(input: {
     throw error
   }
 
-  const client = await getClientByUserId(user.id)
+  const client = await getClientByUserId(user.id, input.tenantSchema)
   if (!client) {
     throw new ClientRecordNotFoundError()
   }
@@ -803,6 +819,7 @@ export async function updateClient(input: {
   name: string
   email: string
   phone: string
+  tenantSchema?: string | null
 }): Promise<ClientSummary> {
   const client = await pool.connect()
 
@@ -810,11 +827,11 @@ export async function updateClient(input: {
     await client.query("BEGIN")
 
     const clientResult = await client.query<{ user_id: number }>(
-      `UPDATE tenant_base.clientes
+      tenantSql(`UPDATE tenant_base.clientes
           SET nombre = $2,
               telefono = $3
         WHERE id = $1
-        RETURNING user_id`,
+        RETURNING user_id`, input.tenantSchema),
       [input.clientId, input.name, input.phone],
     )
 
@@ -825,9 +842,9 @@ export async function updateClient(input: {
     const userId = clientResult.rows[0].user_id
 
     await client.query(
-      `UPDATE tenant_base.users
+      tenantSql(`UPDATE tenant_base.users
           SET correo = $2
-        WHERE id = $1`,
+        WHERE id = $1`, input.tenantSchema),
       [userId, input.email],
     )
 
@@ -844,7 +861,7 @@ export async function updateClient(input: {
     client.release()
   }
 
-  const updatedClient = await getClientsWithStats({ clientId: input.clientId })
+  const updatedClient = await getClientsWithStats({ clientId: input.clientId, tenantSchema: input.tenantSchema })
   if (!updatedClient[0]) {
     throw new ClientRecordNotFoundError()
   }
@@ -852,16 +869,16 @@ export async function updateClient(input: {
   return updatedClient[0]
 }
 
-export async function deleteClient(clientId: number): Promise<void> {
+export async function deleteClient(clientId: number, tenantSchema?: string | null): Promise<void> {
   const client = await pool.connect()
 
   try {
     await client.query("BEGIN")
 
     const clientResult = await client.query<{ user_id: number }>(
-      `DELETE FROM tenant_base.clientes
+      tenantSql(`DELETE FROM tenant_base.clientes
         WHERE id = $1
-        RETURNING user_id`,
+        RETURNING user_id`, tenantSchema),
       [clientId],
     )
 
@@ -872,8 +889,9 @@ export async function deleteClient(clientId: number): Promise<void> {
     const userId = clientResult.rows[0].user_id
 
     await client.query(
-      `DELETE FROM tenant_base.users
+      tenantSql(`DELETE FROM tenant_base.users
         WHERE id = $1`,
+        tenantSchema),
       [userId],
     )
 
@@ -891,16 +909,16 @@ export async function deleteClient(clientId: number): Promise<void> {
   }
 }
 
-export async function getServicesCatalog(): Promise<ServiceSummary[]> {
+export async function getServicesCatalog(tenantSchema?: string | null): Promise<ServiceSummary[]> {
   const result = await pool.query<ServiceSummaryRow>(
-    `SELECT id,
+    tenantSql(`SELECT id,
             nombre,
             descripcion,
             precio,
             duracion_min,
             estado::text AS estado
        FROM tenant_base.servicios
-      ORDER BY nombre ASC`,
+      ORDER BY nombre ASC`, tenantSchema),
   )
 
   return result.rows.map(mapServiceRow)
@@ -912,11 +930,12 @@ export async function createService(input: {
   price: number
   durationMin: number
   status?: string
+  tenantSchema?: string | null
 }): Promise<ServiceSummary> {
   const result = await pool.query<ServiceSummaryRow>(
-    `INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min, estado)
+    tenantSql(`INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min, estado)
      VALUES ($1, NULLIF($2, ''), $3, $4, $5)
-     RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`,
+     RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`, input.tenantSchema),
     [input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
   )
 
@@ -935,17 +954,18 @@ export async function updateService(
     price: number
     durationMin: number
     status?: string
+    tenantSchema?: string | null
   },
 ): Promise<ServiceSummary> {
   const result = await pool.query<ServiceSummaryRow>(
-    `UPDATE tenant_base.servicios
+    tenantSql(`UPDATE tenant_base.servicios
         SET nombre = $2,
             descripcion = NULLIF($3, ''),
             precio = $4,
             duracion_min = $5,
             estado = $6
       WHERE id = $1
-      RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`,
+      RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`, input.tenantSchema),
     [serviceId, input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
   )
 
@@ -956,11 +976,11 @@ export async function updateService(
   return mapServiceRow(result.rows[0])
 }
 
-export async function deleteService(serviceId: number): Promise<void> {
+export async function deleteService(serviceId: number, tenantSchema?: string | null): Promise<void> {
   const result = await pool.query<{ id: number }>(
-    `DELETE FROM tenant_base.servicios
+    tenantSql(`DELETE FROM tenant_base.servicios
       WHERE id = $1
-      RETURNING id`,
+      RETURNING id`, tenantSchema),
     [serviceId],
   )
 
@@ -976,6 +996,7 @@ export async function getAdminAppointments(options?: {
   fromDate?: string
   toDate?: string
   limit?: number
+  tenantSchema?: string | null
 }): Promise<AdminAppointmentSummary[]> {
   const conditions: string[] = []
   const parameters: Array<string | number> = []
@@ -1062,13 +1083,14 @@ export async function getAdminAppointments(options?: {
     LIMIT ${limitPlaceholder}
   `
 
-  const result = await pool.query<AdminAppointmentRow>(query, parameters)
+  const result = await pool.query<AdminAppointmentRow>(tenantSql(query, options?.tenantSchema), parameters)
   return result.rows.map(mapAdminAppointmentRow)
 }
 
 export async function getAdminPayments(options?: {
   status?: string
   limit?: number
+  tenantSchema?: string | null
 }): Promise<AdminPaymentSummary[]> {
   const conditions: string[] = []
   const parameters: Array<string | number> = []
@@ -1110,16 +1132,16 @@ export async function getAdminPayments(options?: {
     LIMIT ${limitPlaceholder}
   `
 
-  const result = await pool.query<AdminPaymentRow>(query, parameters)
+  const result = await pool.query<AdminPaymentRow>(tenantSql(query, options?.tenantSchema), parameters)
   return result.rows.map(mapAdminPaymentRow)
 }
 
-export async function getAdminSettings(): Promise<{
+export async function getAdminSettings(tenantSchema?: string | null): Promise<{
   summary: AdminSettingsSummary
   adminUsers: AdminUserSettings[]
 }> {
   const summaryResult = await pool.query<AdminSettingsSummaryRow>(
-    `SELECT
+    tenantSql(`SELECT
       (SELECT COUNT(*) FROM tenant_base.users u WHERE u.rol::text = 'admin')::text AS total_admin_users,
       (SELECT COUNT(*) FROM tenant_base.empleados)::text AS total_employees,
       (SELECT COUNT(*) FROM tenant_base.clientes)::text AS total_clients,
@@ -1127,30 +1149,30 @@ export async function getAdminSettings(): Promise<{
       (SELECT COUNT(*) FROM tenant_base.servicios s WHERE LOWER(s.estado::text) = 'activo')::text AS active_services,
       (SELECT COUNT(*) FROM tenant_base.agendamientos)::text AS total_appointments,
       (SELECT COUNT(*) FROM tenant_base.pagos)::text AS total_payments,
-      (SELECT COALESCE(SUM(p.monto), 0) FROM tenant_base.pagos p)::text AS total_payments_amount`,
+      (SELECT COALESCE(SUM(p.monto), 0) FROM tenant_base.pagos p)::text AS total_payments_amount`, tenantSchema),
   )
 
   let adminUsersResult
 
   try {
     adminUsersResult = await pool.query<AdminUserSettingsRow>(
-      `SELECT id,
+      tenantSql(`SELECT id,
               correo,
               estado::text AS estado,
               ultimo_acceso
          FROM tenant_base.users
         WHERE rol::text = 'admin'
-        ORDER BY id ASC`,
+        ORDER BY id ASC`, tenantSchema),
     )
   } catch {
     adminUsersResult = await pool.query<AdminUserSettingsRow>(
-      `SELECT id,
+      tenantSql(`SELECT id,
               correo,
               NULL::text AS estado,
               ultimo_acceso
          FROM tenant_base.users
         WHERE rol::text = 'admin'
-        ORDER BY id ASC`,
+        ORDER BY id ASC`, tenantSchema),
     )
   }
 
@@ -1174,25 +1196,26 @@ export async function getAdminSettings(): Promise<{
 export async function updateAdminUserEmail(input: {
   userId: number
   email: string
+  tenantSchema?: string | null
 }): Promise<AdminUserSettings> {
   let result
 
   try {
     result = await pool.query<AdminUserSettingsRow>(
-      `UPDATE tenant_base.users
+      tenantSql(`UPDATE tenant_base.users
           SET correo = $2
         WHERE id = $1
           AND rol::text = 'admin'
-        RETURNING id, correo, estado::text AS estado, ultimo_acceso`,
+        RETURNING id, correo, estado::text AS estado, ultimo_acceso`, input.tenantSchema),
       [input.userId, input.email],
     )
   } catch {
     result = await pool.query<AdminUserSettingsRow>(
-      `UPDATE tenant_base.users
+      tenantSql(`UPDATE tenant_base.users
           SET correo = $2
         WHERE id = $1
           AND rol::text = 'admin'
-        RETURNING id, correo, NULL::text AS estado, ultimo_acceso`,
+        RETURNING id, correo, NULL::text AS estado, ultimo_acceso`, input.tenantSchema),
       [input.userId, input.email],
     )
   }

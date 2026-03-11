@@ -71,6 +71,26 @@ function getRoleLabel(role: ProfileRole) {
   return "Cliente"
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function ProfilePage() {
   const router = useRouter()
   const { toast } = useToast()
@@ -111,6 +131,7 @@ export default function ProfilePage() {
 
       const response = await fetch(`/api/profile?email=${encodeURIComponent(storedEmail)}`, {
         cache: "no-store",
+        headers: buildTenantHeaders(),
       })
 
       const data: ProfileResponse = await response.json().catch(() => ({}))
@@ -166,6 +187,10 @@ export default function ProfilePage() {
     const sanitizedEmail = email.trim().toLowerCase()
     const sanitizedName = name.trim()
     const sanitizedPhone = phone.trim()
+    const tenantSchema =
+      typeof window !== "undefined"
+        ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+        : ""
 
     if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
       toast({
@@ -192,12 +217,14 @@ export default function ProfilePage() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           currentEmail,
           email: sanitizedEmail,
           name: sanitizedName,
           phone: sanitizedPhone,
+          tenantSchema,
         }),
       })
 

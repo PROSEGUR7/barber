@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { createService, getServicesCatalog } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -23,9 +24,10 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
   )
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const services = await getServicesCatalog()
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const services = await getServicesCatalog(tenantSchema)
     return NextResponse.json({ ok: true, services }, { status: 200 })
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
@@ -64,12 +66,14 @@ export async function POST(request: Request) {
   }
 
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const service = await createService({
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       price: parsed.data.price,
       durationMin: parsed.data.durationMin,
       status: parsed.data.status,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, service }, { status: 201 })

@@ -100,6 +100,26 @@ function sortPayments(list: AdminBillingPaymentSummary[]): AdminBillingPaymentSu
   })
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminPagosPage() {
   const [payments, setPayments] = useState<AdminBillingPaymentSummary[]>([])
   const [arePaymentsLoading, setArePaymentsLoading] = useState(true)
@@ -129,7 +149,11 @@ export default function AdminPagosPage() {
           query.set("tenant", tenantSchema)
         }
 
-        const response = await fetch(`/api/admin/payments${query.toString() ? `?${query.toString()}` : ""}`, { signal, cache: "no-store" })
+        const response = await fetch(`/api/admin/payments${query.toString() ? `?${query.toString()}` : ""}`, {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: PaymentsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {

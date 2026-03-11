@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getAdminSettings } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -14,9 +15,10 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
   )
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const settings = await getAdminSettings()
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const settings = await getAdminSettings(tenantSchema)
     return NextResponse.json(
       {
         ok: true,

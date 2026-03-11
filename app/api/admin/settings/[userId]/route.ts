@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { AdminUserRecordNotFoundError, updateAdminUserEmail } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -54,9 +55,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
   }
 
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const adminUser = await updateAdminUserEmail({
       userId: parsedParams.data.userId,
       email: parsedBody.data.email.toLowerCase(),
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, adminUser }, { status: 200 })

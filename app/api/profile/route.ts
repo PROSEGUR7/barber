@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 
+import {
+  BASE_TENANT_SCHEMA,
+  findUserByEmailAcrossChildTenants,
+} from "@/lib/auth"
 import { pool } from "@/lib/db"
 
 type DbRole = "cliente" | "empleado" | "admin"
@@ -51,7 +55,36 @@ function resolveTenantSchema(rawValue?: string | null): string {
     return normalized
   }
 
-  return "tenant_base"
+  return BASE_TENANT_SCHEMA
+}
+
+async function resolveTenantSchemaForEmail(options: {
+  tenantHint?: string | null
+  email?: string | null
+}): Promise<string> {
+  const explicitTenant = resolveTenantSchema(options.tenantHint)
+  const rawHint = (options.tenantHint ?? "").trim()
+
+  if (rawHint && TENANT_SCHEMA_PATTERN.test(rawHint)) {
+    return explicitTenant
+  }
+
+  const email = (options.email ?? "").trim().toLowerCase()
+  if (!email) {
+    return BASE_TENANT_SCHEMA
+  }
+
+  const tenantMatch = await findUserByEmailAcrossChildTenants(email)
+  if (tenantMatch?.tenantSchema) {
+    return tenantMatch.tenantSchema
+  }
+
+  const existsInBase = await getUserByEmail(email, BASE_TENANT_SCHEMA)
+  if (existsInBase) {
+    return BASE_TENANT_SCHEMA
+  }
+
+  return BASE_TENANT_SCHEMA
 }
 
 async function getUserByEmail(email: string, tenantSchema: string): Promise<UserRow | null> {
@@ -126,9 +159,11 @@ async function buildProfileByEmail(email: string, tenantSchema: string): Promise
 export async function GET(request: NextRequest) {
   try {
     const rawEmail = request.nextUrl.searchParams.get("email")
-    const tenantSchema = resolveTenantSchema(
+    const tenantSchema = await resolveTenantSchemaForEmail({
+      email: rawEmail,
+      tenantHint:
       request.nextUrl.searchParams.get("tenant") ?? request.headers.get("x-tenant"),
-    )
+    })
 
     if (!rawEmail) {
       return NextResponse.json({ error: "Debes indicar el correo del usuario" }, { status: 400 })
@@ -161,8 +196,11 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: Request) {
   try {
     const payload = updateProfileSchema.parse(await request.json())
-    const tenantSchema = resolveTenantSchema(payload.tenantSchema)
     const currentEmail = payload.currentEmail.trim().toLowerCase()
+    const tenantSchema = await resolveTenantSchemaForEmail({
+      email: currentEmail,
+      tenantHint: payload.tenantSchema,
+    })
     const nextEmail = payload.email.trim().toLowerCase()
     const nextName = payload.name.trim()
     const nextPhone = (payload.phone ?? "").trim()

@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { getEmployeesWithStats, registerEmployee } from "@/lib/admin"
 import { UserAlreadyExistsError } from "@/lib/auth"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -28,9 +29,10 @@ function jsonError(status: number, payload: { error: string; code?: string }) {
   )
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const employees = await getEmployeesWithStats()
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
+    const employees = await getEmployeesWithStats({ tenantSchema })
     return NextResponse.json({ ok: true, employees }, { status: 200 })
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
@@ -69,11 +71,13 @@ export async function POST(request: Request) {
   }
 
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const employee = await registerEmployee({
       name: parsed.data.name,
       email: parsed.data.email.toLowerCase(),
       password: parsed.data.password,
       phone: parsed.data.phone,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, employee }, { status: 201 })

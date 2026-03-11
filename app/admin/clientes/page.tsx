@@ -42,6 +42,26 @@ function sortClients(list: ClientSummary[]): ClientSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminClientsPage() {
   const { toast } = useToast()
 
@@ -84,7 +104,11 @@ export default function AdminClientsPage() {
       setClientsError(null)
 
       try {
-        const response = await fetch("/api/admin/clients", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/clients", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: ClientsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -205,6 +229,7 @@ export default function AdminClientsPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           name: sanitizedName,
@@ -302,6 +327,7 @@ export default function AdminClientsPage() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           name: sanitizedName,
@@ -354,6 +380,7 @@ export default function AdminClientsPage() {
       try {
         const response = await fetch(`/api/admin/clients/${client.id}`, {
           method: "DELETE",
+          headers: buildTenantHeaders(),
         })
 
         const payload = (await response.json().catch(() => null)) as { error?: string } | null

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getTenantBillingPayments } from "@/lib/admin-billing"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
 
     const status = searchParams.get("status") ?? undefined
     const limit = parsePositiveInt(searchParams.get("limit"))
-    const tenantSchema = searchParams.get("tenant") ?? request.headers.get("x-tenant")
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
 
     const payments = await getTenantBillingPayments({
       tenantSchema,

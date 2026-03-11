@@ -158,6 +158,26 @@ function getSafeRate(numerator: number, denominator: number): number {
   return Math.round((numerator / denominator) * 100)
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminDashboard() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
   const [clients, setClients] = useState<ClientSummary[]>([])
@@ -177,7 +197,11 @@ export default function AdminDashboard() {
       setEmployeesError(null)
 
       try {
-        const response = await fetch("/api/admin/employees", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/employees", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: EmployeesResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -212,7 +236,11 @@ export default function AdminDashboard() {
       setClientsError(null)
 
       try {
-        const response = await fetch("/api/admin/clients", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/clients", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: ClientsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {

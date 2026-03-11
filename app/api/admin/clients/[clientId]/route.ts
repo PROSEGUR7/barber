@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { ClientRecordNotFoundError, deleteClient, updateClient } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -61,11 +62,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ clien
   }
 
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const client = await updateClient({
       clientId: parsedParams.data.clientId,
       name: parsedBody.data.name,
       email: parsedBody.data.email.toLowerCase(),
       phone: parsedBody.data.phone,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, client }, { status: 200 })
@@ -116,7 +119,8 @@ export async function DELETE(_request: Request, context: { params: Promise<{ cli
   }
 
   try {
-    await deleteClient(parsedParams.data.clientId)
+    const tenantSchema = await resolveTenantSchemaForRequest(_request)
+    await deleteClient(parsedParams.data.clientId, tenantSchema)
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof ClientRecordNotFoundError) {

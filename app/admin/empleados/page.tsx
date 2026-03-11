@@ -52,6 +52,26 @@ function sortServices(list: ServiceSummary[]): ServiceSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminEmployeesPage() {
   const { toast } = useToast()
 
@@ -97,7 +117,11 @@ export default function AdminEmployeesPage() {
       setEmployeesError(null)
 
       try {
-        const response = await fetch("/api/admin/employees", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/employees", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: EmployeesResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -129,7 +153,11 @@ export default function AdminEmployeesPage() {
       setAreServicesLoading(true)
 
       try {
-        const response = await fetch("/api/admin/services", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/services", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: ServicesCatalogResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -259,6 +287,7 @@ export default function AdminEmployeesPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           name: sanitizedName,
@@ -382,6 +411,7 @@ export default function AdminEmployeesPage() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           name: sanitizedName,
@@ -435,6 +465,7 @@ export default function AdminEmployeesPage() {
       try {
         const response = await fetch(`/api/admin/employees/${employee.id}`, {
           method: "DELETE",
+          headers: buildTenantHeaders(),
         })
 
         const data = (await response.json().catch(() => ({}))) as { error?: string }

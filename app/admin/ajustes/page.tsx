@@ -83,6 +83,26 @@ function getPreferencesKey(email: string) {
   return `profilePreferences:${email.toLowerCase()}`
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 function getRoleLabel(role: ProfileRole) {
   if (role === "admin") {
     return "Administrador"
@@ -258,7 +278,11 @@ export default function AdminAjustesPage() {
       setSettingsError(null)
 
       try {
-        const response = await fetch("/api/admin/settings", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/settings", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: SettingsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -443,6 +467,7 @@ export default function AdminAjustesPage() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           email: sanitizedEmail,

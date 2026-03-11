@@ -74,6 +74,26 @@ function getStatusVariant(status: string | null): "default" | "secondary" | "out
   return "outline"
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminServiciosPage() {
   const { toast } = useToast()
 
@@ -108,7 +128,11 @@ export default function AdminServiciosPage() {
       setServicesError(null)
 
       try {
-        const response = await fetch("/api/admin/services", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/services", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: ServicesResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {
@@ -237,6 +261,7 @@ export default function AdminServiciosPage() {
         method,
         headers: {
           "Content-Type": "application/json",
+          ...buildTenantHeaders(),
         },
         body: JSON.stringify({
           name,
@@ -281,6 +306,7 @@ export default function AdminServiciosPage() {
     try {
       const response = await fetch(`/api/admin/services/${service.id}`, {
         method: "DELETE",
+        headers: buildTenantHeaders(),
       })
 
       const data = (await response.json().catch(() => ({}))) as { error?: string }

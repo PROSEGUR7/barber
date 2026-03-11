@@ -84,6 +84,26 @@ function sortAppointments(list: AdminAppointmentSummary[]): AdminAppointmentSumm
   return [...list].sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime())
 }
 
+function buildTenantHeaders(): HeadersInit {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  const headers: Record<string, string> = {}
+  const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+
+  if (tenant) {
+    headers["x-tenant"] = tenant
+  }
+
+  if (userEmail) {
+    headers["x-user-email"] = userEmail
+  }
+
+  return headers
+}
+
 export default function AdminAgendamientosPage() {
   const [appointments, setAppointments] = useState<AdminAppointmentSummary[]>([])
   const [areAppointmentsLoading, setAreAppointmentsLoading] = useState(true)
@@ -98,7 +118,11 @@ export default function AdminAgendamientosPage() {
       setAppointmentsError(null)
 
       try {
-        const response = await fetch("/api/admin/appointments", { signal, cache: "no-store" })
+        const response = await fetch("/api/admin/appointments", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
         const data: AppointmentsResponse = await response.json().catch(() => ({}))
 
         if (!response.ok) {

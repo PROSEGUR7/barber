@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { ServiceRecordNotFoundError, deleteService, updateService } from "@/lib/admin"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -58,12 +59,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ servi
   }
 
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const service = await updateService(parsedParams.data.serviceId, {
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       price: parsed.data.price,
       durationMin: parsed.data.durationMin,
       status: parsed.data.status,
+      tenantSchema,
     })
 
     return NextResponse.json({ ok: true, service }, { status: 200 })
@@ -102,7 +105,8 @@ export async function DELETE(_request: Request, context: { params: Promise<{ ser
   }
 
   try {
-    await deleteService(parsedParams.data.serviceId)
+    const tenantSchema = await resolveTenantSchemaForRequest(_request)
+    await deleteService(parsedParams.data.serviceId, tenantSchema)
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof ServiceRecordNotFoundError) {

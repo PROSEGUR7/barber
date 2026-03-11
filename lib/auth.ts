@@ -320,13 +320,19 @@ export async function createUser({
   password,
   role,
   profile,
+  tenantSchema,
 }: {
   email: string
   password: string
   role: AppUserRole
   profile?: CreateUserProfile
+  tenantSchema?: string
 }): Promise<AuthUser> {
   const hashedPassword = await bcrypt.hash(password, 10)
+  const resolvedTenantSchema = resolveTenantSchemaName(tenantSchema)
+  const usersTable = usersTableForTenant(resolvedTenantSchema)
+  const clientesTable = clientesTableForTenant(resolvedTenantSchema)
+  const empleadosTable = empleadosTableForTenant(resolvedTenantSchema)
   const client = await pool.connect()
 
   try {
@@ -335,7 +341,7 @@ export async function createUser({
 
     const dbRoleParam = roleToDb[role]
     const userResult = await client.query<DbUserRow>(
-      `INSERT INTO tenant_base.users (correo, passwordhash, rol)
+      `INSERT INTO ${usersTable} (correo, passwordhash, rol)
        VALUES ($1, $2, $3)
        RETURNING id, correo, passwordhash, rol::text as rol, ultimo_acceso`,
       [email, hashedPassword, dbRoleParam],
@@ -356,7 +362,7 @@ export async function createUser({
       }
 
       await client.query(
-        `INSERT INTO tenant_base.clientes (user_id, nombre, telefono)
+        `INSERT INTO ${clientesTable} (user_id, nombre, telefono)
          VALUES ($1, $2, $3)`,
         [userRow.id, fullName, phone],
       )
@@ -371,7 +377,7 @@ export async function createUser({
       }
 
       await client.query(
-        `INSERT INTO tenant_base.empleados (user_id, nombre, telefono)
+        `INSERT INTO ${empleadosTable} (user_id, nombre, telefono)
          VALUES ($1, $2, $3)`,
         [userRow.id, fullName, phone],
       )
@@ -384,8 +390,8 @@ export async function createUser({
       email: userRow.correo,
       role: appRole,
       lastLogin: userRow.ultimo_acceso,
-      displayName: await getDisplayNameForRole(userRow.id, appRole, BASE_TENANT_SCHEMA),
-      tenantSchema: BASE_TENANT_SCHEMA,
+      displayName: await getDisplayNameForRole(userRow.id, appRole, resolvedTenantSchema),
+      tenantSchema: resolvedTenantSchema,
     }
   } catch (error) {
     try {
