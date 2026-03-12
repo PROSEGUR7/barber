@@ -87,6 +87,7 @@ export default function AdminPlanesScreen() {
   const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
   const [inlineNotice, setInlineNotice] = useState<InlineNotice | null>(null)
   const [pendingCheckoutReference, setPendingCheckoutReference] = useState<string | null>(null)
+  const [lastAutoReconcileReference, setLastAutoReconcileReference] = useState<string | null>(null)
 
   const cycleOptions: Array<{ value: BillingCycle; label: string }> = [
     { value: "mensual", label: "Mensual" },
@@ -403,6 +404,8 @@ export default function AdminPlanesScreen() {
           setPendingCheckoutReference(null)
           if (typeof window !== "undefined") {
             localStorage.removeItem(PENDING_PLAN_CHECKOUT_REFERENCE_KEY)
+            localStorage.setItem("adminBillingUpdatedAt", String(Date.now()))
+            window.dispatchEvent(new Event("admin-billing-updated"))
           }
           setInlineNotice({
             type: "success",
@@ -575,6 +578,19 @@ export default function AdminPlanesScreen() {
     router.replace("/admin/planes")
   }, [reconcilePaymentByReference, router, searchParams])
 
+  useEffect(() => {
+    if (!pendingCheckoutReference || isReconcilingPayment) {
+      return
+    }
+
+    if (lastAutoReconcileReference === pendingCheckoutReference) {
+      return
+    }
+
+    setLastAutoReconcileReference(pendingCheckoutReference)
+    void reconcilePaymentByReference(pendingCheckoutReference)
+  }, [isReconcilingPayment, lastAutoReconcileReference, pendingCheckoutReference, reconcilePaymentByReference])
+
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-4 px-4 py-4">
@@ -609,14 +625,7 @@ export default function AdminPlanesScreen() {
               <p className="text-sm text-muted-foreground">
                 Referencia pendiente: <span className="font-medium text-foreground">{pendingCheckoutReference}</span>
               </p>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void reconcilePaymentByReference(pendingCheckoutReference)}
-                disabled={isReconcilingPayment}
-              >
-                Finalizar pago
-              </Button>
+              <p className="text-xs text-muted-foreground">Validación automática en curso...</p>
             </div>
           )}
           {isSubscriptionStateLoading && (

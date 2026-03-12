@@ -131,6 +131,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         void refreshBillingAccess()
       }
 
+      const handleBillingUpdated = () => {
+        void refreshBillingAccess()
+      }
+
+      const handleStorage = (event: StorageEvent) => {
+        if (event.key !== "adminBillingUpdatedAt") {
+          return
+        }
+
+        void refreshBillingAccess()
+      }
+
       const handleVisibilityChange = () => {
         if (document.visibilityState === "visible") {
           void refreshBillingAccess()
@@ -138,6 +150,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       }
 
       window.addEventListener("focus", handleFocus)
+      window.addEventListener("admin-billing-updated", handleBillingUpdated)
+      window.addEventListener("storage", handleStorage)
       document.addEventListener("visibilitychange", handleVisibilityChange)
 
       return () => {
@@ -145,6 +159,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         activeController?.abort()
         window.clearInterval(intervalId)
         window.removeEventListener("focus", handleFocus)
+        window.removeEventListener("admin-billing-updated", handleBillingUpdated)
+        window.removeEventListener("storage", handleStorage)
         document.removeEventListener("visibilitychange", handleVisibilityChange)
       }
     }
