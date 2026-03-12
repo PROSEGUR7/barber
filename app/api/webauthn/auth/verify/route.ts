@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { verifyPasskeyAuthentication, userHasPasskeys } from "@/lib/webauthn"
 import { markUserLogin } from "@/lib/auth"
+import { getTenantSubscriptionSnapshot } from "@/lib/admin-billing"
 import { validateTenantAccess } from "@/lib/admin-billing"
 
 export const runtime = "nodejs"
@@ -72,6 +73,20 @@ export async function POST(request: Request) {
 
     await markUserLogin(result.user.id, result.user.tenantSchema)
 
+    const subscriptionSnapshot =
+      result.user.role === "admin"
+        ? await getTenantSubscriptionSnapshot({ tenantSchema: result.user.tenantSchema })
+        : null
+    const nowMs = Date.now()
+    const nextChargeMs = subscriptionSnapshot?.nextChargeAt
+      ? new Date(subscriptionSnapshot.nextChargeAt).getTime()
+      : Number.NaN
+    const hasDueDatePassed = Number.isFinite(nextChargeMs) && nextChargeMs < nowMs
+    const canAccessAdminSections =
+      result.user.role === "admin"
+        ? Boolean(subscriptionSnapshot?.hasPaidAccess) && tenantAccess.allowed && !hasDueDatePassed
+        : null
+
     return NextResponse.json(
       {
         ok: true,
@@ -82,6 +97,7 @@ export async function POST(request: Request) {
           displayName: result.user.displayName ?? null,
           hasPasskeys: await userHasPasskeys(result.user.id),
           tenant: result.user.tenantSchema ?? null,
+          canAccessAdminSections,
         },
       },
       { status: 200 },

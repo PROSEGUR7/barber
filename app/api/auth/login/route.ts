@@ -6,6 +6,7 @@ import {
   verifyPassword,
   type AuthUser,
 } from "@/lib/auth"
+import { getTenantSubscriptionSnapshot } from "@/lib/admin-billing"
 import { validateTenantAccess } from "@/lib/admin-billing"
 import { pool } from "@/lib/db"
 
@@ -176,6 +177,20 @@ export async function POST(request: Request) {
       tenantSchema,
     }
 
+    const subscriptionSnapshot =
+      authUser.role === "admin"
+        ? await getTenantSubscriptionSnapshot({ tenantSchema })
+        : null
+    const nowMs = Date.now()
+    const nextChargeMs = subscriptionSnapshot?.nextChargeAt
+      ? new Date(subscriptionSnapshot.nextChargeAt).getTime()
+      : Number.NaN
+    const hasDueDatePassed = Number.isFinite(nextChargeMs) && nextChargeMs < nowMs
+    const canAccessAdminSections =
+      authUser.role === "admin"
+        ? Boolean(subscriptionSnapshot?.hasPaidAccess) && tenantAccess.allowed && !hasDueDatePassed
+        : null
+
     return NextResponse.json(
       {
         ok: true,
@@ -186,6 +201,7 @@ export async function POST(request: Request) {
           displayName: authUser.displayName ?? null,
           hasPasskeys: await hasPasskeys(authUser.id, tenantSchema),
           tenant: tenantSchema,
+          canAccessAdminSections,
         },
       },
       { status: 200 },

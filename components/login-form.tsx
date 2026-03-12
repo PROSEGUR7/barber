@@ -63,6 +63,58 @@ export function LoginForm({
     }
   }
 
+  const resolveDestinationByRole = async (options: {
+    role?: string
+    tenant?: string | null
+    email?: string | null
+    canAccessAdminSections?: boolean | null
+  }): Promise<string> => {
+    const role = options.role?.trim().toLowerCase()
+
+    if (role === "barber") {
+      return "/barber"
+    }
+
+    if (role !== "admin") {
+      return "/booking"
+    }
+
+    if (typeof options.canAccessAdminSections === "boolean") {
+      return options.canAccessAdminSections ? "/admin" : "/admin/planes"
+    }
+
+    const tenant = options.tenant?.trim() ?? ""
+    const email = options.email?.trim() ?? ""
+    const query = new URLSearchParams()
+
+    if (tenant) {
+      query.set("tenant", tenant)
+    }
+
+    if (email) {
+      query.set("email", email)
+    }
+
+    try {
+      const response = await fetch(
+        `/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      )
+
+      if (!response.ok) {
+        return "/admin"
+      }
+
+      const payload = (await response.json().catch(() => null)) as { canAccessSections?: boolean } | null
+      return payload?.canAccessSections ? "/admin" : "/admin/planes"
+    } catch {
+      return "/admin"
+    }
+  }
+
   useEffect(() => {
     try {
       const storedEmail =
@@ -130,6 +182,7 @@ export function LoginForm({
           hasPasskeys?: boolean
           displayName?: string | null
           tenant?: string | null
+          canAccessAdminSections?: boolean | null
         }
       }
 
@@ -186,6 +239,7 @@ export function LoginForm({
         hasPasskeys?: boolean
         displayName?: string | null
         tenant?: string | null
+        canAccessAdminSections?: boolean | null
       }
 
       if (user.email) {
@@ -217,12 +271,12 @@ export function LoginForm({
 
       persistTenant(user.tenant)
 
-      const destination =
-        user.role === "admin"
-          ? "/admin"
-          : user.role === "barber"
-            ? "/barber"
-            : "/booking"
+      const destination = await resolveDestinationByRole({
+        role: user.role,
+        tenant: user.tenant,
+        email: user.email ?? sanitizedEmail,
+        canAccessAdminSections: user.canAccessAdminSections,
+      })
 
       const shouldOfferSetup = Boolean(userId) && (!user.hasPasskeys || shouldSuggestPasskeySetup)
 
@@ -319,6 +373,7 @@ export function LoginForm({
         role?: string
         displayName?: string | null
         tenant?: string | null
+        canAccessAdminSections?: boolean | null
       }
 
       if (user.email) {
@@ -355,16 +410,14 @@ export function LoginForm({
         description: "Bienvenido de nuevo con tu llave de acceso.",
       })
 
-      switch (user.role) {
-        case "admin":
-          router.push("/admin")
-          break
-        case "barber":
-          router.push("/barber")
-          break
-        default:
-          router.push("/booking")
-      }
+      const destination = await resolveDestinationByRole({
+        role: user.role,
+        tenant: user.tenant,
+        email: user.email ?? sanitizedEmail,
+        canAccessAdminSections: user.canAccessAdminSections,
+      })
+
+      router.push(destination)
     } catch (err) {
       const isNotAllowedDomError = err instanceof DOMException && err.name === "NotAllowedError"
       const message = err instanceof Error ? err.message.toLowerCase() : ""
