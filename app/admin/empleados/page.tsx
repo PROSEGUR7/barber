@@ -32,6 +32,11 @@ type EmployeesResponse = {
 
 type CreateEmployeeResponse = EmployeesResponse & {
   employee?: EmployeeSummary
+  debug?: {
+    message?: string | null
+    code?: string | null
+    detail?: string | null
+  }
 }
 
 type EmployeeResponse = {
@@ -300,7 +305,15 @@ export default function AdminEmployeesPage() {
       const data: CreateEmployeeResponse = await response.json().catch(() => ({} as CreateEmployeeResponse))
 
       if (!response.ok || !data.employee) {
-        setFormError(data.error ?? "No se pudo crear el empleado.")
+        const debugMessage = [data.debug?.message, data.debug?.code, data.debug?.detail]
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .join(" | ")
+
+        setFormError(
+          debugMessage && process.env.NODE_ENV !== "production"
+            ? `${data.error ?? "No se pudo crear el empleado."} (${debugMessage})`
+            : data.error ?? "No se pudo crear el empleado.",
+        )
         return
       }
 

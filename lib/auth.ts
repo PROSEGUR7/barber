@@ -151,7 +151,7 @@ async function resolveDbRoleValueForTenant(
 async function getTableColumns(
   client: { query: typeof pool.query },
   tenantSchema: string,
-  tableName: "empleados" | "clientes",
+  tableName: "users" | "empleados" | "clientes",
 ): Promise<Set<string>> {
   const result = await client.query<{ column_name: string }>(
     `SELECT column_name
@@ -166,6 +166,54 @@ async function getTableColumns(
       .map((row) => row.column_name?.trim().toLowerCase())
       .filter((value): value is string => Boolean(value)),
   )
+}
+
+async function insertUserRow(
+  client: { query: typeof pool.query },
+  usersTable: string,
+  tenantSchema: string,
+  values: { email: string; hashedPassword: string; dbRoleParam: string },
+): Promise<DbUserRow> {
+  const columns = await getTableColumns(client, tenantSchema, "users")
+
+  const columnNames = ["correo", "passwordhash", "rol"]
+  const placeholders = ["$1", "$2", "$3"]
+  const parameters: Array<string> = [values.email, values.hashedPassword, values.dbRoleParam]
+
+  if (columns.has("estado")) {
+    columnNames.push("estado")
+    placeholders.push(`'activo'`)
+  }
+
+  if (columns.has("fecha_creacion")) {
+    columnNames.push("fecha_creacion")
+    placeholders.push("now()")
+  }
+
+  if (columns.has("ultima_actualizacion")) {
+    columnNames.push("ultima_actualizacion")
+    placeholders.push("now()")
+  }
+
+  if (columns.has("fecha_actualizacion")) {
+    columnNames.push("fecha_actualizacion")
+    placeholders.push("now()")
+  }
+
+  const returningLastLoginExpression = columns.has("ultimo_acceso")
+    ? "ultimo_acceso::text"
+    : columns.has("ultimo_ingreso")
+      ? "ultimo_ingreso::text"
+      : "NULL::text"
+
+  const result = await client.query<DbUserRow>(
+    `INSERT INTO ${usersTable} (${columnNames.join(", ")})
+     VALUES (${placeholders.join(", ")})
+     RETURNING id, correo, passwordhash, rol::text as rol, ${returningLastLoginExpression} as ultimo_acceso`,
+    parameters,
+  )
+
+  return result.rows[0]
 }
 
 async function insertEmployeeProfile(
@@ -444,14 +492,11 @@ export async function createUser({
     await client.query("SET CONSTRAINTS ALL DEFERRED")
 
     const dbRoleParam = await resolveDbRoleValueForTenant(client, role, resolvedTenantSchema)
-    const userResult = await client.query<DbUserRow>(
-      `INSERT INTO ${usersTable} (correo, passwordhash, rol)
-       VALUES ($1, $2, $3)
-       RETURNING id, correo, passwordhash, rol::text as rol, ultimo_acceso`,
-      [email, hashedPassword, dbRoleParam],
-    )
-
-    const userRow = userResult.rows[0]
+    const userRow = await insertUserRow(client, usersTable, resolvedTenantSchema, {
+      email,
+      hashedPassword,
+      dbRoleParam,
+    })
     const appRole = mapDbRoleToAppRole(userRow.rol)
 
     if (appRole === "client") {
