@@ -57,7 +57,7 @@ type DbUserRow = {
   id: number
   correo: string
   passwordhash: string
-  rol: keyof typeof roleFromDb
+  rol: string
   ultimo_acceso: string | null
 }
 
@@ -86,6 +86,115 @@ export class UserAlreadyExistsError extends Error {
     super("USER_ALREADY_EXISTS")
     this.name = "UserAlreadyExistsError"
   }
+}
+
+function mapDbRoleToAppRole(dbRole: string | null | undefined): AppUserRole {
+  const normalized = (dbRole ?? "").trim().toLowerCase()
+
+  if (normalized === "cliente" || normalized === "client") {
+    return "client"
+  }
+
+  if (normalized === "empleado" || normalized === "barbero" || normalized === "barber") {
+    return "barber"
+  }
+
+  return "admin"
+}
+
+async function getUsersRoleEnumLabels(client: { query: typeof pool.query }, tenantSchema: string): Promise<string[]> {
+  try {
+    const result = await client.query<{ enum_label: string }>(
+      `SELECT e.enumlabel AS enum_label
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_type t ON t.oid = a.atttypid
+         JOIN pg_enum e ON e.enumtypid = t.oid
+        WHERE n.nspname = $1
+          AND c.relname = 'users'
+          AND a.attname = 'rol'
+        ORDER BY e.enumsortorder ASC`,
+      [tenantSchema],
+    )
+
+    return result.rows
+      .map((row) => row.enum_label?.trim().toLowerCase())
+      .filter((label): label is string => Boolean(label))
+  } catch {
+    return []
+  }
+}
+
+async function resolveDbRoleValueForTenant(
+  client: { query: typeof pool.query },
+  role: AppUserRole,
+  tenantSchema: string,
+): Promise<string> {
+  const enumLabels = await getUsersRoleEnumLabels(client, tenantSchema)
+  if (enumLabels.length === 0) {
+    return roleToDb[role]
+  }
+
+  const candidatesByRole: Record<AppUserRole, string[]> = {
+    client: ["cliente", "client"],
+    barber: ["empleado", "barbero", "barber"],
+    admin: ["admin"],
+  }
+
+  const candidates = candidatesByRole[role]
+  const match = candidates.find((candidate) => enumLabels.includes(candidate))
+
+  return match ?? roleToDb[role]
+}
+
+async function getTableColumns(
+  client: { query: typeof pool.query },
+  tenantSchema: string,
+  tableName: "empleados" | "clientes",
+): Promise<Set<string>> {
+  const result = await client.query<{ column_name: string }>(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = $1
+        AND table_name = $2`,
+    [tenantSchema, tableName],
+  )
+
+  return new Set(
+    result.rows
+      .map((row) => row.column_name?.trim().toLowerCase())
+      .filter((value): value is string => Boolean(value)),
+  )
+}
+
+async function insertEmployeeProfile(
+  client: { query: typeof pool.query },
+  empleadosTable: string,
+  tenantSchema: string,
+  values: { userId: number; fullName: string; phone: string },
+) {
+  const columns = await getTableColumns(client, tenantSchema, "empleados")
+  const columnNames = ["user_id", "nombre", "telefono"]
+  const placeholders = ["$1", "$2", "$3"]
+  const parameters: Array<number | string> = [values.userId, values.fullName, values.phone]
+
+  if (columns.has("estado")) {
+    columnNames.push("estado")
+    placeholders.push("$4")
+    parameters.push("activo")
+  }
+
+  if (columns.has("fecha_ingreso")) {
+    columnNames.push("fecha_ingreso")
+    placeholders.push("now()")
+  }
+
+  await client.query(
+    `INSERT INTO ${empleadosTable} (${columnNames.join(", ")})
+     VALUES (${placeholders.join(", ")})`,
+    parameters,
+  )
 }
 
 async function listChildTenantSchemas(): Promise<string[]> {
@@ -220,10 +329,7 @@ export async function findUserByEmailAndRole(
   }
 
   const row = result.rows[0]
-
-  // Ensure TypeScript understands the role value comes from DB enum
-  const dbRoleFromRow = row.rol as keyof typeof roleFromDb
-  const appRole = roleFromDb[dbRoleFromRow]
+  const appRole = mapDbRoleToAppRole(row.rol)
 
   return {
     id: row.id,
@@ -260,8 +366,7 @@ export async function findUserByEmail(
   }
 
   const row = result.rows[0]
-  const dbRoleFromRow = row.rol as keyof typeof roleFromDb
-  const appRole = roleFromDb[dbRoleFromRow]
+  const appRole = mapDbRoleToAppRole(row.rol)
   const displayName = await getDisplayNameForRole(row.id, appRole, resolvedTenantSchema)
 
   return {
@@ -296,8 +401,7 @@ export async function findUserById(id: number, tenantSchema?: string): Promise<A
   }
 
   const row = result.rows[0]
-  const dbRoleFromRow = row.rol as keyof typeof roleFromDb
-  const appRole = roleFromDb[dbRoleFromRow]
+  const appRole = mapDbRoleToAppRole(row.rol)
   const displayName = await getDisplayNameForRole(row.id, appRole, resolvedTenantSchema)
 
   return {
@@ -339,7 +443,7 @@ export async function createUser({
     await client.query("BEGIN")
     await client.query("SET CONSTRAINTS ALL DEFERRED")
 
-    const dbRoleParam = roleToDb[role]
+    const dbRoleParam = await resolveDbRoleValueForTenant(client, role, resolvedTenantSchema)
     const userResult = await client.query<DbUserRow>(
       `INSERT INTO ${usersTable} (correo, passwordhash, rol)
        VALUES ($1, $2, $3)
@@ -348,8 +452,7 @@ export async function createUser({
     )
 
     const userRow = userResult.rows[0]
-  const dbRoleFromRow = userRow.rol as keyof typeof roleFromDb
-    const appRole = roleFromDb[dbRoleFromRow]
+    const appRole = mapDbRoleToAppRole(userRow.rol)
 
     if (appRole === "client") {
       const fullName = profile?.name?.trim()
@@ -376,11 +479,11 @@ export async function createUser({
         )
       }
 
-      await client.query(
-        `INSERT INTO ${empleadosTable} (user_id, nombre, telefono)
-         VALUES ($1, $2, $3)`,
-        [userRow.id, fullName, phone],
-      )
+      await insertEmployeeProfile(client, empleadosTable, resolvedTenantSchema, {
+        userId: userRow.id,
+        fullName,
+        phone,
+      })
     }
 
     await client.query("COMMIT")

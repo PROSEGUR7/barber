@@ -152,6 +152,14 @@ type EmployeeBasicRow = {
   fecha_ingreso: Date | null
 }
 
+type EmployeeLegacyBasicRow = {
+  id: number
+  user_id: number
+  nombre: string
+  correo: string
+  telefono: string | null
+}
+
 type ClientSummaryRow = {
   id: number
   user_id: number
@@ -486,23 +494,62 @@ export async function getEmployeesWithStats(filter?: {
       ORDER BY e.nombre ASC
     `
 
-    const fallbackResult = await pool.query<EmployeeBasicRow>(tenantSql(fallbackQuery, filter?.tenantSchema), parameters)
-    return fallbackResult.rows.map((row) => ({
-      id: row.id,
-      userId: row.user_id,
-      name: row.nombre,
-      email: row.correo,
-      phone: row.telefono,
-      status: row.estado,
-      joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
-      totalAppointments: 0,
-      upcomingAppointments: 0,
-      completedAppointments: 0,
-      totalRevenue: 0,
-      serviceIds: [],
-      services: [],
-      rating: null,
-    }))
+    try {
+      const fallbackResult = await pool.query<EmployeeBasicRow>(tenantSql(fallbackQuery, filter?.tenantSchema), parameters)
+      return fallbackResult.rows.map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        name: row.nombre,
+        email: row.correo,
+        phone: row.telefono,
+        status: row.estado,
+        joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
+        totalAppointments: 0,
+        upcomingAppointments: 0,
+        completedAppointments: 0,
+        totalRevenue: 0,
+        serviceIds: [],
+        services: [],
+        rating: null,
+      }))
+    } catch (fallbackError) {
+      console.warn("Falling back to legacy employee query", { filter, fallbackError })
+
+      const legacyFallbackQuery = `
+        SELECT
+          e.id,
+          e.user_id,
+          e.nombre,
+          e.telefono,
+          u.correo
+        FROM tenant_base.empleados e
+        INNER JOIN tenant_base.users u ON u.id = e.user_id
+        ${whereClause}
+        ORDER BY e.nombre ASC
+      `
+
+      const legacyFallbackResult = await pool.query<EmployeeLegacyBasicRow>(
+        tenantSql(legacyFallbackQuery, filter?.tenantSchema),
+        parameters,
+      )
+
+      return legacyFallbackResult.rows.map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        name: row.nombre,
+        email: row.correo,
+        phone: row.telefono,
+        status: null,
+        joinedAt: null,
+        totalAppointments: 0,
+        upcomingAppointments: 0,
+        completedAppointments: 0,
+        totalRevenue: 0,
+        serviceIds: [],
+        services: [],
+        rating: null,
+      }))
+    }
   }
 }
 

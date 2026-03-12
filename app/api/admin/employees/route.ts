@@ -108,6 +108,34 @@ export async function POST(request: Request) {
       })
     }
 
+    if (process.env.NODE_ENV !== "production") {
+      const dbError = error as {
+        message?: string
+        code?: string
+        detail?: string
+        table?: string
+        column?: string
+        constraint?: string
+      }
+
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "SERVER_ERROR",
+          error: "No se pudo crear el empleado.",
+          debug: {
+            message: dbError?.message ?? null,
+            code: dbError?.code ?? null,
+            detail: dbError?.detail ?? null,
+            table: dbError?.table ?? null,
+            column: dbError?.column ?? null,
+            constraint: dbError?.constraint ?? null,
+          },
+        },
+        { status: 500 },
+      )
+    }
+
     console.error("Admin create employee API error", error)
     return jsonError(500, {
       code: "SERVER_ERROR",
