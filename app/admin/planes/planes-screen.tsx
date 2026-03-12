@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatCop, isSaasPlanId, SAAS_PLANS, type SaasPlanId } from "@/lib/saas-plans"
 
+const PENDING_PLAN_CHECKOUT_REFERENCE_KEY = "wompiPendingPlanCheckoutReference"
+
 type BillingCycle = "mensual" | "trimestral" | "anual"
 
 type WompiCheckoutData = {
@@ -104,6 +106,65 @@ export default function AdminPlanesScreen() {
     [],
   )
 
+  const loadSubscriptionState = useCallback(async (signal?: AbortSignal) => {
+    setIsSubscriptionStateLoading(true)
+
+    try {
+      const tenantSchema =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+          : ""
+      const userEmail =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("userEmail") ?? "").trim()
+          : ""
+
+      const query = new URLSearchParams()
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+      if (userEmail) {
+        query.set("email", userEmail)
+      }
+
+      const response = await fetch(`/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`, {
+        signal,
+        cache: "no-store",
+      })
+
+      const payload = (await response.json().catch(() => null)) as BillingAccessResponse | null
+      if (!response.ok) {
+        return
+      }
+
+      const nextHasPaidAccess = Boolean(payload?.hasPaidAccess)
+      setHasPaidAccess(nextHasPaidAccess)
+      setCanAccessSections(Boolean(payload?.canAccessSections))
+      setAccessReason(payload?.accessReason ?? null)
+      const resolvedTenantSchema = payload?.subscription?.tenantSchema?.trim() || tenantSchema || null
+      const resolvedEmail = userEmail || null
+      setCheckoutTenantSchema(resolvedTenantSchema)
+      setCheckoutEmail(resolvedEmail)
+      setActivePlanCode(isSaasPlanId(payload?.subscription?.planCode ?? "") ? (payload?.subscription?.planCode as SaasPlanId) : null)
+      setActivePlanName(payload?.subscription?.planName?.trim() || null)
+      const nextBillingCycle = payload?.subscription?.billingCycle?.trim()?.toLowerCase() || null
+      setActiveBillingCycle(nextBillingCycle)
+      if (nextBillingCycle === "mensual" || nextBillingCycle === "trimestral" || nextBillingCycle === "anual") {
+        setSelectedBillingCycle(nextBillingCycle)
+      }
+      setPlanValidUntil(payload?.subscription?.periodEnd ?? null)
+      setNextChargeAt(payload?.subscription?.nextChargeAt ?? null)
+    } catch (error) {
+      if (!signal?.aborted) {
+        console.warn("No se pudo cargar el estado de suscripción", error)
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsSubscriptionStateLoading(false)
+      }
+    }
+  }, [])
+
   useEffect(() => {
     const controller = new AbortController()
 
@@ -170,67 +231,21 @@ export default function AdminPlanesScreen() {
   useEffect(() => {
     const controller = new AbortController()
 
-    const loadSubscriptionState = async () => {
-      setIsSubscriptionStateLoading(true)
+    void loadSubscriptionState(controller.signal)
+    return () => controller.abort()
+  }, [loadSubscriptionState])
 
-      try {
-        const tenantSchema =
-          typeof window !== "undefined"
-            ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
-            : ""
-        const userEmail =
-          typeof window !== "undefined"
-            ? (localStorage.getItem("userEmail") ?? "").trim()
-            : ""
-
-        const query = new URLSearchParams()
-        if (tenantSchema) {
-          query.set("tenant", tenantSchema)
-        }
-        if (userEmail) {
-          query.set("email", userEmail)
-        }
-
-        const response = await fetch(`/api/admin/billing/access${query.toString() ? `?${query.toString()}` : ""}`, {
-          signal: controller.signal,
-          cache: "no-store",
-        })
-
-        const payload = (await response.json().catch(() => null)) as BillingAccessResponse | null
-        if (!response.ok) {
-          return
-        }
-
-        const nextHasPaidAccess = Boolean(payload?.hasPaidAccess)
-        setHasPaidAccess(nextHasPaidAccess)
-        setCanAccessSections(Boolean(payload?.canAccessSections))
-        setAccessReason(payload?.accessReason ?? null)
-        const resolvedTenantSchema = payload?.subscription?.tenantSchema?.trim() || tenantSchema || null
-        const resolvedEmail = userEmail || null
-        setCheckoutTenantSchema(resolvedTenantSchema)
-        setCheckoutEmail(resolvedEmail)
-        setActivePlanCode(isSaasPlanId(payload?.subscription?.planCode ?? "") ? (payload?.subscription?.planCode as SaasPlanId) : null)
-        setActivePlanName(payload?.subscription?.planName?.trim() || null)
-        const nextBillingCycle = payload?.subscription?.billingCycle?.trim()?.toLowerCase() || null
-        setActiveBillingCycle(nextBillingCycle)
-        if (nextBillingCycle === "mensual" || nextBillingCycle === "trimestral" || nextBillingCycle === "anual") {
-          setSelectedBillingCycle(nextBillingCycle)
-        }
-        setPlanValidUntil(payload?.subscription?.periodEnd ?? null)
-        setNextChargeAt(payload?.subscription?.nextChargeAt ?? null)
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          console.warn("No se pudo cargar el estado de suscripción", error)
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsSubscriptionStateLoading(false)
-        }
-      }
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
     }
 
-    void loadSubscriptionState()
-    return () => controller.abort()
+    const pendingReference = localStorage.getItem(PENDING_PLAN_CHECKOUT_REFERENCE_KEY)?.trim() ?? ""
+    if (!pendingReference) {
+      return
+    }
+
+    setPendingCheckoutReference(pendingReference)
   }, [])
 
   const formattedPlanValidUntil = useMemo(() => {
@@ -341,6 +356,93 @@ export default function AdminPlanesScreen() {
     return "/ mes"
   }, [])
 
+  const reconcilePaymentByReference = useCallback(
+    async (reference: string) => {
+      const normalizedReference = reference.trim()
+      if (!normalizedReference) {
+        return
+      }
+
+      setIsReconcilingPayment(true)
+
+      try {
+        const byReferenceResponse = await fetch(`/api/payments/wompi/reference/${encodeURIComponent(normalizedReference)}`, {
+          cache: "no-store",
+        })
+
+        const byReferencePayload = (await byReferenceResponse.json().catch(() => null)) as {
+          transactionId?: string | null
+          error?: string
+        } | null
+
+        if (!byReferenceResponse.ok || !byReferencePayload?.transactionId) {
+          throw new Error(byReferencePayload?.error?.trim() || "No se pudo resolver la transacción de Wompi.")
+        }
+
+        const transactionResponse = await fetch(
+          `/api/payments/wompi/transaction/${encodeURIComponent(byReferencePayload.transactionId)}`,
+          { cache: "no-store" },
+        )
+
+        const transactionPayload = (await transactionResponse.json().catch(() => null)) as {
+          billingRegistration?: {
+            registered?: boolean
+            skipped?: boolean
+            rejected?: boolean
+            message?: string | null
+          }
+          billingRejectMessage?: string | null
+          error?: string
+        } | null
+
+        if (!transactionResponse.ok) {
+          throw new Error(transactionPayload?.error?.trim() || "No se pudo conciliar el pago de Wompi.")
+        }
+
+        if (transactionPayload?.billingRegistration?.registered || transactionPayload?.billingRegistration?.skipped) {
+          setPendingCheckoutReference(null)
+          if (typeof window !== "undefined") {
+            localStorage.removeItem(PENDING_PLAN_CHECKOUT_REFERENCE_KEY)
+          }
+          setInlineNotice({
+            type: "success",
+            title: "Pago conciliado",
+            message: "Tu suscripción fue actualizada correctamente.",
+          })
+          await loadSubscriptionState()
+          return
+        }
+
+        if (transactionPayload?.billingRegistration?.rejected) {
+          setInlineNotice({
+            type: "error",
+            title: "Pago rechazado por billing",
+            message:
+              transactionPayload.billingRejectMessage?.trim() ||
+              transactionPayload.billingRegistration.message?.trim() ||
+              "El pago fue aprobado en pasarela pero rechazado por billing.",
+          })
+          return
+        }
+
+        setInlineNotice({
+          type: "error",
+          title: "Pago no aplicado",
+          message: "La pasarela reportó la transacción, pero billing aún no confirmó la aplicación del plan.",
+        })
+      } catch (error) {
+        setInlineNotice({
+          type: "error",
+          title: "No se pudo validar el pago",
+          message: error instanceof Error ? error.message : "No se pudo validar el pago de Wompi",
+        })
+      } finally {
+        setIsReconcilingPayment(false)
+      }
+    },
+    [loadSubscriptionState],
+  )
+
   const handleSelectPlan = useCallback(async (planId: SaasPlanId, cycleOverride?: BillingCycle) => {
     setSelectedPlanId(planId)
     setCheckoutPlanId(planId)
@@ -438,6 +540,9 @@ export default function AdminPlanesScreen() {
 
       document.body.appendChild(form)
       setPendingCheckoutReference(checkout.reference)
+      if (typeof window !== "undefined") {
+        localStorage.setItem(PENDING_PLAN_CHECKOUT_REFERENCE_KEY, checkout.reference)
+      }
       setInlineNotice({
         type: "success",
         title: "Checkout abierto",
@@ -466,86 +571,9 @@ export default function AdminPlanesScreen() {
       return
     }
 
-    let isCancelled = false
-
-    const reconcilePayment = async () => {
-      if (!isCancelled) {
-        setIsReconcilingPayment(true)
-      }
-
-      try {
-        const byReferenceResponse = await fetch(`/api/payments/wompi/reference/${encodeURIComponent(reference)}`, {
-          cache: "no-store",
-        })
-
-        const byReferencePayload = (await byReferenceResponse.json().catch(() => null)) as {
-          transactionId?: string | null
-          error?: string
-        } | null
-
-        if (!byReferenceResponse.ok || !byReferencePayload?.transactionId) {
-          throw new Error(byReferencePayload?.error?.trim() || "No se pudo resolver la transacción de Wompi.")
-        }
-
-        const transactionResponse = await fetch(
-          `/api/payments/wompi/transaction/${encodeURIComponent(byReferencePayload.transactionId)}`,
-          { cache: "no-store" },
-        )
-
-        const transactionPayload = (await transactionResponse.json().catch(() => null)) as {
-          billingRegistration?: {
-            registered?: boolean
-            skipped?: boolean
-            rejected?: boolean
-            message?: string | null
-          }
-          billingRejectMessage?: string | null
-          error?: string
-        } | null
-
-        if (!transactionResponse.ok) {
-          throw new Error(transactionPayload?.error?.trim() || "No se pudo conciliar el pago de Wompi.")
-        }
-
-        if (transactionPayload?.billingRegistration?.registered || transactionPayload?.billingRegistration?.skipped) {
-          setPendingCheckoutReference(null)
-          setInlineNotice({
-            type: "success",
-            title: "Pago conciliado",
-            message: "Tu suscripción fue actualizada correctamente.",
-          })
-        } else if (transactionPayload?.billingRegistration?.rejected) {
-          setInlineNotice({
-            type: "error",
-            title: "Pago rechazado por billing",
-            message:
-              transactionPayload.billingRejectMessage?.trim() ||
-              transactionPayload.billingRegistration.message?.trim() ||
-              "El pago fue aprobado en pasarela pero rechazado por billing.",
-          })
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setInlineNotice({
-            type: "error",
-            title: "No se pudo validar el pago",
-            message: error instanceof Error ? error.message : "No se pudo validar el pago de Wompi",
-          })
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsReconcilingPayment(false)
-          router.replace("/admin/planes")
-        }
-      }
-    }
-
-    void reconcilePayment()
-
-    return () => {
-      isCancelled = true
-    }
-  }, [router, searchParams])
+    void reconcilePaymentByReference(reference)
+    router.replace("/admin/planes")
+  }, [reconcilePaymentByReference, router, searchParams])
 
   return (
     <div className="min-h-screen bg-background">
@@ -584,11 +612,7 @@ export default function AdminPlanesScreen() {
               <Button
                 type="button"
                 size="sm"
-                onClick={() =>
-                  router.push(
-                    `/admin/planes?paymentProvider=wompi&reference=${encodeURIComponent(pendingCheckoutReference)}`,
-                  )
-                }
+                onClick={() => void reconcilePaymentByReference(pendingCheckoutReference)}
                 disabled={isReconcilingPayment}
               >
                 Finalizar pago
