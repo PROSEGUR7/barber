@@ -84,6 +84,7 @@ export default function AdminPlanesScreen() {
   const [checkoutEmail, setCheckoutEmail] = useState<string | null>(null)
   const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
   const [inlineNotice, setInlineNotice] = useState<InlineNotice | null>(null)
+  const [pendingCheckoutReference, setPendingCheckoutReference] = useState<string | null>(null)
 
   const cycleOptions: Array<{ value: BillingCycle; label: string }> = [
     { value: "mensual", label: "Mensual" },
@@ -402,12 +403,13 @@ export default function AdminPlanesScreen() {
 
       const checkout = payload.wompiCheckout
       const normalizedRedirectUrl = checkout.redirectUrl?.trim() ?? ""
-      const canUseRedirectUrl = normalizedRedirectUrl.length > 0
+      const canUseRedirectUrl =
+        normalizedRedirectUrl.length > 0 && !/localhost|127\.0\.0\.1/i.test(normalizedRedirectUrl)
 
       const form = document.createElement("form")
       form.method = "GET"
       form.action = "https://checkout.wompi.co/p/"
-      form.target = "_self"
+      form.target = "_blank"
 
       const fields: Array<{ name: string; value: string }> = [
         { name: "public-key", value: checkout.publicKey },
@@ -435,6 +437,13 @@ export default function AdminPlanesScreen() {
       }
 
       document.body.appendChild(form)
+      setPendingCheckoutReference(checkout.reference)
+      setInlineNotice({
+        type: "success",
+        title: "Checkout abierto",
+        message:
+          "Abrimos Wompi en otra pestaña. Cuando termines el pago, vuelve aquí y pulsa 'Finalizar pago' para aplicar el plan.",
+      })
       form.submit()
       form.remove()
     } catch (error) {
@@ -499,6 +508,7 @@ export default function AdminPlanesScreen() {
         }
 
         if (transactionPayload?.billingRegistration?.registered || transactionPayload?.billingRegistration?.skipped) {
+          setPendingCheckoutReference(null)
           setInlineNotice({
             type: "success",
             title: "Pago conciliado",
@@ -565,6 +575,25 @@ export default function AdminPlanesScreen() {
           )}
           {isReconcilingPayment && (
             <p className="text-sm text-muted-foreground">Validando pago en Wompi y actualizando billing...</p>
+          )}
+          {pendingCheckoutReference && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                Referencia pendiente: <span className="font-medium text-foreground">{pendingCheckoutReference}</span>
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() =>
+                  router.push(
+                    `/admin/planes?paymentProvider=wompi&reference=${encodeURIComponent(pendingCheckoutReference)}`,
+                  )
+                }
+                disabled={isReconcilingPayment}
+              >
+                Finalizar pago
+              </Button>
+            </div>
           )}
           {isSubscriptionStateLoading && (
             <p className="text-sm text-muted-foreground">Cargando estado de tu plan...</p>
