@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { getWalletDataForUser } from "@/lib/wallet"
 
 const querySchema = z.object({
@@ -9,10 +10,11 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const { userId } = querySchema.parse({ userId: url.searchParams.get("userId") })
 
-    const wallet = await getWalletDataForUser(userId)
+    const wallet = await getWalletDataForUser(userId, tenantSchema)
     return NextResponse.json(wallet)
   } catch (error) {
     if (error instanceof z.ZodError) {

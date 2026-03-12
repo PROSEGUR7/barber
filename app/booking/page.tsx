@@ -21,6 +21,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
@@ -55,6 +56,19 @@ type WompiCheckoutData = {
   customerEmail: string
   acceptanceToken: string
   personalDataAuthToken: string | null
+}
+
+type PromoPricingPreview = {
+  originalTotal: number
+  discountTotal: number
+  finalTotal: number
+  promo: {
+    code: string
+    description: string
+    discountPercent: number
+    appliesToServiceIds: number[] | null
+    appliedServiceIds: number[]
+  } | null
 }
 
 declare global {
@@ -111,6 +125,10 @@ export default function BookingPage() {
   const [isWompiDialogOpen, setIsWompiDialogOpen] = useState(false)
   const [isWompiSdkReady, setIsWompiSdkReady] = useState(false)
   const [isLoadingWompiSdk, setIsLoadingWompiSdk] = useState(false)
+  const [promoCodeInput, setPromoCodeInput] = useState("")
+  const [promoError, setPromoError] = useState<string | null>(null)
+  const [promoPreview, setPromoPreview] = useState<PromoPricingPreview | null>(null)
+  const [isApplyingPromo, setIsApplyingPromo] = useState(false)
   const wompiSdkPromiseRef = useRef<Promise<void> | null>(null)
 
   const buildTenantHeaders = (): HeadersInit => {
@@ -628,6 +646,73 @@ export default function BookingPage() {
   }, [barbers, selectedBarber])
 
   useEffect(() => {
+    // Invalidate promo preview when services change.
+    setPromoPreview(null)
+    setPromoError(null)
+  }, [selectedServices])
+
+  const handleApplyPromo = async () => {
+    if (selectedServices.length === 0 || selectedServicesTotal == null) {
+      setPromoError("Selecciona servicios válidos antes de aplicar un código.")
+      return
+    }
+
+    const code = promoCodeInput.trim().toUpperCase()
+    if (!code) {
+      setPromoError("Ingresa un código promocional.")
+      return
+    }
+
+    setIsApplyingPromo(true)
+    setPromoError(null)
+
+    try {
+      const response = await fetch("/api/reservations/promo-preview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          serviceIds: selectedServices,
+          promoCode: code,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok || !data?.pricing) {
+        setPromoPreview(null)
+        setPromoError(typeof data?.error === "string" ? data.error : "No se pudo validar el código.")
+        return
+      }
+
+      setPromoPreview(data.pricing as PromoPricingPreview)
+      setPromoCodeInput(code)
+      setPromoError(null)
+      toast({
+        title: "Código aplicado",
+        description: "El descuento quedó listo para pagos con Wompi.",
+      })
+    } catch (error) {
+      console.error("Error applying promo preview", error)
+      setPromoPreview(null)
+      setPromoError("Error de conexión al validar el código.")
+    } finally {
+      setIsApplyingPromo(false)
+    }
+  }
+
+  const originalTotalForSummary = promoPreview?.originalTotal ?? selectedServicesTotal
+  const wompiDiscountForSummary = paymentMethod === "wompi" ? (promoPreview?.discountTotal ?? 0) : 0
+  const wompiFinalTotalForSummary =
+    originalTotalForSummary == null
+      ? null
+      : paymentMethod === "wompi"
+        ? Math.max(0, originalTotalForSummary - wompiDiscountForSummary)
+        : originalTotalForSummary
+
+  useEffect(() => {
     if (!isWompiDialogOpen || !wompiCheckout) {
       return
     }
@@ -886,6 +971,7 @@ export default function BookingPage() {
           barberId: selectedBarber,
           serviceIds: selectedServices,
           paymentMethod,
+          promoCode: paymentMethod === "wompi" ? promoCodeInput.trim().toUpperCase() || undefined : undefined,
           start: selectedSlot.start,
         }),
       })
@@ -1309,11 +1395,25 @@ export default function BookingPage() {
                             </span>
                           </div>
                           <div>
-                            <span className="text-muted-foreground">Total:</span>{" "}
+                            <span className="text-muted-foreground">Subtotal:</span>{" "}
                             <span className="font-medium">
-                              {selectedServicesTotal == null
+                              {originalTotalForSummary == null
                                 ? "Consultar"
-                                : currencyFormatter.format(selectedServicesTotal)}
+                                : currencyFormatter.format(originalTotalForSummary)}
+                            </span>
+                          </div>
+                          {paymentMethod === "wompi" && promoPreview?.promo && wompiDiscountForSummary > 0 && (
+                            <div>
+                              <span className="text-muted-foreground">Descuento ({promoPreview.promo.discountPercent}%):</span>{" "}
+                              <span className="font-medium text-emerald-500">- {currencyFormatter.format(wompiDiscountForSummary)}</span>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-muted-foreground">Total a pagar:</span>{" "}
+                            <span className="font-semibold">
+                              {wompiFinalTotalForSummary == null
+                                ? "Consultar"
+                                : currencyFormatter.format(wompiFinalTotalForSummary)}
                             </span>
                           </div>
                           <div>
@@ -1356,6 +1456,39 @@ export default function BookingPage() {
                                 Wompi (tarjeta, PSE, Nequi y más)
                               </button>
                             </div>
+                          </div>
+                          <div className="pt-1">
+                            <span className="text-muted-foreground">Código promocional:</span>
+                            <div className="mt-2 flex gap-2">
+                              <Input
+                                value={promoCodeInput}
+                                onChange={(event) => {
+                                  setPromoCodeInput(event.target.value)
+                                  setPromoError(null)
+                                }}
+                                placeholder="Ej. CORTE10"
+                                autoCapitalize="characters"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                  void handleApplyPromo()
+                                }}
+                                disabled={isApplyingPromo || selectedServices.length === 0}
+                              >
+                                {isApplyingPromo ? "Validando..." : "Aplicar"}
+                              </Button>
+                            </div>
+                            {promoError && <p className="mt-2 text-xs text-destructive">{promoError}</p>}
+                            {promoPreview?.promo && (
+                              <p className="mt-2 text-xs text-emerald-500">
+                                Código {promoPreview.promo.code} aplicado ({promoPreview.promo.discountPercent}%).
+                                {paymentMethod === "cash"
+                                  ? " El descuento se aplica automáticamente solo en pagos con Wompi."
+                                  : ""}
+                              </p>
+                            )}
                           </div>
                         </div>
 

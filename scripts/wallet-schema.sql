@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS tenant_base.clientes_cupones (
   code TEXT NOT NULL,
   description TEXT NOT NULL,
   expires_label TEXT NULL,
+  expires_at DATE NULL,
+  service_id INTEGER NULL REFERENCES tenant_base.servicios(id) ON DELETE SET NULL,
+  service_ids INTEGER[] NULL,
+  discount_percent SMALLINT NOT NULL DEFAULT 10 CHECK (discount_percent >= 1 AND discount_percent <= 100),
   status TEXT NOT NULL DEFAULT 'Disponible' CHECK (status IN ('Disponible', 'Usado', 'Expirado')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT clientes_cupones_unique UNIQUE (cliente_id, code)
@@ -46,9 +50,22 @@ CREATE TABLE IF NOT EXISTS tenant_base.promo_codes (
   code TEXT PRIMARY KEY,
   description TEXT NOT NULL,
   expires_label TEXT NULL,
+  expires_at DATE NULL,
+  service_id INTEGER NULL REFERENCES tenant_base.servicios(id) ON DELETE SET NULL,
+  service_ids INTEGER[] NULL,
+  discount_percent SMALLINT NOT NULL DEFAULT 10 CHECK (discount_percent >= 1 AND discount_percent <= 100),
   active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS promo_codes_active_idx
   ON tenant_base.promo_codes (active);
+
+CREATE INDEX IF NOT EXISTS promo_codes_service_idx
+  ON tenant_base.promo_codes (service_id);
+
+CREATE INDEX IF NOT EXISTS promo_codes_expires_at_idx
+  ON tenant_base.promo_codes (expires_at);
+
+CREATE INDEX IF NOT EXISTS promo_codes_discount_percent_idx
+  ON tenant_base.promo_codes (discount_percent);

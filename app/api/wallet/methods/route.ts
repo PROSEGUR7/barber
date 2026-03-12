@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { addPaymentMethodForUser, deletePaymentMethodForUser } from "@/lib/wallet"
 
 const last4Schema = z.string().trim().regex(/^\d{4}$/)
@@ -21,8 +22,12 @@ const delSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = addSchema.parse(await request.json())
-    await addPaymentMethodForUser(body)
+    await addPaymentMethodForUser({
+      ...body,
+      tenantSchema,
+    })
     return NextResponse.json({ ok: true }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -48,8 +53,12 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = delSchema.parse(await request.json())
-    await deletePaymentMethodForUser(body)
+    await deletePaymentMethodForUser({
+      ...body,
+      tenantSchema,
+    })
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof z.ZodError) {

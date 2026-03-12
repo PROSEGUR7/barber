@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db"
+import { tenantSql } from "@/lib/tenant"
 
 type PaymentMethodRow = {
   brand: string
@@ -21,6 +22,9 @@ type CouponRow = {
   code: string
   description: string
   expires_label: string | null
+  expires_at: string | null
+  service_names: string[] | null
+  discount_percent: number
   status: string
 }
 
@@ -46,9 +50,74 @@ type ReceiptDownloadRow = {
 }
 
 type PromoCodeRow = {
+  code: string
   description: string
   expires_label: string | null
+  expires_at: string | null
+  service_ids: number[] | null
+  service_names?: string[] | null
+  discount_percent: number
   active: boolean
+  is_expired?: boolean
+  created_at?: Date | null
+}
+
+type ServicePricingRow = {
+  id: number
+  nombre: string
+  precio: number | string | null
+}
+
+export type AdminPromoCodeSummary = {
+  code: string
+  description: string
+  expiresAt: string | null
+  discountPercent: number
+  active: boolean
+  serviceIds: number[] | null
+  serviceNames: string[]
+  createdAt: string | null
+}
+
+export class PromoCodeAlreadyExistsError extends Error {
+  constructor() {
+    super("PROMO_CODE_ALREADY_EXISTS")
+    this.name = "PromoCodeAlreadyExistsError"
+  }
+}
+
+export class PromoCodeNotFoundError extends Error {
+  constructor() {
+    super("PROMO_CODE_NOT_FOUND")
+    this.name = "PromoCodeNotFoundError"
+  }
+}
+
+export class PromoCodeServiceNotFoundError extends Error {
+  constructor() {
+    super("PROMO_CODE_SERVICE_NOT_FOUND")
+    this.name = "PromoCodeServiceNotFoundError"
+  }
+}
+
+async function assertServicesExist(serviceIds: number[] | null | undefined, tenantSchema?: string | null): Promise<void> {
+  if (!serviceIds || serviceIds.length === 0) {
+    return
+  }
+
+  const uniqueServiceIds = Array.from(new Set(serviceIds.filter((value) => Number.isInteger(value) && value > 0)))
+  if (uniqueServiceIds.length !== serviceIds.length) {
+    throw new PromoCodeServiceNotFoundError()
+  }
+
+  const result = await pool.query<{ id: number }>(
+    tenantSql(`SELECT id FROM tenant_base.servicios WHERE id = ANY($1::int[])`, tenantSchema),
+    [uniqueServiceIds],
+  )
+
+  if (result.rowCount !== uniqueServiceIds.length) {
+    throw new PromoCodeServiceNotFoundError()
+  }
 }
 
 export type WalletPaymentMethod = {
@@ -62,6 +131,8 @@ export type WalletCoupon = {
   code: string
   description: string
   expires: string
+  discountPercent: number
+  appliesTo: string
   status: string
 }
 
@@ -94,12 +165,25 @@ export type WalletData = {
   coupons: WalletCoupon[]
 }
 
-async function resolveClientIdForUser(userId: number): Promise<number> {
+export type ReservationPricingBreakdown = {
+  originalTotal: number
+  discountTotal: number
+  finalTotal: number
+  promo: {
+    code: string
+    description: string
+    discountPercent: number
+    appliesToServiceIds: number[] | null
+    appliedServiceIds: number[]
+  } | null
+}
+
+async function resolveClientIdForUser(userId: number, tenantSchema?: string | null): Promise<number> {
   const result = await pool.query<{ id: number }>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.clientes
       WHERE user_id = $1
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
     [userId],
   )
 
@@ -127,45 +211,68 @@ function formatCopAmount(value: number): string {
   }).format(value)
 }
 
-export async function getWalletDataForUser(userId: number): Promise<WalletData> {
-  const clientId = await resolveClientIdForUser(userId)
+export async function getWalletDataForUser(userId: number, tenantSchema?: string | null): Promise<WalletData> {
+  const clientId = await resolveClientIdForUser(userId, tenantSchema)
 
   const [methods, wallet, subscription, coupons, receipts] = await Promise.all([
     pool.query<PaymentMethodRow>(
-      `SELECT brand, last4, exp_month, exp_year, status
+      tenantSql(`SELECT brand, last4, exp_month, exp_year, status
          FROM tenant_base.clientes_metodos_pago
         WHERE cliente_id = $1
-        ORDER BY (status = 'Principal') DESC, created_at DESC`,
+        ORDER BY (status = 'Principal') DESC, created_at DESC`, tenantSchema),
       [clientId],
     ),
     pool.query<WalletRow>(
-      `SELECT saldo::text as saldo
+      tenantSql(`SELECT saldo::text as saldo
          FROM tenant_base.clientes_wallet
         WHERE cliente_id = $1
-        LIMIT 1`,
+        LIMIT 1`, tenantSchema),
       [clientId],
     ),
     pool.query<SubscriptionRow>(
-      `SELECT plan, next_charge_date::text as next_charge_date
+      tenantSql(`SELECT plan, next_charge_date::text as next_charge_date
          FROM tenant_base.clientes_suscripciones
         WHERE cliente_id = $1
-        LIMIT 1`,
+        LIMIT 1`, tenantSchema),
       [clientId],
     ),
     pool.query<CouponRow>(
-      `SELECT code, description, expires_label, status
-         FROM tenant_base.clientes_cupones
+      tenantSql(`SELECT c.code,
+              c.description,
+              c.expires_label,
+              c.expires_at::text AS expires_at,
+              c.discount_percent,
+              COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.nombre), NULL), '{}') AS service_names,
+              c.status
+         FROM tenant_base.clientes_cupones c
+         LEFT JOIN tenant_base.servicios s ON c.service_ids IS NOT NULL AND s.id = ANY(c.service_ids)
         WHERE cliente_id = $1
+        GROUP BY c.id, c.code, c.description, c.expires_label, c.expires_at, c.discount_percent, c.status
         ORDER BY created_at DESC
-        LIMIT 20`,
+        LIMIT 20`, tenantSchema),
       [clientId],
     ),
     pool.query<ReceiptRow>(
-      `SELECT p.id,
+      tenantSql(`SELECT p.id,
               s.nombre AS servicio_nombre,
               e.nombre AS empleado_nombre,
               a.fecha_cita,
-              p.monto_final::text AS monto_final,
+              COALESCE(
+                CASE
+                  WHEN p.proveedor_pago = 'wompi'
+                    AND jsonb_typeof(p.wompi_payload) = 'object'
+                    AND (p.wompi_payload ->> 'amount_in_cents') ~ '^[0-9]+$'
+                  THEN ((p.wompi_payload ->> 'amount_in_cents')::numeric / 100)
+                  ELSE NULL
+                END,
+                CASE
+                  WHEN COALESCE(p.monto_descuento, 0) > 0 AND p.monto IS NOT NULL THEN GREATEST(p.monto - p.monto_descuento, 0)
+                  ELSE NULL
+                END,
+                p.monto_final,
+                p.monto,
+                0
+              )::text AS monto_final,
               p.estado::text AS estado
          FROM tenant_base.pagos p
          LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
@@ -174,7 +281,7 @@ export async function getWalletDataForUser(userId: number): Promise<WalletData> 
          LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
         WHERE c.id = $1
         ORDER BY COALESCE(p.fecha_pago, a.fecha_cita) DESC NULLS LAST
-        LIMIT 10`,
+        LIMIT 10`, tenantSchema),
       [clientId],
     ),
   ])
@@ -200,7 +307,12 @@ export async function getWalletDataForUser(userId: number): Promise<WalletData> 
   const walletCoupons: WalletCoupon[] = coupons.rows.map((row) => ({
     code: row.code,
     description: row.description,
-    expires: row.expires_label ?? "Sin fecha de caducidad",
+    expires: row.expires_at ?? row.expires_label ?? "Sin fecha de caducidad",
+    discountPercent: row.discount_percent,
+    appliesTo:
+      row.service_names && row.service_names.length > 0
+        ? `Servicios: ${row.service_names.join(", ")}`
+        : "Aplica a todos los servicios",
     status: row.status,
   }))
 
@@ -245,8 +357,9 @@ export async function addPaymentMethodForUser(options: {
   expMonth: number
   expYear: number
   status: "Principal" | "Respaldo"
+  tenantSchema?: string | null
 }): Promise<void> {
-  const clientId = await resolveClientIdForUser(options.userId)
+  const clientId = await resolveClientIdForUser(options.userId, options.tenantSchema)
   const client = await pool.connect()
 
   try {
@@ -254,17 +367,17 @@ export async function addPaymentMethodForUser(options: {
 
     if (options.status === "Principal") {
       await client.query(
-        `UPDATE tenant_base.clientes_metodos_pago
+        tenantSql(`UPDATE tenant_base.clientes_metodos_pago
             SET status = 'Respaldo'
-          WHERE cliente_id = $1`,
+          WHERE cliente_id = $1`, options.tenantSchema),
         [clientId],
       )
     }
 
     await client.query(
-      `INSERT INTO tenant_base.clientes_metodos_pago
+      tenantSql(`INSERT INTO tenant_base.clientes_metodos_pago
         (cliente_id, brand, last4, exp_month, exp_year, status)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6)`, options.tenantSchema),
       [
         clientId,
         options.brand.trim(),
@@ -287,12 +400,13 @@ export async function addPaymentMethodForUser(options: {
 export async function deletePaymentMethodForUser(options: {
   userId: number
   lastFour: string
+  tenantSchema?: string | null
 }): Promise<void> {
-  const clientId = await resolveClientIdForUser(options.userId)
+  const clientId = await resolveClientIdForUser(options.userId, options.tenantSchema)
   await pool.query(
-    `DELETE FROM tenant_base.clientes_metodos_pago
+    tenantSql(`DELETE FROM tenant_base.clientes_metodos_pago
       WHERE cliente_id = $1
-        AND last4 = $2`,
+        AND last4 = $2`, options.tenantSchema),
     [clientId, options.lastFour.trim()],
   )
 }
@@ -300,8 +414,9 @@ export async function deletePaymentMethodForUser(options: {
 export async function rechargeWalletForUser(options: {
   userId: number
   amount: number
+  tenantSchema?: string | null
 }): Promise<void> {
-  const clientId = await resolveClientIdForUser(options.userId)
+  const clientId = await resolveClientIdForUser(options.userId, options.tenantSchema)
   const amount = options.amount
 
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -311,11 +426,11 @@ export async function rechargeWalletForUser(options: {
   }
 
   await pool.query(
-    `INSERT INTO tenant_base.clientes_wallet (cliente_id, saldo)
+    tenantSql(`INSERT INTO tenant_base.clientes_wallet (cliente_id, saldo)
      VALUES ($1, $2)
      ON CONFLICT (cliente_id)
      DO UPDATE SET saldo = tenant_base.clientes_wallet.saldo + EXCLUDED.saldo,
-                   updated_at = now()`,
+                   updated_at = now()`, options.tenantSchema),
     [clientId, amount],
   )
 }
@@ -323,15 +438,22 @@ export async function rechargeWalletForUser(options: {
 export async function redeemPromoCodeForUser(options: {
   userId: number
   code: string
+  tenantSchema?: string | null
 }): Promise<void> {
-  const clientId = await resolveClientIdForUser(options.userId)
+  const clientId = await resolveClientIdForUser(options.userId, options.tenantSchema)
   const code = options.code.trim().toUpperCase()
 
   const promo = await pool.query<PromoCodeRow>(
-    `SELECT description, expires_label, active
+    tenantSql(`SELECT description,
+            expires_label,
+            expires_at::text AS expires_at,
+            service_ids,
+            discount_percent,
+            active,
+            (expires_at IS NOT NULL AND expires_at < CURRENT_DATE) AS is_expired
        FROM tenant_base.promo_codes
       WHERE UPPER(code) = $1
-      LIMIT 1`,
+      LIMIT 1`, options.tenantSchema),
     [code],
   )
 
@@ -347,12 +469,26 @@ export async function redeemPromoCodeForUser(options: {
     throw error
   }
 
+  if (promo.rows[0].is_expired) {
+    const error = new Error("PROMO_EXPIRED")
+    ;(error as { code?: string }).code = "PROMO_EXPIRED"
+    throw error
+  }
+
   const insert = await pool.query<{ id: number }>(
-    `INSERT INTO tenant_base.clientes_cupones (cliente_id, code, description, expires_label, status)
-     VALUES ($1, $2, $3, $4, 'Disponible')
+    tenantSql(`INSERT INTO tenant_base.clientes_cupones (cliente_id, code, description, expires_label, expires_at, service_ids, discount_percent, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Disponible')
      ON CONFLICT (cliente_id, code) DO NOTHING
-     RETURNING id`,
-    [clientId, code, promo.rows[0].description, promo.rows[0].expires_label],
+     RETURNING id`, options.tenantSchema),
+    [
+      clientId,
+      code,
+      promo.rows[0].description,
+      promo.rows[0].expires_label,
+      promo.rows[0].expires_at,
+      promo.rows[0].service_ids,
+      promo.rows[0].discount_percent,
+    ],
   )
 
   if (insert.rowCount === 0) {
@@ -362,20 +498,423 @@ export async function redeemPromoCodeForUser(options: {
   }
 }
 
+export async function listPromoCodesForAdmin(options?: {
+  tenantSchema?: string | null
+}): Promise<AdminPromoCodeSummary[]> {
+  const result = await pool.query<PromoCodeRow>(
+    tenantSql(
+      `SELECT p.code,
+              p.description,
+              p.expires_at::text AS expires_at,
+              p.service_ids,
+              p.discount_percent,
+              p.active,
+              p.created_at,
+              COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.nombre), NULL), '{}') AS service_names
+         FROM tenant_base.promo_codes p
+         LEFT JOIN tenant_base.servicios s ON p.service_ids IS NOT NULL AND s.id = ANY(p.service_ids)
+        GROUP BY p.code, p.description, p.expires_at, p.service_ids, p.discount_percent, p.active, p.created_at
+        ORDER BY p.created_at DESC, p.code ASC`,
+      options?.tenantSchema,
+    ),
+  )
+
+  return result.rows.map((row) => ({
+    code: row.code,
+    description: row.description,
+    expiresAt: row.expires_at,
+    discountPercent: row.discount_percent,
+    active: row.active,
+    serviceIds: row.service_ids,
+    serviceNames: row.service_names ?? [],
+    createdAt: row.created_at ? row.created_at.toISOString() : null,
+  }))
+}
+
+export async function createPromoCodeForAdmin(options: {
+  code: string
+  description: string
+  expiresAt?: string | null
+  serviceIds?: number[] | null
+  discountPercent: number
+  active?: boolean
+  tenantSchema?: string | null
+}): Promise<AdminPromoCodeSummary> {
+  const normalizedCode = options.code.trim().toUpperCase()
+  const normalizedServiceIds =
+    options.serviceIds && options.serviceIds.length > 0
+      ? Array.from(new Set(options.serviceIds.filter((value) => Number.isInteger(value) && value > 0)))
+      : null
+
+  if (!Number.isFinite(options.discountPercent) || options.discountPercent <= 0 || options.discountPercent > 100) {
+    const error = new Error("PROMO_INVALID_DISCOUNT")
+    ;(error as { code?: string }).code = "PROMO_INVALID_DISCOUNT"
+    throw error
+  }
+
+  await assertServicesExist(normalizedServiceIds, options.tenantSchema)
+
+  try {
+    const result = await pool.query<PromoCodeRow>(
+      tenantSql(
+        `INSERT INTO tenant_base.promo_codes (code, description, expires_label, expires_at, service_ids, discount_percent, active)
+         VALUES (
+           $1,
+           $2,
+           CASE WHEN $3::date IS NULL THEN NULL ELSE CONCAT('Válido hasta ', TO_CHAR($3::date, 'DD/MM/YYYY')) END,
+           $3::date,
+           $4,
+           $5,
+           COALESCE($6, TRUE)
+         )
+         RETURNING code, description, expires_at::text AS expires_at, service_ids, discount_percent, active, created_at`,
+        options.tenantSchema,
+      ),
+      [
+        normalizedCode,
+        options.description.trim(),
+        options.expiresAt?.trim() || null,
+        normalizedServiceIds,
+        Math.round(options.discountPercent),
+        options.active ?? true,
+      ],
+    )
+
+    const row = result.rows[0]
+    const serviceNames =
+      row.service_ids && row.service_ids.length > 0
+        ? (
+            await pool.query<{ name: string }>(
+              tenantSql(`SELECT nombre AS name FROM tenant_base.servicios WHERE id = ANY($1::int[]) ORDER BY nombre ASC`, options.tenantSchema),
+              [row.service_ids],
+            )
+          ).rows.map((item) => item.name)
+        : []
+
+    return {
+      code: row.code,
+      description: row.description,
+      expiresAt: row.expires_at,
+      discountPercent: row.discount_percent,
+      active: row.active,
+      serviceIds: row.service_ids,
+      serviceNames,
+      createdAt: row.created_at ? row.created_at.toISOString() : null,
+    }
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      throw new PromoCodeAlreadyExistsError()
+    }
+
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "23503"
+    ) {
+      throw new PromoCodeServiceNotFoundError()
+    }
+
+    throw error
+  }
+}
+
+export async function updatePromoCodeForAdmin(options: {
+  code: string
+  description?: string
+  expiresAt?: string | null
+  serviceIds?: number[] | null
+  discountPercent?: number
+  active?: boolean
+  tenantSchema?: string | null
+}): Promise<AdminPromoCodeSummary> {
+  const normalizedCode = options.code.trim().toUpperCase()
+  const updates: string[] = []
+  const values: Array<string | boolean | number | number[] | null> = []
+
+  if (typeof options.description === "string") {
+    values.push(options.description.trim())
+    updates.push(`description = $${values.length}`)
+  }
+
+  if (options.expiresAt !== undefined) {
+    values.push(options.expiresAt?.trim() || null)
+    updates.push(`expires_at = $${values.length}::date`)
+    updates.push(`expires_label = CASE WHEN $${values.length}::date IS NULL THEN NULL ELSE CONCAT('Válido hasta ', TO_CHAR($${values.length}::date, 'DD/MM/YYYY')) END`)
+  }
+
+  if (options.serviceIds !== undefined) {
+    const normalizedServiceIds =
+      options.serviceIds && options.serviceIds.length > 0
+        ? Array.from(new Set(options.serviceIds.filter((value) => Number.isInteger(value) && value > 0)))
+        : null
+
+    await assertServicesExist(normalizedServiceIds, options.tenantSchema)
+    values.push(normalizedServiceIds)
+    updates.push(`service_ids = $${values.length}`)
+  }
+
+  if (options.discountPercent !== undefined) {
+    if (!Number.isFinite(options.discountPercent) || options.discountPercent <= 0 || options.discountPercent > 100) {
+      const error = new Error("PROMO_INVALID_DISCOUNT")
+      ;(error as { code?: string }).code = "PROMO_INVALID_DISCOUNT"
+      throw error
+    }
+
+    values.push(Math.round(options.discountPercent))
+    updates.push(`discount_percent = $${values.length}`)
+  }
+
+  if (typeof options.active === "boolean") {
+    values.push(options.active)
+    updates.push(`active = $${values.length}`)
+  }
+
+  if (updates.length === 0) {
+    const current = await pool.query<PromoCodeRow>(
+      tenantSql(
+        `SELECT p.code,
+                p.description,
+                p.expires_at::text AS expires_at,
+                p.service_ids,
+                p.discount_percent,
+                p.active,
+                p.created_at,
+                COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.nombre), NULL), '{}') AS service_names
+               FROM tenant_base.promo_codes p
+           LEFT JOIN tenant_base.servicios s ON p.service_ids IS NOT NULL AND s.id = ANY(p.service_ids)
+          WHERE UPPER(code) = $1
+          GROUP BY p.code, p.description, p.expires_at, p.service_ids, p.discount_percent, p.active, p.created_at
+          LIMIT 1`,
+        options.tenantSchema,
+      ),
+      [normalizedCode],
+    )
+
+    if (current.rowCount === 0) {
+      throw new PromoCodeNotFoundError()
+    }
+
+    const row = current.rows[0]
+    return {
+      code: row.code,
+      description: row.description,
+      expiresAt: row.expires_at,
+      discountPercent: row.discount_percent,
+      active: row.active,
+      serviceIds: row.service_ids,
+      serviceNames: row.service_names ?? [],
+      createdAt: row.created_at ? row.created_at.toISOString() : null,
+    }
+  }
+
+  values.push(normalizedCode)
+
+  const result = await pool.query<PromoCodeRow>(
+    tenantSql(
+      `UPDATE tenant_base.promo_codes
+          SET ${updates.join(", ")}
+        WHERE UPPER(code) = $${values.length}
+        RETURNING code, description, expires_at::text AS expires_at, service_ids, discount_percent, active, created_at`,
+      options.tenantSchema,
+    ),
+    values,
+  )
+
+  if (result.rowCount === 0) {
+    throw new PromoCodeNotFoundError()
+  }
+
+  const row = result.rows[0]
+  const serviceNames =
+    row.service_ids && row.service_ids.length > 0
+      ? (
+          await pool.query<{ name: string }>(
+            tenantSql(`SELECT nombre AS name FROM tenant_base.servicios WHERE id = ANY($1::int[]) ORDER BY nombre ASC`, options.tenantSchema),
+            [row.service_ids],
+          )
+        ).rows.map((item) => item.name)
+      : []
+
+  return {
+    code: row.code,
+    description: row.description,
+    expiresAt: row.expires_at,
+    discountPercent: row.discount_percent,
+    active: row.active,
+    serviceIds: row.service_ids,
+    serviceNames,
+    createdAt: row.created_at ? row.created_at.toISOString() : null,
+  }
+}
+
+export async function getReservationPricingBreakdown(options: {
+  serviceIds: number[]
+  promoCode?: string | null
+  tenantSchema?: string | null
+}): Promise<ReservationPricingBreakdown> {
+  const uniqueServiceIds = Array.from(
+    new Set(options.serviceIds.filter((value) => Number.isInteger(value) && value > 0)),
+  )
+
+  if (uniqueServiceIds.length === 0) {
+    const error = new Error("SERVICE_NOT_FOUND")
+    ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+    throw error
+  }
+
+  const services = await pool.query<ServicePricingRow>(
+    tenantSql(
+      `SELECT id, nombre, precio
+         FROM tenant_base.servicios
+        WHERE id = ANY($1::int[])
+          AND estado = 'activo'`,
+      options.tenantSchema,
+    ),
+    [uniqueServiceIds],
+  )
+
+  if (services.rowCount !== uniqueServiceIds.length) {
+    const error = new Error("SERVICE_NOT_FOUND")
+    ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+    throw error
+  }
+
+  const servicePriceById = new Map<number, number>()
+  let originalTotal = 0
+
+  for (const row of services.rows) {
+    const price =
+      typeof row.precio === "number"
+        ? row.precio
+        : typeof row.precio === "string"
+          ? Number.parseFloat(row.precio)
+          : Number.NaN
+
+    if (!Number.isFinite(price) || price <= 0) {
+      const error = new Error("SERVICE_PRICE_INVALID")
+      ;(error as { code?: string }).code = "SERVICE_PRICE_INVALID"
+      throw error
+    }
+
+    servicePriceById.set(row.id, price)
+    originalTotal += price
+  }
+
+  const promoCode = options.promoCode?.trim().toUpperCase() ?? ""
+  if (!promoCode) {
+    return {
+      originalTotal,
+      discountTotal: 0,
+      finalTotal: originalTotal,
+      promo: null,
+    }
+  }
+
+  const promo = await pool.query<PromoCodeRow>(
+    tenantSql(
+      `SELECT code,
+              description,
+              service_ids,
+              discount_percent,
+              active,
+              (expires_at IS NOT NULL AND expires_at < CURRENT_DATE) AS is_expired
+         FROM tenant_base.promo_codes
+        WHERE UPPER(code) = $1
+        LIMIT 1`,
+      options.tenantSchema,
+    ),
+    [promoCode],
+  )
+
+  if (promo.rowCount === 0) {
+    const error = new Error("PROMO_NOT_FOUND")
+    ;(error as { code?: string }).code = "PROMO_NOT_FOUND"
+    throw error
+  }
+
+  const promoRow = promo.rows[0]
+
+  if (!promoRow.active) {
+    const error = new Error("PROMO_INACTIVE")
+    ;(error as { code?: string }).code = "PROMO_INACTIVE"
+    throw error
+  }
+
+  if (promoRow.is_expired) {
+    const error = new Error("PROMO_EXPIRED")
+    ;(error as { code?: string }).code = "PROMO_EXPIRED"
+    throw error
+  }
+
+  const appliesToServiceIds = promoRow.service_ids && promoRow.service_ids.length > 0 ? promoRow.service_ids : null
+  const appliedServiceIds = appliesToServiceIds
+    ? uniqueServiceIds.filter((serviceId) => appliesToServiceIds.includes(serviceId))
+    : uniqueServiceIds
+
+  if (appliedServiceIds.length === 0) {
+    const error = new Error("PROMO_NOT_APPLICABLE")
+    ;(error as { code?: string }).code = "PROMO_NOT_APPLICABLE"
+    throw error
+  }
+
+  const discountPercent = Math.max(1, Math.min(100, Math.round(promoRow.discount_percent)))
+  const applicableAmount = appliedServiceIds.reduce((accumulator, serviceId) => {
+    return accumulator + (servicePriceById.get(serviceId) ?? 0)
+  }, 0)
+
+  const discountTotal = Math.round((applicableAmount * discountPercent) / 100)
+  const finalTotal = Math.max(0, originalTotal - discountTotal)
+
+  return {
+    originalTotal,
+    discountTotal,
+    finalTotal,
+    promo: {
+      code: promoRow.code,
+      description: promoRow.description,
+      discountPercent,
+      appliesToServiceIds,
+      appliedServiceIds,
+    },
+  }
+}
+
 export async function getWalletReceiptDownloadForUser(options: {
   userId: number
   receiptId: number
+  tenantSchema?: string | null
 }): Promise<WalletReceiptDownload> {
-  const clientId = await resolveClientIdForUser(options.userId)
+  const clientId = await resolveClientIdForUser(options.userId, options.tenantSchema)
 
   const receipt = await pool.query<ReceiptDownloadRow>(
-    `SELECT p.id,
+    tenantSql(`SELECT p.id,
             s.nombre AS servicio_nombre,
             e.nombre AS empleado_nombre,
             a.fecha_cita,
             p.monto::text AS monto,
             p.monto_descuento::text AS monto_descuento,
-            p.monto_final::text AS monto_final,
+            COALESCE(
+              CASE
+                WHEN p.proveedor_pago = 'wompi'
+                  AND jsonb_typeof(p.wompi_payload) = 'object'
+                  AND (p.wompi_payload ->> 'amount_in_cents') ~ '^[0-9]+$'
+                THEN ((p.wompi_payload ->> 'amount_in_cents')::numeric / 100)
+                ELSE NULL
+              END,
+              CASE
+                WHEN COALESCE(p.monto_descuento, 0) > 0 AND p.monto IS NOT NULL THEN GREATEST(p.monto - p.monto_descuento, 0)
+                ELSE NULL
+              END,
+              p.monto_final,
+              p.monto,
+              0
+            )::text AS monto_final,
             p.metodo_pago::text AS metodo_pago,
             p.estado::text AS estado
        FROM tenant_base.pagos p
@@ -384,7 +923,7 @@ export async function getWalletReceiptDownloadForUser(options: {
        LEFT JOIN tenant_base.empleados e ON e.id = a.empleado_id
       WHERE p.id = $1
         AND a.cliente_id = $2
-      LIMIT 1`,
+      LIMIT 1`, options.tenantSchema),
     [options.receiptId, clientId],
   )
 

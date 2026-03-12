@@ -12,6 +12,7 @@ const reservationSchema = z
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(2).optional(),
   barberId: z.coerce.number().int().positive(),
   paymentMethod: z.enum(["cash", "wompi"]).optional(),
+  promoCode: z.string().trim().min(3).max(64).optional(),
   start: z
     .string()
     .refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
   try {
     const tenantSchema = await resolveTenantSchemaForRequest(request)
     const json = await request.json()
-    const { userId, serviceId, serviceIds, barberId, paymentMethod, start } = reservationSchema.parse(json)
+    const { userId, serviceId, serviceIds, barberId, paymentMethod, promoCode, start } = reservationSchema.parse(json)
 
     const resolvedServiceIds = Array.isArray(serviceIds)
       ? serviceIds
@@ -66,6 +67,8 @@ export async function POST(request: Request) {
           userId,
           appointmentId: firstAppointmentId,
           serviceIds: resolvedServiceIds,
+          promoCode: promoCode?.trim() ?? null,
+          tenantSchema,
         })
       } catch (wompiError) {
         await Promise.all(
@@ -180,7 +183,70 @@ export async function POST(request: Request) {
       )
     }
 
-    if (code === "WOMPI_MERCHANT_UNAVAILABLE" || code === "WOMPI_ACCEPTANCE_TOKEN_MISSING") {
+    if (code === "WOMPI_CONFIG_CONFLICT") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as { meta?: { environment?: string; field?: string } }).meta ?? null)
+          : null
+
+      const envLabel = meta?.environment === "production" ? "producción" : "sandbox"
+      const fieldLabel = meta?.field === "integrity_secret" ? "integrity secret" : "llave pública"
+
+      return NextResponse.json(
+        {
+          error: `Configuración de Wompi en conflicto para ${envLabel} (${fieldLabel}). Revisa variables WOMPI_* para evitar mezclar llaves distintas.`,
+        },
+        { status: 503 },
+      )
+    }
+
+    if (code === "WOMPI_PRIVATE_KEY_NOT_CONFIGURED" || code === "WOMPI_EVENTS_SECRET_NOT_CONFIGURED") {
+      return NextResponse.json(
+        { error: "Wompi no está completamente configurado en el servidor." },
+        { status: 503 },
+      )
+    }
+
+    if (code === "WOMPI_PUBLIC_KEY_INVALID") {
+      return NextResponse.json(
+        { error: "La llave pública de Wompi es inválida. Debe empezar por pub_test_ o pub_prod_." },
+        { status: 503 },
+      )
+    }
+
+    if (code === "WOMPI_MERCHANT_UNAVAILABLE") {
+      const meta =
+        typeof error === "object" &&
+        error !== null &&
+        "meta" in error &&
+        typeof (error as { meta?: unknown }).meta === "object" &&
+        (error as { meta?: unknown }).meta !== null
+          ? ((error as { meta?: { wompiMessage?: unknown } }).meta ?? null)
+          : null
+
+      const wompiMessage =
+        typeof meta?.wompiMessage === "object" && meta.wompiMessage !== null
+          ? JSON.stringify(meta.wompiMessage)
+          : ""
+
+      if (/public_key|formato inválido/i.test(wompiMessage)) {
+        return NextResponse.json(
+          { error: "Wompi rechazó la llave pública configurada. Revisa WOMPI_*_PUBLIC_KEY." },
+          { status: 503 },
+        )
+      }
+
+      return NextResponse.json(
+        { error: "No pudimos inicializar el checkout de Wompi. Intenta nuevamente en unos segundos." },
+        { status: 502 },
+      )
+    }
+
+    if (code === "WOMPI_ACCEPTANCE_TOKEN_MISSING") {
       return NextResponse.json(
         { error: "No pudimos inicializar el checkout de Wompi. Intenta nuevamente en unos segundos." },
         { status: 502 },
@@ -190,6 +256,41 @@ export async function POST(request: Request) {
     if (code === "SERVICE_PRICE_INVALID" || code === "AMOUNT_INVALID") {
       return NextResponse.json(
         { error: "No pudimos calcular el valor total de la reserva para pago en línea." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "USER_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "No encontramos tu usuario para iniciar el pago. Cierra sesión e inicia nuevamente." },
+        { status: 401 },
+      )
+    }
+
+    if (code === "PROMO_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "El código promocional no existe." },
+        { status: 404 },
+      )
+    }
+
+    if (code === "PROMO_INACTIVE") {
+      return NextResponse.json(
+        { error: "Este código promocional ya no está activo." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "PROMO_EXPIRED") {
+      return NextResponse.json(
+        { error: "Este código promocional ya expiró." },
+        { status: 409 },
+      )
+    }
+
+    if (code === "PROMO_NOT_APPLICABLE") {
+      return NextResponse.json(
+        { error: "El código no aplica a los servicios seleccionados." },
         { status: 409 },
       )
     }
@@ -247,8 +348,22 @@ export async function POST(request: Request) {
 
     console.error("Error creating reservation", error)
 
+    const debugCode =
+      typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? ((error as { code?: string }).code as string)
+        : null
+    const debugMessage = error instanceof Error ? error.message : null
+
     return NextResponse.json(
-      { error: "No se pudo crear la reserva" },
+      {
+        error: "No se pudo crear la reserva",
+        ...(process.env.NODE_ENV !== "production"
+          ? {
+              debugCode,
+              debugMessage,
+            }
+          : {}),
+      },
       { status: 500 },
     )
   }

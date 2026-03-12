@@ -20,6 +20,8 @@ type WalletCoupon = {
   code: string
   description: string
   expires: string
+  discountPercent: number
+  appliesTo: string
   status: string
 }
 
@@ -66,6 +68,33 @@ export default function WalletPage() {
 
   const receiptsAnchorId = "wallet-history"
 
+  const buildTenantHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") {
+      return {}
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const userEmail = (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+    const headers: Record<string, string> = {}
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    if (userEmail) {
+      headers["x-user-email"] = userEmail
+    }
+
+    return headers
+  }
+
+  const readTenant = (): string => {
+    if (typeof window === "undefined") {
+      return ""
+    }
+    return (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+  }
+
   const servicesTakenLabel = useMemo(() => {
     const count = wallet.receipts.length
     return `${count} ${count === 1 ? "servicio tomado" : "servicios tomados"}`
@@ -87,6 +116,7 @@ export default function WalletPage() {
       const response = await fetch(`/api/wallet?userId=${userId}`, {
         method: "GET",
         cache: "no-store",
+        headers: buildTenantHeaders(),
       })
 
       const data = await response.json().catch(() => ({}))
@@ -157,7 +187,7 @@ export default function WalletPage() {
     try {
       const response = await fetch("/api/wallet/promo", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
         body: JSON.stringify({ userId: uid, code }),
       })
 
@@ -275,7 +305,11 @@ export default function WalletPage() {
                   ))
                 ) : wallet.receipts.length ? (
                   wallet.receipts.map((receipt) => {
-                    const downloadHref = userId && receipt.actionHref ? `${receipt.actionHref}?userId=${userId}` : null
+                    const tenant = readTenant()
+                    const downloadHref =
+                      userId && receipt.actionHref
+                        ? `${receipt.actionHref}?userId=${userId}${tenant ? `&tenant=${encodeURIComponent(tenant)}` : ""}`
+                        : null
                     return (
                       <div key={receipt.id} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
                         <div className="flex items-center gap-3">
@@ -329,6 +363,8 @@ export default function WalletPage() {
                       <div>
                         <p className="font-medium text-foreground">{voucher.code}</p>
                         <p className="text-muted-foreground">{voucher.description}</p>
+                        <p className="text-xs font-medium text-foreground">Descuento: {voucher.discountPercent}%</p>
+                        <p className="text-xs text-muted-foreground">{voucher.appliesTo}</p>
                         <p className="text-xs text-muted-foreground">{voucher.expires}</p>
                       </div>
                       <Badge variant="secondary" className="gap-1">

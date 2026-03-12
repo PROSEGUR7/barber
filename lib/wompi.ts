@@ -1,12 +1,9 @@
 import { createHash } from "crypto"
 
-import { findUserById } from "@/lib/auth"
+import { BASE_TENANT_SCHEMA, findUserById } from "@/lib/auth"
 import { pool } from "@/lib/db"
-
-type ServicePriceRow = {
-  id: number
-  precio: number | string | null
-}
+import { normalizeTenantSchema, tenantSql } from "@/lib/tenant"
+import { getReservationPricingBreakdown } from "@/lib/wallet"
 
 type WompiMerchantResponse = {
   data?: {
@@ -92,6 +89,11 @@ function inferEnvironmentFromPublicKey(publicKey: string | undefined): WompiEnvi
   }
 
   return null
+}
+
+function isValidWompiPublicKey(value: string): boolean {
+  const normalized = value.trim()
+  return /^pub_(test|prod)_[a-zA-Z0-9]+$/.test(normalized)
 }
 
 function getWompiEnvironment(): WompiEnvironment {
@@ -240,6 +242,16 @@ function getRequiredWompiConfig() {
 
   const integritySecret = resolveWompiIntegritySecret(effectiveEnvironment)
 
+  if (publicKey && !isValidWompiPublicKey(publicKey)) {
+    const error = new Error("WOMPI_PUBLIC_KEY_INVALID")
+    ;(error as { code?: string }).code = "WOMPI_PUBLIC_KEY_INVALID"
+    ;(error as { meta?: unknown }).meta = {
+      environment: effectiveEnvironment,
+      publicKeyPrefix: publicKey.slice(0, 12),
+    }
+    throw error
+  }
+
   if (!publicKey || !integritySecret) {
     const missing: string[] = []
 
@@ -286,50 +298,6 @@ function buildRedirectUrl(reference: string, path: string = "/booking"): string 
   const appUrl = getDefaultAppUrl().replace(/\/$/, "")
   const normalizedPath = path.startsWith("/") ? path : `/${path}`
   return `${appUrl}${normalizedPath}?paymentProvider=wompi&reference=${encodeURIComponent(reference)}`
-}
-
-async function getTotalAmountInCents(serviceIds: number[]): Promise<number> {
-  const result = await pool.query<ServicePriceRow>(
-    `SELECT id, precio
-       FROM tenant_base.servicios
-      WHERE id = ANY($1::int[])
-        AND estado = 'activo'`,
-    [serviceIds],
-  )
-
-  if (result.rowCount !== serviceIds.length) {
-    const error = new Error("SERVICE_NOT_FOUND")
-    ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
-    throw error
-  }
-
-  let total = 0
-
-  for (const row of result.rows) {
-    const numericPrice =
-      typeof row.precio === "number"
-        ? row.precio
-        : typeof row.precio === "string"
-          ? Number.parseFloat(row.precio)
-          : Number.NaN
-
-    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
-      const error = new Error("SERVICE_PRICE_INVALID")
-      ;(error as { code?: string }).code = "SERVICE_PRICE_INVALID"
-      throw error
-    }
-
-    total += numericPrice
-  }
-
-  const amountInCents = Math.round(total * 100)
-  if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
-    const error = new Error("AMOUNT_INVALID")
-    ;(error as { code?: string }).code = "AMOUNT_INVALID"
-    throw error
-  }
-
-  return amountInCents
 }
 
 async function getAcceptanceTokens(publicKey: string): Promise<{
@@ -383,56 +351,72 @@ export async function createWompiCheckoutDataForReservation(options: {
   userId: number
   appointmentId: number
   serviceIds: number[]
+  promoCode?: string | null
+  tenantSchema?: string | null
 }): Promise<WompiCheckoutData> {
   const { userId, appointmentId, serviceIds } = options
+  const resolvedTenantSchema = normalizeTenantSchema(options.tenantSchema) ?? BASE_TENANT_SCHEMA
 
   const { publicKey, integritySecret } = getRequiredWompiConfig()
 
-  const user = await findUserById(userId)
+  const user = await findUserById(userId, resolvedTenantSchema)
   if (!user) {
     const error = new Error("USER_NOT_FOUND")
     ;(error as { code?: string }).code = "USER_NOT_FOUND"
     throw error
   }
 
-  const amountInCents = await getTotalAmountInCents(serviceIds)
-  const amount = amountInCents / 100
+  const pricing = await getReservationPricingBreakdown({
+    serviceIds,
+    promoCode: options.promoCode,
+    tenantSchema: resolvedTenantSchema,
+  })
+
+  const amountInCents = Math.round(pricing.finalTotal * 100)
+  if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
+    const error = new Error("AMOUNT_INVALID")
+    ;(error as { code?: string }).code = "AMOUNT_INVALID"
+    throw error
+  }
+  const subtotalAmount = pricing.originalTotal
+  const discountAmount = pricing.discountTotal
   const currency = "COP" as const
-  const reference = `RES-${appointmentId}-${Date.now()}`
+  const reference = `RES-${resolvedTenantSchema}-${appointmentId}-${Date.now()}`
   const { acceptanceToken, personalDataAuthToken } = await getAcceptanceTokens(publicKey)
   const redirectUrl = buildRedirectUrl(reference)
 
   const existingPayment = await pool.query<{ id: number }>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.pagos
       WHERE agendamiento_id = $1
       ORDER BY id DESC
-      LIMIT 1`,
+      LIMIT 1`, resolvedTenantSchema),
     [appointmentId],
   )
 
   if (existingPayment.rowCount > 0) {
     await pool.query(
-      `UPDATE tenant_base.pagos
+      tenantSql(`UPDATE tenant_base.pagos
           SET estado = 'pendiente'::tenant_base.estado_pago_enum,
               proveedor_pago = 'wompi',
               metodo_pago = COALESCE(metodo_pago, 'otro'::tenant_base.metodo_pago_enum),
-              monto = COALESCE(monto, $2::numeric),
+              monto = COALESCE($2::numeric, monto),
+              monto_descuento = COALESCE($5::numeric, monto_descuento, 0),
               wompi_reference = COALESCE($3::text, wompi_reference),
               wompi_currency = COALESCE($4::text, wompi_currency),
               wompi_status = 'PENDING',
               wompi_payload_updated_at = now(),
               fecha_pago = COALESCE(fecha_pago, now())
-        WHERE id = $1`,
-      [existingPayment.rows[0].id, amount, reference, currency],
+        WHERE id = $1`, resolvedTenantSchema),
+      [existingPayment.rows[0].id, subtotalAmount, reference, currency, discountAmount],
     )
   } else {
     await pool.query(
-      `INSERT INTO tenant_base.pagos
+      tenantSql(`INSERT INTO tenant_base.pagos
         (agendamiento_id, monto, monto_descuento, metodo_pago, fecha_pago, estado, proveedor_pago, wompi_reference, wompi_currency, wompi_status, wompi_payload_updated_at)
        VALUES
-        ($1, $2::numeric, 0, 'otro'::tenant_base.metodo_pago_enum, now(), 'pendiente'::tenant_base.estado_pago_enum, 'wompi', $3::text, $4::text, 'PENDING', now())`,
-      [appointmentId, amount, reference, currency],
+        ($1, $2::numeric, $5::numeric, 'otro'::tenant_base.metodo_pago_enum, now(), 'pendiente'::tenant_base.estado_pago_enum, 'wompi', $3::text, $4::text, 'PENDING', now())`, resolvedTenantSchema),
+      [appointmentId, subtotalAmount, reference, currency, discountAmount],
     )
   }
 
@@ -706,13 +690,99 @@ export function verifyWompiWebhookSignature(rawBody: string, payload: WompiWebho
   }
 }
 
-function parseAppointmentIdFromReference(reference: string | null | undefined): number | null {
-  if (!reference) return null
+function parseReservationReference(reference: string | null | undefined): {
+  appointmentId: number | null
+  tenantSchemaHint: string | null
+} {
+  if (!reference) {
+    return { appointmentId: null, tenantSchemaHint: null }
+  }
+
   const trimmed = reference.trim()
-  const match = /^RES-(\d+)-\d+$/i.exec(trimmed)
-  if (!match) return null
-  const appointmentId = Number.parseInt(match[1], 10)
-  return Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null
+  const tenantAware = /^RES-(tenant_[a-z0-9_]+)-(\d+)-\d+$/i.exec(trimmed)
+  if (tenantAware) {
+    const tenantSchemaHint = normalizeTenantSchema(tenantAware[1])
+    const appointmentId = Number.parseInt(tenantAware[2], 10)
+    return {
+      appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
+      tenantSchemaHint,
+    }
+  }
+
+  const legacy = /^RES-(\d+)-\d+$/i.exec(trimmed)
+  if (!legacy) {
+    return { appointmentId: null, tenantSchemaHint: null }
+  }
+
+  const appointmentId = Number.parseInt(legacy[1], 10)
+  return {
+    appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
+    tenantSchemaHint: null,
+  }
+}
+
+async function getTenantSchemas(): Promise<string[]> {
+  const result = await pool.query<{ nspname: string }>(
+    `SELECT nspname
+       FROM pg_namespace
+      WHERE nspname = 'tenant_base' OR nspname LIKE 'tenant\\_%' ESCAPE '\\'
+      ORDER BY nspname ASC`,
+  )
+
+  return result.rows
+    .map((row) => normalizeTenantSchema(row.nspname) ?? row.nspname)
+    .filter((schema, index, array) => schema && array.indexOf(schema) === index)
+}
+
+async function findTenantForReservationPayment(options: {
+  wompiReference: string
+  wompiTransactionId: string
+  appointmentId: number | null
+  tenantSchemaHint?: string | null
+}): Promise<{ tenantSchema: string; appointmentId: number } | null> {
+  const candidateSchemas = options.tenantSchemaHint
+    ? [options.tenantSchemaHint, ...(await getTenantSchemas()).filter((schema) => schema !== options.tenantSchemaHint)]
+    : await getTenantSchemas()
+
+  for (const tenantSchema of candidateSchemas) {
+    if (options.wompiReference || options.wompiTransactionId) {
+      const paymentMatch = await pool.query<{ agendamiento_id: number }>(
+        tenantSql(
+          `SELECT agendamiento_id
+             FROM tenant_base.pagos
+            WHERE ($1::text <> '' AND wompi_reference = $1::text)
+               OR ($2::text <> '' AND wompi_transaction_id = $2::text)
+            ORDER BY id DESC
+            LIMIT 1`,
+          tenantSchema,
+        ),
+        [options.wompiReference, options.wompiTransactionId],
+      )
+
+      if (paymentMatch.rowCount > 0) {
+        return {
+          tenantSchema,
+          appointmentId: paymentMatch.rows[0].agendamiento_id,
+        }
+      }
+    }
+
+    if (options.appointmentId) {
+      const appointmentMatch = await pool.query<{ id: number }>(
+        tenantSql(`SELECT id FROM tenant_base.agendamientos WHERE id = $1 LIMIT 1`, tenantSchema),
+        [options.appointmentId],
+      )
+
+      if (appointmentMatch.rowCount > 0) {
+        return {
+          tenantSchema,
+          appointmentId: options.appointmentId,
+        }
+      }
+    }
+  }
+
+  return null
 }
 
 function mapWompiStatusToPaymentState(status: string | null | undefined): PaymentState {
@@ -747,22 +817,33 @@ export async function reconcileWompiTransaction(
   appointmentStatus: AppointmentState | null
   paymentStatus: PaymentState | null
 }> {
-  const appointmentId = parseAppointmentIdFromReference(transaction.reference)
-  if (!appointmentId) {
+  const parsedReservation = parseReservationReference(transaction.reference)
+  const wompiTransactionId = typeof transaction.id === "string" ? transaction.id.trim() : ""
+  const wompiReference = typeof transaction.reference === "string" ? transaction.reference.trim() : ""
+
+  const matchedTenant = await findTenantForReservationPayment({
+    wompiReference,
+    wompiTransactionId,
+    appointmentId: parsedReservation.appointmentId,
+    tenantSchemaHint: parsedReservation.tenantSchemaHint,
+  })
+
+  if (!matchedTenant) {
     return {
-      appointmentId: null,
+      appointmentId: parsedReservation.appointmentId,
       appointmentStatus: null,
       paymentStatus: null,
     }
   }
+
+  const resolvedTenantSchema = matchedTenant.tenantSchema
+  const appointmentId = matchedTenant.appointmentId
 
   const paymentStatus = mapWompiStatusToPaymentState(transaction.status)
   const shouldCancelAppointment = shouldCancelAppointmentFromWompiStatus(transaction.status)
   const amountInCents = typeof transaction.amount_in_cents === "number" ? transaction.amount_in_cents : null
   const amount = amountInCents != null && Number.isFinite(amountInCents) ? amountInCents / 100 : null
   const paymentMethod = mapWompiMethodToPaymentMethod(transaction.payment_method_type)
-  const wompiTransactionId = typeof transaction.id === "string" ? transaction.id.trim() : ""
-  const wompiReference = typeof transaction.reference === "string" ? transaction.reference.trim() : ""
   const wompiCurrency = typeof transaction.currency === "string" ? transaction.currency.trim() : ""
   const wompiStatus = typeof transaction.status === "string" ? transaction.status.trim().toUpperCase() : ""
   const wompiPayload = JSON.stringify(transaction)
@@ -774,11 +855,11 @@ export async function reconcileWompiTransaction(
     await client.query("BEGIN")
 
     const appointmentResult = await client.query<{ id: number; estado: AppointmentState }>(
-      `SELECT id, estado
+      tenantSql(`SELECT id, estado
          FROM tenant_base.agendamientos
         WHERE id = $1
         LIMIT 1
-        FOR UPDATE`,
+        FOR UPDATE`, resolvedTenantSchema),
       [appointmentId],
     )
 
@@ -794,23 +875,26 @@ export async function reconcileWompiTransaction(
     const appointmentState = appointmentResult.rows[0].estado
 
     const existingPaymentResult = await client.query<{ id: number }>(
-      `SELECT id
+      tenantSql(`SELECT id
          FROM tenant_base.pagos
         WHERE agendamiento_id = $1
         ORDER BY id DESC
         LIMIT 1
-        FOR UPDATE`,
+        FOR UPDATE`, resolvedTenantSchema),
       [appointmentId],
     )
 
     if (existingPaymentResult.rowCount > 0) {
       const paymentId = existingPaymentResult.rows[0].id
       await client.query(
-        `UPDATE tenant_base.pagos
+        tenantSql(`UPDATE tenant_base.pagos
             SET estado = $2::tenant_base.estado_pago_enum,
                 proveedor_pago = 'wompi',
                 metodo_pago = COALESCE($3::tenant_base.metodo_pago_enum, metodo_pago),
-                monto = COALESCE($4::numeric, monto),
+                monto = CASE
+                  WHEN monto IS NOT NULL AND monto > 0 AND COALESCE(monto_descuento, 0) > 0 THEN monto
+                  ELSE COALESCE($4::numeric, monto)
+                END,
                 wompi_transaction_id = COALESCE(NULLIF($5::text, ''), wompi_transaction_id),
                 wompi_reference = COALESCE(NULLIF($6::text, ''), wompi_reference),
                 wompi_currency = COALESCE(NULLIF($7::text, ''), wompi_currency),
@@ -819,7 +903,7 @@ export async function reconcileWompiTransaction(
                 wompi_payload = COALESCE($10::jsonb, wompi_payload),
                 wompi_payload_updated_at = now(),
                 fecha_pago = now()
-          WHERE id = $1`,
+          WHERE id = $1`, resolvedTenantSchema),
         [
           paymentId,
           paymentStatus,
@@ -835,10 +919,10 @@ export async function reconcileWompiTransaction(
       )
     } else {
       await client.query(
-        `INSERT INTO tenant_base.pagos
+        tenantSql(`INSERT INTO tenant_base.pagos
           (agendamiento_id, monto, monto_descuento, metodo_pago, fecha_pago, estado, proveedor_pago, wompi_transaction_id, wompi_reference, wompi_currency, wompi_status, wompi_event_name, wompi_payload, wompi_payload_updated_at)
          VALUES
-          ($1, COALESCE($2::numeric, 0), 0, $3::tenant_base.metodo_pago_enum, now(), $4::tenant_base.estado_pago_enum, 'wompi', NULLIF($5::text, ''), NULLIF($6::text, ''), NULLIF($7::text, ''), NULLIF($8::text, ''), $9::text, $10::jsonb, now())`,
+          ($1, COALESCE($2::numeric, 0), 0, $3::tenant_base.metodo_pago_enum, now(), $4::tenant_base.estado_pago_enum, 'wompi', NULLIF($5::text, ''), NULLIF($6::text, ''), NULLIF($7::text, ''), NULLIF($8::text, ''), $9::text, $10::jsonb, now())`, resolvedTenantSchema),
         [
           appointmentId,
           amount,
@@ -857,9 +941,9 @@ export async function reconcileWompiTransaction(
     let nextAppointmentStatus: AppointmentState = appointmentState
     if (shouldCancelAppointment && appointmentState !== "cancelada") {
       await client.query(
-        `UPDATE tenant_base.agendamientos
+        tenantSql(`UPDATE tenant_base.agendamientos
             SET estado = 'cancelada'::tenant_base.estado_agendamiento_enum
-          WHERE id = $1`,
+          WHERE id = $1`, resolvedTenantSchema),
         [appointmentId],
       )
       nextAppointmentStatus = "cancelada"

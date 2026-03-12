@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { redeemPromoCodeForUser } from "@/lib/wallet"
 
 const bodySchema = z.object({
@@ -10,8 +11,9 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = bodySchema.parse(await request.json())
-    await redeemPromoCodeForUser({ userId: body.userId, code: body.code })
+    await redeemPromoCodeForUser({ userId: body.userId, code: body.code, tenantSchema })
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -36,6 +38,10 @@ export async function POST(request: Request) {
 
     if (code === "PROMO_INACTIVE") {
       return NextResponse.json({ error: "Este código ya no está disponible" }, { status: 409 })
+    }
+
+    if (code === "PROMO_EXPIRED") {
+      return NextResponse.json({ error: "Este código promocional ya expiró" }, { status: 409 })
     }
 
     if (code === "PROMO_ALREADY_REDEEMED") {

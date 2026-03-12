@@ -166,6 +166,7 @@ export async function POST(request: Request) {
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(referenceForTenantContext)
+    const isReservationReference = referenceForTenantContext.toUpperCase().startsWith("RES-")
 
     let billingRegistration: {
       attempted: boolean
@@ -275,7 +276,7 @@ export async function POST(request: Request) {
         }
       }
     } else {
-      if (normalizedStatus === "APPROVED" && !parsedReference.tenantId) {
+      if (normalizedStatus === "APPROVED" && !parsedReference.tenantId && !isReservationReference) {
         billingRegistration.attempted = true
         billingRegistration.rejected = true
         billingRegistration.code = "ADMIN_BILLING_REFERENCE_TENANT_MISSING"

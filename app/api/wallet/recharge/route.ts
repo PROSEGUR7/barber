@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { rechargeWalletForUser } from "@/lib/wallet"
 
 const bodySchema = z.object({
@@ -10,8 +11,9 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const body = bodySchema.parse(await request.json())
-    await rechargeWalletForUser({ userId: body.userId, amount: body.amount })
+    await rechargeWalletForUser({ userId: body.userId, amount: body.amount, tenantSchema })
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof z.ZodError) {

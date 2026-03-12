@@ -81,6 +81,8 @@ export async function GET(_: Request, context: Params) {
       (typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(wompiTransaction.reference)
+    const isReservationReference =
+      typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim().toUpperCase().startsWith("RES-")
 
     let billingRegistration: {
       attempted: boolean
@@ -190,7 +192,7 @@ export async function GET(_: Request, context: Params) {
           throw error
         }
       }
-    } else if (normalizedStatus === "APPROVED" && !parsedReference.tenantId) {
+    } else if (normalizedStatus === "APPROVED" && !parsedReference.tenantId && !isReservationReference) {
       billingRegistration.attempted = true
       billingRegistration.rejected = true
       billingRegistration.code = "ADMIN_BILLING_REFERENCE_TENANT_MISSING"

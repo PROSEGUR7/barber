@@ -575,6 +575,11 @@ export default function AppointmentsPage() {
             appointment.service.price != null
               ? currencyFormatter.format(Number(appointment.service.price))
               : "A convenir"
+          const paidAmountLabel =
+            appointment.payment?.amount != null && Number.isFinite(appointment.payment.amount)
+              ? currencyFormatter.format(Number(appointment.payment.amount))
+              : null
+          const amountLabel = paidAmountLabel ?? priceLabel
           const paymentStatusLabel = getPaymentStatusLabel(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
           const paymentStatusClass = getPaymentStatusClass(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
 
@@ -600,7 +605,7 @@ export default function AppointmentsPage() {
                     <Clock className="size-4" /> {durationLabel}
                   </Badge>
                   <Badge variant="outline" className="flex items-center gap-1">
-                    <DollarSign className="size-4" /> {priceLabel}
+                    <DollarSign className="size-4" /> {amountLabel}
                   </Badge>
                   <Badge className={cn("flex items-center gap-1", paymentStatusClass)}>
                     Pago: {paymentStatusLabel}

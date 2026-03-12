@@ -546,7 +546,22 @@ export async function getAppointmentsForUser(options: {
          SELECT
            pg.estado::text AS pago_estado,
            pg.metodo_pago::text AS pago_metodo,
-           COALESCE(pg.monto_final, pg.monto)::text AS pago_monto
+             COALESCE(
+               CASE
+                 WHEN pg.proveedor_pago = 'wompi'
+                   AND jsonb_typeof(pg.wompi_payload) = 'object'
+                   AND (pg.wompi_payload ->> 'amount_in_cents') ~ '^[0-9]+$'
+                 THEN ((pg.wompi_payload ->> 'amount_in_cents')::numeric / 100)
+                 ELSE NULL
+               END,
+               CASE
+                 WHEN COALESCE(pg.monto_descuento, 0) > 0 AND pg.monto IS NOT NULL THEN GREATEST(pg.monto - pg.monto_descuento, 0)
+                 ELSE NULL
+               END,
+               pg.monto_final,
+               pg.monto,
+               0
+             )::text AS pago_monto
          FROM tenant_base.pagos pg
          WHERE pg.agendamiento_id = a.id
          ORDER BY pg.id DESC

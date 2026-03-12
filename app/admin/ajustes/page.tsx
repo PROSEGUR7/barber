@@ -1,14 +1,14 @@
 "use client"
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { Settings2 } from "lucide-react"
+import { Plus } from "lucide-react"
 import { useTheme } from "next-themes"
 
+import { AdminPromoCodesTable, type PromoCodeSummary } from "@/components/admin/promo-codes-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -22,18 +22,27 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import type { AdminSettingsSummary, AdminUserSettings } from "@/lib/admin"
+import type { AdminSettingsSummary } from "@/lib/admin"
 import { formatCurrency, formatDateTime, formatNumber } from "@/lib/formatters"
 
 type SettingsResponse = {
   summary?: AdminSettingsSummary
-  adminUsers?: AdminUserSettings[]
   error?: string
 }
 
-type AdminUserResponse = {
-  adminUser?: AdminUserSettings
+type PromoCodesResponse = {
+  promoCodes?: PromoCodeSummary[]
+  promoCode?: PromoCodeSummary
+  error?: string
+}
+
+type AdminServiceOption = {
+  id: number
+  name: string
+}
+
+type ServicesResponse = {
+  services?: Array<{ id: number; name: string }>
   error?: string
 }
 
@@ -115,30 +124,6 @@ function getRoleLabel(role: ProfileRole) {
   return "Cliente"
 }
 
-function normalizeStatus(status: string | null): string {
-  if (!status) {
-    return "Sin estado"
-  }
-
-  return status
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (chunk) => chunk.toUpperCase())
-}
-
-function getStatusVariant(status: string | null): "default" | "secondary" | "outline" {
-  const normalized = status?.trim().toLowerCase() ?? ""
-
-  if (normalized.includes("activo") || normalized.includes("active")) {
-    return "secondary"
-  }
-
-  if (normalized.length === 0) {
-    return "outline"
-  }
-
-  return "default"
-}
-
 export default function AdminAjustesPage() {
   const { setTheme } = useTheme()
 
@@ -157,19 +142,24 @@ export default function AdminAjustesPage() {
   const [settingsView, setSettingsView] = useState<"personal" | "platform">("personal")
 
   const [summary, setSummary] = useState<AdminSettingsSummary>(EMPTY_SUMMARY)
-  const [adminUsers, setAdminUsers] = useState<AdminUserSettings[]>([])
   const [areSettingsLoading, setAreSettingsLoading] = useState(true)
   const [settingsError, setSettingsError] = useState<string | null>(null)
 
-  const [isEditOpen, setIsEditOpen] = useState(false)
-  const [editingAdmin, setEditingAdmin] = useState<AdminUserSettings | null>(null)
-  const [editEmail, setEditEmail] = useState("")
-  const [editError, setEditError] = useState<string | null>(null)
-  const [isEditSubmitting, setIsEditSubmitting] = useState(false)
-
-  const sortedAdmins = useMemo(() => {
-    return [...adminUsers].sort((a, b) => a.email.localeCompare(b.email, "es", { sensitivity: "base" }))
-  }, [adminUsers])
+  const [promoCodes, setPromoCodes] = useState<PromoCodeSummary[]>([])
+  const [promoCodesError, setPromoCodesError] = useState<string | null>(null)
+  const [isPromoCodesLoading, setIsPromoCodesLoading] = useState(false)
+  const [isPromoSheetOpen, setIsPromoSheetOpen] = useState(false)
+  const [promoCodeInput, setPromoCodeInput] = useState("")
+  const [promoDescriptionInput, setPromoDescriptionInput] = useState("")
+  const [promoExpiresAtInput, setPromoExpiresAtInput] = useState("")
+  const [promoDiscountPercentInput, setPromoDiscountPercentInput] = useState("10")
+  const [promoApplyToAllServicesInput, setPromoApplyToAllServicesInput] = useState(true)
+  const [promoSelectedServiceIdsInput, setPromoSelectedServiceIdsInput] = useState<number[]>([])
+  const [promoActiveInput, setPromoActiveInput] = useState(true)
+  const [promoFormError, setPromoFormError] = useState<string | null>(null)
+  const [isPromoSubmitting, setIsPromoSubmitting] = useState(false)
+  const [updatingPromoCode, setUpdatingPromoCode] = useState<string | null>(null)
+  const [serviceOptions, setServiceOptions] = useState<AdminServiceOption[]>([])
 
   const roleLabel = useMemo(() => getRoleLabel(role), [role])
 
@@ -291,7 +281,6 @@ export default function AdminAjustesPage() {
 
         if (!signal?.aborted) {
           setSummary(data.summary ?? EMPTY_SUMMARY)
-          setAdminUsers(Array.isArray(data.adminUsers) ? data.adminUsers : [])
         }
       } catch (error) {
         if (signal?.aborted) {
@@ -321,13 +310,70 @@ export default function AdminAjustesPage() {
   }, [loadProfileSettings])
 
   useEffect(() => {
-    if (!isEditOpen) {
-      setEditingAdmin(null)
-      setEditEmail("")
-      setEditError(null)
-      setIsEditSubmitting(false)
+    if (!isPromoSheetOpen) {
+      setPromoCodeInput("")
+      setPromoDescriptionInput("")
+      setPromoExpiresAtInput("")
+      setPromoDiscountPercentInput("10")
+      setPromoApplyToAllServicesInput(true)
+      setPromoSelectedServiceIdsInput([])
+      setPromoActiveInput(true)
+      setPromoFormError(null)
+      setIsPromoSubmitting(false)
     }
-  }, [isEditOpen])
+  }, [isPromoSheetOpen])
+
+  const loadServiceOptions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/services", {
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+      const data: ServicesResponse = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudieron cargar servicios")
+      }
+
+      setServiceOptions(Array.isArray(data.services) ? data.services : [])
+    } catch (error) {
+      console.error("Error loading services for promo form", error)
+      setServiceOptions([])
+    }
+  }, [])
+
+  const loadPromoCodes = useCallback(async () => {
+    setIsPromoCodesLoading(true)
+    setPromoCodesError(null)
+
+    try {
+      const response = await fetch("/api/admin/promo-codes", {
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+      const data: PromoCodesResponse = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudieron cargar los códigos promo")
+      }
+
+      setPromoCodes(Array.isArray(data.promoCodes) ? data.promoCodes : [])
+    } catch (error) {
+      console.error("Error loading promo codes", error)
+      setPromoCodesError("No se pudieron cargar los códigos promocionales.")
+    } finally {
+      setIsPromoCodesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (settingsView !== "platform") {
+      return
+    }
+
+    void loadPromoCodes()
+    void loadServiceOptions()
+  }, [loadPromoCodes, loadServiceOptions, settingsView])
 
   const handleReload = useCallback(() => {
     void loadSettings()
@@ -437,61 +483,123 @@ export default function AdminAjustesPage() {
     }
   }
 
-  const handleOpenEdit = (adminUser: AdminUserSettings) => {
-    setEditingAdmin(adminUser)
-    setEditEmail(adminUser.email)
-    setEditError(null)
-    setIsEditOpen(true)
-  }
-
-  const handleEditSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleCreatePromoCode = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setEditError(null)
+    setPromoFormError(null)
 
-    if (!editingAdmin) {
-      setEditError("No se seleccionó un administrador para editar.")
+    const code = promoCodeInput.trim().toUpperCase()
+    const description = promoDescriptionInput.trim()
+    const expiresAt = promoExpiresAtInput.trim()
+    const discountPercent = Number(promoDiscountPercentInput)
+    const serviceIds = promoApplyToAllServicesInput
+      ? null
+      : promoSelectedServiceIdsInput.length > 0
+        ? promoSelectedServiceIdsInput
+        : null
+
+    if (code.length < 3) {
+      setPromoFormError("El código debe tener al menos 3 caracteres.")
       return
     }
 
-    const sanitizedEmail = editEmail.trim().toLowerCase()
-
-    if (!sanitizedEmail || !sanitizedEmail.includes("@")) {
-      setEditError("Ingresa un correo válido.")
+    if (!/^[A-Z0-9_-]+$/.test(code)) {
+      setPromoFormError("El código solo puede contener letras, números, guion y guion bajo.")
       return
     }
 
-    setIsEditSubmitting(true)
+    if (description.length < 2) {
+      setPromoFormError("Ingresa una descripción válida.")
+      return
+    }
+
+    if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
+      setPromoFormError("Selecciona una fecha válida de expiración.")
+      return
+    }
+
+    if (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100) {
+      setPromoFormError("El porcentaje de descuento debe estar entre 1 y 100.")
+      return
+    }
+
+    if (!promoApplyToAllServicesInput && (!serviceIds || serviceIds.length === 0)) {
+      setPromoFormError("Selecciona al menos un servicio o marca que aplica a todos.")
+      return
+    }
+
+    setIsPromoSubmitting(true)
 
     try {
-      const response = await fetch(`/api/admin/settings/${editingAdmin.id}`, {
-        method: "PATCH",
+      const response = await fetch("/api/admin/promo-codes", {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...buildTenantHeaders(),
         },
         body: JSON.stringify({
-          email: sanitizedEmail,
+          code,
+          description,
+          expiresAt: expiresAt || null,
+          discountPercent,
+          serviceIds,
+          active: promoActiveInput,
         }),
       })
 
-      const data: AdminUserResponse = await response.json().catch(() => ({} as AdminUserResponse))
+      const data: PromoCodesResponse = await response.json().catch(() => ({}))
 
-      if (!response.ok || !data.adminUser) {
-        setEditError(data.error ?? "No se pudo actualizar el administrador.")
+      if (!response.ok || !data.promoCode) {
+        setPromoFormError(data.error ?? "No se pudo crear el código promo.")
         return
       }
 
-      setAdminUsers((previous) => previous.map((item) => (item.id === data.adminUser!.id ? data.adminUser! : item)))
-      setIsEditOpen(false)
+      setPromoCodes((previous) => [
+        data.promoCode!,
+        ...previous.filter((item) => item.code !== data.promoCode!.code),
+      ])
+      setIsPromoSheetOpen(false)
     } catch (error) {
-      console.error("Error updating admin user", error)
-      setEditError("Error de conexión con el servidor.")
+      console.error("Error creating promo code", error)
+      setPromoFormError("Error de conexión con el servidor.")
     } finally {
-      setIsEditSubmitting(false)
+      setIsPromoSubmitting(false)
     }
   }
 
+  const handleTogglePromoCode = useCallback(async (promoCode: PromoCodeSummary) => {
+    setUpdatingPromoCode(promoCode.code)
+    setPromoCodesError(null)
+
+    try {
+      const response = await fetch(`/api/admin/promo-codes/${encodeURIComponent(promoCode.code)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({ active: !promoCode.active }),
+      })
+
+      const data: PromoCodesResponse = await response.json().catch(() => ({}))
+
+      if (!response.ok || !data.promoCode) {
+        setPromoCodesError(data.error ?? "No se pudo actualizar el código promocional.")
+        return
+      }
+
+      setPromoCodes((previous) =>
+        previous.map((item) => (item.code === data.promoCode!.code ? data.promoCode! : item)),
+      )
+    } catch (error) {
+      console.error("Error updating promo code", error)
+      setPromoCodesError("No se pudo actualizar el código promocional.")
+    } finally {
+      setUpdatingPromoCode(null)
+    }
+  }, [])
+
   const shouldShowErrorCard = Boolean(settingsError) && !areSettingsLoading
+  const activePromoCodes = useMemo(() => promoCodes.filter((item) => item.active).length, [promoCodes])
 
   return (
     <div className="min-h-screen bg-background">
@@ -710,7 +818,7 @@ export default function AdminAjustesPage() {
           <div className="space-y-1">
             <h2 className="text-2xl font-semibold">Configuración de plataforma</h2>
             <p className="text-sm text-muted-foreground">
-              Métricas operativas y gestión de cuentas administradoras.
+              Métricas operativas y gestión de códigos promocionales.
             </p>
           </div>
 
@@ -749,7 +857,7 @@ export default function AdminAjustesPage() {
           </Card>
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <CardHeader className="space-y-1">
               <CardTitle className="text-sm font-medium text-muted-foreground">Agendamientos totales</CardTitle>
@@ -774,46 +882,51 @@ export default function AdminAjustesPage() {
               </CardDescription>
             </CardHeader>
           </Card>
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Promo codes activos</CardTitle>
+              <CardDescription className="text-3xl font-bold text-foreground">
+                {formatNumber(activePromoCodes)} / {formatNumber(promoCodes.length)}
+              </CardDescription>
+            </CardHeader>
+          </Card>
           </section>
 
           {shouldShowErrorCard ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>No pudimos cargar el centro de configuración</CardTitle>
-              <CardDescription>Intenta nuevamente para obtener la información más reciente.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={handleReload}>Reintentar</Button>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>No pudimos cargar el centro de configuración</CardTitle>
+                <CardDescription>Intenta nuevamente para obtener la información más reciente.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button onClick={handleReload}>Reintentar</Button>
+              </CardContent>
+            </Card>
           ) : areSettingsLoading ? (
-          <SettingsSkeleton />
-          ) : sortedAdmins.length === 0 ? (
-          <Card>
-            <CardContent>
-              <Empty className="border border-dashed">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Settings2 className="h-6 w-6" />
-                  </EmptyMedia>
-                  <EmptyTitle>Sin cuentas administradoras</EmptyTitle>
-                  <EmptyDescription>No hay usuarios con rol administrador registrados en la base de datos.</EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent className="text-sm text-muted-foreground">
-                  Crea o promueve un usuario con rol admin para habilitar la gestión avanzada.
-                </EmptyContent>
-              </Empty>
-            </CardContent>
-          </Card>
-          ) : (
-          <>
-            {settingsError && (
+            <SettingsSkeleton />
+          ) : null}
+
+          <div className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-xl font-semibold">Códigos promocionales</h3>
+                <p className="text-sm text-muted-foreground">
+                  Solo administradores pueden crear, activar o desactivar promo codes.
+                </p>
+              </div>
+              <Button onClick={() => setIsPromoSheetOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Crear promo code
+              </Button>
+            </div>
+
+            {promoCodesError && (
               <Alert variant="destructive">
-                <AlertTitle>Error al actualizar ajustes</AlertTitle>
+                <AlertTitle>Error en promo codes</AlertTitle>
                 <AlertDescription>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span>{settingsError}</span>
-                    <Button variant="outline" onClick={handleReload}>
+                    <span>{promoCodesError}</span>
+                    <Button variant="outline" onClick={() => void loadPromoCodes()}>
                       Reintentar
                     </Button>
                   </div>
@@ -821,75 +934,146 @@ export default function AdminAjustesPage() {
               </Alert>
             )}
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Administradores de la plataforma</CardTitle>
-                <CardDescription>Edita el correo de acceso de las cuentas administradoras.</CardDescription>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>ID</TableHead>
-                      <TableHead>Correo</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead>Último acceso</TableHead>
-                      <TableHead className="text-right">Acciones</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sortedAdmins.map((adminUser) => (
-                      <TableRow key={adminUser.id}>
-                        <TableCell className="font-medium">{adminUser.id}</TableCell>
-                        <TableCell>{adminUser.email}</TableCell>
-                        <TableCell>
-                          <Badge variant={getStatusVariant(adminUser.status)}>{normalizeStatus(adminUser.status)}</Badge>
-                        </TableCell>
-                        <TableCell>{adminUser.lastLogin ? formatDateTime(adminUser.lastLogin) : "Sin registro"}</TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="outline" size="sm" onClick={() => handleOpenEdit(adminUser)}>
-                            Editar correo
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </>
-          )}
+            {isPromoCodesLoading ? (
+              <SettingsSkeleton />
+            ) : (
+              <AdminPromoCodesTable
+                promoCodes={promoCodes}
+                onToggleActive={handleTogglePromoCode}
+                isUpdatingCode={updatingPromoCode}
+              />
+            )}
+          </div>
         </section>
         )}
 
-        <Sheet open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <Sheet open={isPromoSheetOpen} onOpenChange={setIsPromoSheetOpen}>
           <SheetContent side="right" className="p-0 sm:max-w-md lg:max-w-lg">
-            <form onSubmit={handleEditSubmit} className="flex h-full flex-col">
+            <form onSubmit={handleCreatePromoCode} className="flex h-full flex-col">
               <SheetHeader className="border-b px-6 py-4 text-left">
-                <SheetTitle>Actualizar correo administrador</SheetTitle>
-                <SheetDescription>Este correo será utilizado para iniciar sesión en el panel administrativo.</SheetDescription>
+                <SheetTitle>Crear código promocional</SheetTitle>
+                <SheetDescription>Define los códigos que podrán redimirse en Wallet.</SheetDescription>
               </SheetHeader>
               <div className="flex-1 overflow-y-auto px-6 py-4">
                 <FieldGroup>
                   <Field>
-                    <FieldLabel htmlFor="admin-user-email">Correo</FieldLabel>
+                    <FieldLabel htmlFor="promo-code">Código</FieldLabel>
                     <Input
-                      id="admin-user-email"
-                      type="email"
-                      value={editEmail}
+                      id="promo-code"
+                      value={promoCodeInput}
                       onChange={(event) => {
-                        setEditEmail(event.target.value)
-                        setEditError(null)
+                        setPromoCodeInput(event.target.value)
+                        setPromoFormError(null)
                       }}
+                      placeholder="Ej. BIENVENIDA2026"
                       required
                     />
                   </Field>
+                  <Field>
+                    <FieldLabel htmlFor="promo-description">Descripción</FieldLabel>
+                    <Input
+                      id="promo-description"
+                      value={promoDescriptionInput}
+                      onChange={(event) => {
+                        setPromoDescriptionInput(event.target.value)
+                        setPromoFormError(null)
+                      }}
+                      placeholder="Ej. Regalo de apertura"
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="promo-expires-date">Fecha de expiración</FieldLabel>
+                    <Input
+                      id="promo-expires-date"
+                      type="date"
+                      value={promoExpiresAtInput}
+                      onChange={(event) => {
+                        setPromoExpiresAtInput(event.target.value)
+                        setPromoFormError(null)
+                      }}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="promo-discount">Porcentaje de descuento</FieldLabel>
+                    <Input
+                      id="promo-discount"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={promoDiscountPercentInput}
+                      onChange={(event) => {
+                        setPromoDiscountPercentInput(event.target.value)
+                        setPromoFormError(null)
+                      }}
+                      placeholder="Ej. 10"
+                      required
+                    />
+                  </Field>
+                  <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                    <span className="text-sm">Aplica a todos los servicios</span>
+                    <Switch
+                      checked={promoApplyToAllServicesInput}
+                      onCheckedChange={(checked) => {
+                        setPromoApplyToAllServicesInput(checked)
+                        if (checked) {
+                          setPromoSelectedServiceIdsInput([])
+                        }
+                        setPromoFormError(null)
+                      }}
+                    />
+                  </div>
+                  {!promoApplyToAllServicesInput && (
+                    <Field>
+                      <FieldLabel>Servicios incluidos</FieldLabel>
+                      <div className="max-h-44 space-y-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/30 p-3">
+                        {serviceOptions.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No hay servicios disponibles.</p>
+                        ) : (
+                          serviceOptions.map((service) => {
+                            const checked = promoSelectedServiceIdsInput.includes(service.id)
+                            return (
+                              <label key={service.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(value) => {
+                                    setPromoSelectedServiceIdsInput((previous) => {
+                                      if (value) {
+                                        return previous.includes(service.id) ? previous : [...previous, service.id]
+                                      }
+
+                                      return previous.filter((item) => item !== service.id)
+                                    })
+                                    setPromoFormError(null)
+                                  }}
+                                />
+                                <span>{service.name}</span>
+                              </label>
+                            )
+                          })
+                        )}
+                      </div>
+                    </Field>
+                  )}
+                  <div className="rounded-lg bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    Si seleccionas servicios específicos, el cupón solo aplicará en esos servicios.
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                    <span className="text-sm">Activo al crear</span>
+                    <Switch
+                      checked={promoActiveInput}
+                      onCheckedChange={(checked) => {
+                        setPromoActiveInput(checked)
+                        setPromoFormError(null)
+                      }}
+                    />
+                  </div>
                 </FieldGroup>
               </div>
               <SheetFooter className="border-t px-6 py-4">
-                {editError && <p className="text-sm text-destructive">{editError}</p>}
-                <Button type="submit" className="w-full" disabled={isEditSubmitting}>
-                  {isEditSubmitting ? "Guardando cambios..." : "Guardar cambios"}
+                {promoFormError && <p className="text-sm text-destructive">{promoFormError}</p>}
+                <Button type="submit" className="w-full" disabled={isPromoSubmitting}>
+                  {isPromoSubmitting ? "Creando..." : "Crear promo code"}
                 </Button>
               </SheetFooter>
             </form>

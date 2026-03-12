@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { getWalletReceiptDownloadForUser } from "@/lib/wallet"
 
 const querySchema = z.object({
@@ -13,11 +14,12 @@ const paramsSchema = z.object({
 
 export async function GET(request: Request, context: { params: Promise<{ receiptId: string }> }) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const { receiptId } = paramsSchema.parse(await context.params)
     const url = new URL(request.url)
     const { userId } = querySchema.parse({ userId: url.searchParams.get("userId") })
 
-    const file = await getWalletReceiptDownloadForUser({ userId, receiptId })
+    const file = await getWalletReceiptDownloadForUser({ userId, receiptId, tenantSchema })
 
     return new NextResponse(file.body, {
       status: 200,
