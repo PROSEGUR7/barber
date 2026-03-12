@@ -402,8 +402,7 @@ export default function AdminPlanesScreen() {
 
       const checkout = payload.wompiCheckout
       const normalizedRedirectUrl = checkout.redirectUrl?.trim() ?? ""
-      const canUseRedirectUrl =
-        normalizedRedirectUrl.length > 0 && !/localhost|127\.0\.0\.1/i.test(normalizedRedirectUrl)
+      const canUseRedirectUrl = normalizedRedirectUrl.length > 0
 
       const form = document.createElement("form")
       form.method = "GET"

@@ -781,8 +781,7 @@ export default function BookingPage() {
     setIsWompiDialogOpen(false)
 
     const normalizedRedirectUrl = wompiCheckout.redirectUrl?.trim() ?? ""
-    const canUseRedirectUrl =
-      normalizedRedirectUrl.length > 0 && !/localhost|127\.0\.0\.1/i.test(normalizedRedirectUrl)
+    const canUseRedirectUrl = normalizedRedirectUrl.length > 0
 
     const openWebCheckoutFallback = () => {
       const form = document.createElement("form")
