@@ -1,13 +1,12 @@
 "use client"
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { MoreHorizontal, Plus, Scissors } from "lucide-react"
+import { Plus, Scissors } from "lucide-react"
 
+import { AdminServicesTable } from "@/components/admin/services-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -22,7 +21,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
 import type { ServiceSummary } from "@/lib/admin"
@@ -40,38 +38,6 @@ type ServiceResponse = {
 
 function sortServices(list: ServiceSummary[]): ServiceSummary[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
-}
-
-function normalizeStatus(status: string | null): { value: string; label: string } {
-  const value = status?.trim().toLowerCase() ?? "sin-estado"
-
-  if (value === "activo") {
-    return { value, label: "Activo" }
-  }
-
-  if (value === "inactivo") {
-    return { value, label: "Inactivo" }
-  }
-
-  if (value === "sin-estado") {
-    return { value, label: "Sin estado" }
-  }
-
-  return { value, label: status ?? "Sin estado" }
-}
-
-function getStatusVariant(status: string | null): "default" | "secondary" | "outline" {
-  const normalized = status?.trim().toLowerCase()
-
-  if (normalized === "activo") {
-    return "default"
-  }
-
-  if (normalized === "inactivo") {
-    return "secondary"
-  }
-
-  return "outline"
 }
 
 function buildTenantHeaders(): HeadersInit {
@@ -540,56 +506,12 @@ export default function AdminServiciosPage() {
                 </Alert>
               )}
 
-              <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Servicio</TableHead>
-                        <TableHead>Descripción</TableHead>
-                        <TableHead className="text-right">Precio</TableHead>
-                        <TableHead className="text-right">Duración</TableHead>
-                        <TableHead>Estado</TableHead>
-                        <TableHead className="text-right">Acciones</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {services.map((service) => (
-                        <TableRow key={service.id}>
-                          <TableCell className="font-medium">{service.name}</TableCell>
-                          <TableCell className="max-w-md text-muted-foreground">
-                            {service.description?.trim() || "Sin descripción"}
-                          </TableCell>
-                          <TableCell className="text-right">{formatCurrency(service.price)}</TableCell>
-                          <TableCell className="text-right">{formatNumber(service.durationMin)} min</TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusVariant(service.status)}>{normalizeStatus(service.status).label}</Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon-sm" className="hover:bg-accent/60" aria-label="Acciones">
-                                  <MoreHorizontal className="size-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-40">
-                                <DropdownMenuItem onClick={() => openEditForm(service)}>Editar</DropdownMenuItem>
-                                <DropdownMenuItem
-                                  variant="destructive"
-                                  disabled={isDeletingId === service.id}
-                                  onClick={() => void handleDelete(service)}
-                                >
-                                  {isDeletingId === service.id ? "Eliminando..." : "Eliminar"}
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+              <AdminServicesTable
+                services={services}
+                onEditService={openEditForm}
+                onDeleteService={(service) => void handleDelete(service)}
+                deletingServiceId={isDeletingId}
+              />
             </>
           )}
         </section>

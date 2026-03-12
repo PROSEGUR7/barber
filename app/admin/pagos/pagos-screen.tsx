@@ -3,75 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Receipt } from "lucide-react"
 
+import { AdminPaymentsTable, type AdminBillingPaymentSummary } from "@/components/admin/payments-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { formatCurrency, formatDateTime, formatNumber } from "@/lib/formatters"
-
-type AdminBillingPaymentSummary = {
-  paymentId: number
-  amount: number
-  currency: string
-  paymentStatus: string | null
-  paidAt: string | null
-  createdAt: string | null
-  paymentMethod: string | null
-  paymentProvider: string | null
-  externalReference: string | null
-  billingCycle: string | null
-  planCode: string | null
-  planName: string | null
-  invoiceNumber: string | null
-  invoiceStatus: string | null
-  tenantId: number
-  tenantName: string
-  tenantSchema: string | null
-}
+import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type PaymentsResponse = {
   payments?: AdminBillingPaymentSummary[]
   error?: string
-}
-
-function getStatusLabel(status: string | null): string {
-  if (!status) {
-    return "Sin estado"
-  }
-
-  return status
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (chunk) => chunk.toUpperCase())
-}
-
-function getStatusVariant(status: string | null): "default" | "secondary" | "outline" | "destructive" {
-  const normalized = status?.trim().toLowerCase() ?? ""
-
-  if (normalized.includes("rech") || normalized.includes("cancel") || normalized.includes("fall")) {
-    return "destructive"
-  }
-
-  if (
-    normalized.includes("pag") ||
-    normalized.includes("aprob") ||
-    normalized.includes("complet") ||
-    normalized.includes("final") ||
-    normalized.includes("paid") ||
-    normalized.includes("success")
-  ) {
-    return "secondary"
-  }
-
-  if (normalized.includes("pend") || normalized.includes("process")) {
-    return "default"
-  }
-
-  return "outline"
 }
 
 function isPaidStatus(status: string | null): boolean {
@@ -125,9 +67,6 @@ export default function AdminPagosPage() {
   const [arePaymentsLoading, setArePaymentsLoading] = useState(true)
   const [paymentsError, setPaymentsError] = useState<string | null>(null)
   const [tenantSchema, setTenantSchema] = useState<string | null>(null)
-
-  const [searchTerm, setSearchTerm] = useState("")
-  const [statusFilter, setStatusFilter] = useState("all")
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -187,57 +126,16 @@ export default function AdminPagosPage() {
     return () => controller.abort()
   }, [loadPayments])
 
-  const statusOptions = useMemo(() => {
-    const values = new Set<string>()
-
-    for (const payment of payments) {
-      const normalized = payment.paymentStatus?.trim().toLowerCase()
-      if (normalized) {
-        values.add(normalized)
-      }
-    }
-
-    return [...values].sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }))
-  }, [payments])
-
-  const filteredPayments = useMemo(() => {
-    const search = searchTerm.trim().toLowerCase()
-
-    return payments.filter((payment) => {
-      const statusMatches = statusFilter === "all" || (payment.paymentStatus?.trim().toLowerCase() ?? "") === statusFilter
-      if (!statusMatches) {
-        return false
-      }
-
-      if (search.length === 0) {
-        return true
-      }
-
-      const searchableText = [
-        payment.tenantName,
-        payment.planName ?? "",
-        payment.planCode ?? "",
-        payment.invoiceNumber ?? "",
-        payment.externalReference ?? "",
-        payment.paymentStatus ?? "",
-      ]
-        .join(" ")
-        .toLowerCase()
-
-      return searchableText.includes(search)
-    })
-  }, [payments, searchTerm, statusFilter])
-
   const metrics = useMemo(() => {
     const totals = {
-      totalRecords: filteredPayments.length,
+      totalRecords: payments.length,
       paidRecords: 0,
       pendingRecords: 0,
       paidAmount: 0,
       totalAmount: 0,
     }
 
-    for (const payment of filteredPayments) {
+    for (const payment of payments) {
       totals.totalAmount += payment.amount
 
       if (isPaidStatus(payment.paymentStatus)) {
@@ -249,7 +147,7 @@ export default function AdminPagosPage() {
     }
 
     return totals
-  }, [filteredPayments])
+  }, [payments])
 
   const shouldShowErrorCard = Boolean(paymentsError) && !arePaymentsLoading && payments.length === 0
 
@@ -316,30 +214,6 @@ export default function AdminPagosPage() {
               <h2 className="text-2xl font-semibold">Movimientos de pagos</h2>
               <p className="text-muted-foreground">Consulta cobros de suscripción por plan, estado y referencia.</p>
             </div>
-            <Button variant="outline" onClick={handleReload}>
-              Recargar
-            </Button>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <Input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Buscar por tenant, plan, factura o referencia"
-            />
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Filtrar por estado" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los estados</SelectItem>
-                {statusOptions.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {getStatusLabel(status)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </section>
 
@@ -355,7 +229,7 @@ export default function AdminPagosPage() {
           </Card>
         ) : arePaymentsLoading ? (
           <PaymentsTableSkeleton />
-        ) : filteredPayments.length === 0 ? (
+        ) : payments.length === 0 ? (
           <Card>
             <CardContent>
               <Empty className="border border-dashed">
@@ -390,38 +264,7 @@ export default function AdminPagosPage() {
               </Alert>
             )}
 
-            <Card>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Pago</TableHead>
-                      <TableHead>Plan</TableHead>
-                      <TableHead>Ciclo</TableHead>
-                      <TableHead>Estado pago</TableHead>
-                      <TableHead>Factura</TableHead>
-                      <TableHead>Fecha pago</TableHead>
-                      <TableHead className="text-right">Monto</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredPayments.map((payment) => (
-                      <TableRow key={payment.paymentId}>
-                        <TableCell className="font-medium">#{payment.paymentId}</TableCell>
-                        <TableCell>{payment.planName ?? payment.planCode ?? "Sin plan"}</TableCell>
-                        <TableCell>{payment.billingCycle ?? "Sin ciclo"}</TableCell>
-                        <TableCell>
-                          <Badge variant={getStatusVariant(payment.paymentStatus)}>{getStatusLabel(payment.paymentStatus)}</Badge>
-                        </TableCell>
-                        <TableCell>{payment.invoiceNumber ?? "Sin factura"}</TableCell>
-                        <TableCell>{payment.paidAt ? formatDateTime(payment.paidAt) : payment.createdAt ? formatDateTime(payment.createdAt) : "Sin fecha"}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(payment.amount)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+            <AdminPaymentsTable payments={payments} onReload={handleReload} />
           </>
         )}
       </main>
