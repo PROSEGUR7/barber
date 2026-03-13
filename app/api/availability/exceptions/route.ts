@@ -7,6 +7,7 @@ import {
   ensureMaterializedEmployeeAvailability,
   type AvailabilityException,
 } from "@/lib/availability"
+import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida")
 
@@ -47,8 +48,38 @@ function todayYmdUtc(): string {
   return `${yyyy}-${mm}-${dd}`
 }
 
+function jsonError(status: number, payload: { error: string; code?: string; issues?: unknown }) {
+  return NextResponse.json(
+    {
+      ok: false,
+      ...payload,
+    },
+    { status },
+  )
+}
+
+function getRequestUserEmail(request: Request): string {
+  return request.headers.get("x-user-email")?.trim().toLowerCase() ?? ""
+}
+
 export async function GET(request: Request) {
   try {
+    const userEmail = getRequestUserEmail(request)
+    if (!userEmail) {
+      return jsonError(401, {
+        code: "AUTH_REQUIRED",
+        error: "Debes iniciar sesión como administrador para consultar excepciones.",
+      })
+    }
+
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
+
     const url = new URL(request.url)
     const params = querySchema.parse({
       employeeId: url.searchParams.get("employeeId"),
@@ -60,27 +91,45 @@ export async function GET(request: Request) {
       employeeId: params.employeeId,
       fromDate: params.fromDate,
       toDate: params.toDate,
+      tenantSchema,
     })
 
-    return NextResponse.json({ exceptions })
+    return NextResponse.json({ ok: true, exceptions })
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Parámetros inválidos", issues: error.flatten() }, { status: 400 })
+      return jsonError(400, { error: "Parámetros inválidos", code: "INVALID_PARAMS", issues: error.flatten() })
     }
 
     console.error("Error fetching availability exceptions", error)
-    return NextResponse.json({ error: "No se pudieron cargar las excepciones" }, { status: 500 })
+    return jsonError(500, { error: "No se pudieron cargar las excepciones", code: "SERVER_ERROR" })
   }
 }
 
 export async function POST(request: Request) {
   try {
+    const userEmail = getRequestUserEmail(request)
+    if (!userEmail) {
+      return jsonError(401, {
+        code: "AUTH_REQUIRED",
+        error: "Debes iniciar sesión como administrador para guardar excepciones.",
+      })
+    }
+
+    const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
+    if (!tenantSchema) {
+      return jsonError(400, {
+        code: "TENANT_NOT_RESOLVED",
+        error: "No se pudo resolver el tenant de la sesión.",
+      })
+    }
+
     const payload = postSchema.parse(await request.json())
 
-    // NOTE: This project currently does not enforce auth on API routes.
-    // Consider restricting this route to admin/employee sessions.
-
-    await addAvailabilityException({ employeeId: payload.employeeId, exception: payload.exception as AvailabilityException })
+    await addAvailabilityException({
+      employeeId: payload.employeeId,
+      exception: payload.exception as AvailabilityException,
+      tenantSchema,
+    })
 
     const today = todayYmdUtc()
     const fromDate = payload.exception.date < today ? today : payload.exception.date
@@ -88,15 +137,16 @@ export async function POST(request: Request) {
       employeeId: payload.employeeId,
       fromDate,
       days: payload.materializeDays,
+      tenantSchema,
     })
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Datos inválidos", issues: error.flatten() }, { status: 400 })
+      return jsonError(400, { error: "Datos inválidos", code: "INVALID_PAYLOAD", issues: error.flatten() })
     }
 
     console.error("Error creating availability exception", error)
-    return NextResponse.json({ error: "No se pudo guardar la excepción" }, { status: 500 })
+    return jsonError(500, { error: "No se pudo guardar la excepción", code: "SERVER_ERROR" })
   }
 }

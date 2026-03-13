@@ -7,6 +7,7 @@ import "./globals.css"
 import { DevServiceWorkerReset } from "@/components/dev-sw-reset"
 import { PWAInstallPrompt } from "@/components/pwa-install-prompt"
 import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/toaster"
 
 export const dynamic = "force-dynamic"
 
@@ -53,6 +54,7 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
           <DevServiceWorkerReset />
           {children}
+          <Toaster />
           <PWAInstallPrompt />
           {enableVercelAnalytics ? <Analytics /> : null}
         </ThemeProvider>
