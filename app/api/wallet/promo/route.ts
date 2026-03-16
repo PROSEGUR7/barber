@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "Datos inválidos", issues: error.flatten() }, { status: 400 })
+      return NextResponse.json({ code: "INVALID_PAYLOAD", error: "Datos inválidos", issues: error.flatten() }, { status: 400 })
     }
 
     const code =
@@ -29,26 +29,26 @@ export async function POST(request: Request) {
         : null
 
     if (code === "CLIENT_PROFILE_NOT_FOUND") {
-      return NextResponse.json({ error: "Tu cuenta no tiene perfil de cliente." }, { status: 409 })
+      return NextResponse.json({ code, error: "Tu cuenta no tiene perfil de cliente." }, { status: 409 })
     }
 
     if (code === "PROMO_NOT_FOUND") {
-      return NextResponse.json({ error: "Código promocional no válido" }, { status: 404 })
+      return NextResponse.json({ code, error: "Código promocional no válido" }, { status: 404 })
     }
 
     if (code === "PROMO_INACTIVE") {
-      return NextResponse.json({ error: "Este código ya no está disponible" }, { status: 409 })
+      return NextResponse.json({ code, error: "Este código ya no está disponible" }, { status: 409 })
     }
 
     if (code === "PROMO_EXPIRED") {
-      return NextResponse.json({ error: "Este código promocional ya expiró" }, { status: 409 })
+      return NextResponse.json({ code, error: "Este código promocional ya expiró" }, { status: 409 })
     }
 
     if (code === "PROMO_ALREADY_REDEEMED") {
-      return NextResponse.json({ error: "Este código ya fue agregado a tu cuenta" }, { status: 409 })
+      return NextResponse.json({ code, error: "Este código ya fue agregado a tu cuenta" }, { status: 409 })
     }
 
     console.error("Error redeeming promo code", error)
-    return NextResponse.json({ error: "No se pudo aplicar el código" }, { status: 500 })
+    return NextResponse.json({ code: "SERVER_ERROR", error: "No se pudo aplicar el código" }, { status: 500 })
   }
 }

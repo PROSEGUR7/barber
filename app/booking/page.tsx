@@ -71,6 +71,16 @@ type PromoPricingPreview = {
   } | null
 }
 
+const time12hFormatter = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+})
+
+function formatTime12h(value: Date): string {
+  return time12hFormatter.format(value).toUpperCase()
+}
+
 declare global {
   interface Window {
     WidgetCheckout?: new (options: {
@@ -601,11 +611,11 @@ export default function BookingPage() {
   const formattedSummaryTime = useMemo(() => {
     if (!selectedSlot) return null
     const startInstant = new Date(selectedSlot.start)
-    const startLabel = format(startInstant, "HH:mm")
+    const startLabel = formatTime12h(startInstant)
 
     if (selectedServicesMeta.totalDuration > 0 && selectedServices.length > 1) {
       const endInstant = addMinutes(startInstant, selectedServicesMeta.totalDuration)
-      return `${startLabel} - ${format(endInstant, "HH:mm")}`
+      return `${startLabel} - ${formatTime12h(endInstant)}`
     }
 
     return startLabel
@@ -1045,8 +1055,8 @@ export default function BookingPage() {
       toast({
         title: "Cita reservada con éxito",
         description: endInstant
-          ? `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${format(startInstant, "HH:mm")} a ${format(endInstant, "HH:mm")}. Pago: efectivo.`
-          : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${format(startInstant, "HH:mm")}. Pago: efectivo.`,
+          ? `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${formatTime12h(startInstant)} a ${formatTime12h(endInstant)}. Pago: efectivo.`
+          : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${formatTime12h(startInstant)}. Pago: efectivo.`,
       })
 
       setIsConfirmOpen(false)
@@ -1270,7 +1280,7 @@ export default function BookingPage() {
 
     return visibleSlots.map((slot) => {
       const isSelected = selectedSlot?.start === slot.start
-      const startLabel = format(new Date(slot.start), "HH:mm")
+      const startLabel = formatTime12h(new Date(slot.start))
 
       return (
         <Button

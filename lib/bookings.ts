@@ -220,13 +220,13 @@ export async function getAvailabilitySlots(options: {
                he.fecha_hora_fin    AS fin
           FROM tenant_base.horarios_empleados he
          WHERE he.empleado_id = $2
-           AND DATE(he.fecha_hora_inicio) = $3::date
+           AND DATE(he.fecha_hora_inicio AT TIME ZONE $6) = $3::date
       ),
       ocupados AS (
         SELECT tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') AS r
           FROM tenant_base.agendamientos a
          WHERE a.empleado_id = $2
-           AND DATE(a.fecha_cita) = $3::date
+           AND DATE(a.fecha_cita AT TIME ZONE $6) = $3::date
            AND a.estado::text <> 'cancelada'
            AND ($4::int IS NULL OR a.id <> $4::int)
       ),
@@ -260,6 +260,7 @@ export async function getAvailabilitySlots(options: {
       date,
       typeof excludeAppointmentId === "number" ? excludeAppointmentId : null,
       typeof durationMinOverride === "number" ? durationMinOverride : null,
+      BOOKING_TIME_ZONE,
     ],
   )
 

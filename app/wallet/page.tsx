@@ -65,6 +65,7 @@ export default function WalletPage() {
   const [promoOpen, setPromoOpen] = useState(false)
   const [isSubmittingPromo, setIsSubmittingPromo] = useState(false)
   const [promoCode, setPromoCode] = useState("")
+  const [promoError, setPromoError] = useState<string | null>(null)
 
   const receiptsAnchorId = "wallet-history"
 
@@ -154,7 +155,45 @@ export default function WalletPage() {
   useEffect(() => {
     if (!promoOpen) return
     setPromoCode("")
+    setPromoError(null)
   }, [promoOpen])
+
+  const mapPromoErrorMessage = (status: number, data: unknown): string => {
+    const payload = (typeof data === "object" && data !== null ? data : {}) as {
+      code?: string
+      error?: string
+    }
+
+    if (payload.code === "PROMO_EXPIRED") {
+      return "Este código ya expiró. Pide uno nuevo al administrador."
+    }
+
+    if (payload.code === "PROMO_ALREADY_REDEEMED") {
+      return "Este código ya fue agregado a tu cuenta."
+    }
+
+    if (payload.code === "PROMO_NOT_FOUND") {
+      return "Ese código no existe o está mal escrito."
+    }
+
+    if (payload.code === "PROMO_INACTIVE") {
+      return "Ese código está inactivo y no se puede usar."
+    }
+
+    if (payload.code === "CLIENT_PROFILE_NOT_FOUND") {
+      return "Tu cuenta no tiene perfil de cliente para usar cupones."
+    }
+
+    if (typeof payload.error === "string" && payload.error.trim().length > 0) {
+      return payload.error
+    }
+
+    if (status >= 500) {
+      return "No se pudo validar el código por un problema del servidor."
+    }
+
+    return "No se pudo aplicar el código. Verifica si está vigente o si ya fue usado."
+  }
 
   const requireUser = (): number | null => {
     if (!userId) {
@@ -179,10 +218,13 @@ export default function WalletPage() {
 
     const code = promoCode.trim()
     if (!code) {
-      toast({ title: "Código requerido", description: "Ingresa un código promocional.", variant: "destructive" })
+      const message = "Ingresa un código promocional."
+      setPromoError(message)
+      toast({ title: "Código requerido", description: message, variant: "destructive" })
       return
     }
 
+    setPromoError(null)
     setIsSubmittingPromo(true)
     try {
       const response = await fetch("/api/wallet/promo", {
@@ -193,13 +235,21 @@ export default function WalletPage() {
 
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        toast({ title: "No se pudo aplicar", description: data.error ?? "Intenta nuevamente.", variant: "destructive" })
+        const message = mapPromoErrorMessage(response.status, data)
+        setPromoError(message)
+        toast({ title: "No se pudo aplicar", description: message, variant: "destructive" })
         return
       }
 
+      setPromoError(null)
       toast({ title: "Código aplicado", description: "Se agregó a tus cupones." })
       setPromoOpen(false)
       await refreshWallet({ silent: true })
+    } catch (err) {
+      console.error("Error redeeming promo code", err)
+      const message = "Error de conexión al validar el código. Intenta de nuevo."
+      setPromoError(message)
+      toast({ title: "Error de conexión", description: message, variant: "destructive" })
     } finally {
       setIsSubmittingPromo(false)
     }
@@ -400,6 +450,7 @@ export default function WalletPage() {
                   placeholder="BIENVENIDO15"
                   autoCapitalize="characters"
                 />
+                {promoError ? <p className="text-sm text-destructive">{promoError}</p> : null}
               </div>
 
               <DialogFooter>

@@ -1,6 +1,8 @@
 import { pool } from "@/lib/db"
 import { tenantSql } from "@/lib/tenant"
 
+const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
+
 export type WeeklyAvailabilityRule = {
   dow: number // 0=Sunday ... 6=Saturday
   startTime: string // HH:mm
@@ -215,10 +217,10 @@ async function hasMaterializedBlocks(employeeId: number, date: string, tenantSch
        SELECT 1
          FROM tenant_base.horarios_empleados he
         WHERE he.empleado_id = $1
-          AND DATE(he.fecha_hora_inicio) = $2::date
+          AND DATE(he.fecha_hora_inicio AT TIME ZONE $3) = $2::date
         LIMIT 1
      ) as exists`, tenantSchema),
-    [employeeId, date],
+    [employeeId, date, BOOKING_TIME_ZONE],
   )
 
   return result.rows[0]?.exists ?? false
@@ -281,15 +283,15 @@ export async function ensureMaterializedEmployeeAvailability(options: {
       await client.query(
         tenantSql(`DELETE FROM tenant_base.horarios_empleados
           WHERE empleado_id = $1
-            AND DATE(fecha_hora_inicio) = $2::date`, tenantSchema),
-        [employeeId, date],
+            AND DATE(fecha_hora_inicio AT TIME ZONE $3) = $2::date`, tenantSchema),
+        [employeeId, date, BOOKING_TIME_ZONE],
       )
 
       for (const block of blocks) {
         await client.query(
           tenantSql(`INSERT INTO tenant_base.horarios_empleados (empleado_id, disponible, fecha_hora_inicio, fecha_hora_fin)
-           VALUES ($1, TRUE, ($2::date + $3::time), ($2::date + $4::time))`, tenantSchema),
-          [employeeId, date, block.startTime, block.endTime],
+           VALUES ($1, TRUE, (($2::date + $3::time) AT TIME ZONE $5), (($2::date + $4::time) AT TIME ZONE $5))`, tenantSchema),
+          [employeeId, date, block.startTime, block.endTime, BOOKING_TIME_ZONE],
         )
       }
     }
@@ -311,11 +313,8 @@ export async function ensureMaterializedEmployeeDay(options: {
   const { employeeId, date, tenantSchema } = options
 
   try {
-    const exists = await hasMaterializedBlocks(employeeId, date, tenantSchema)
-    if (exists) {
-      return
-    }
-
+    // Force re-materialization for the requested day so timezone fixes are applied
+    // even when old rows already exist from previous materializations.
     await ensureMaterializedEmployeeAvailability({ employeeId, fromDate: date, days: 1, tenantSchema })
   } catch (error) {
     // Don't break booking flows if the new tables aren't deployed yet.

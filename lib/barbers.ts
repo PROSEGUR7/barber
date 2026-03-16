@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { getAvailabilitySlots } from "@/lib/bookings"
+import { getBarberRatingSummaryMap } from "@/lib/reviews"
 import { tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
@@ -83,6 +84,8 @@ export type BarberCard = {
   phone: string | null
   specialty: string | null
   isFavorite: boolean
+  ratingAverage: number | null
+  ratingCount: number
   nextAvailabilityISO: string | null
 }
 
@@ -135,14 +138,30 @@ export async function listBarbersForUser(options: {
     phone: row.empleado_telefono,
     specialty: row.specialties,
     isFavorite: row.is_favorite,
+    ratingAverage: null,
+    ratingCount: 0,
   }))
 
+  const ratingSummaryMap = await getBarberRatingSummaryMap({
+    barberIds: base.map((barber) => barber.id),
+    tenantSchema,
+  })
+
+  const baseWithRatings = base.map((barber) => {
+    const summary = ratingSummaryMap.get(barber.id)
+    return {
+      ...barber,
+      ratingAverage: summary?.ratingAverage ?? null,
+      ratingCount: summary?.ratingCount ?? 0,
+    }
+  })
+
   if (!availabilityServiceId) {
-    return base.map((barber) => ({ ...barber, nextAvailabilityISO: null }))
+    return baseWithRatings.map((barber) => ({ ...barber, nextAvailabilityISO: null }))
   }
 
   const withNext = await Promise.all(
-    base.map(async (barber) => ({
+    baseWithRatings.map(async (barber) => ({
       ...barber,
       nextAvailabilityISO: await computeNextAvailabilityISO({
         employeeId: barber.id,

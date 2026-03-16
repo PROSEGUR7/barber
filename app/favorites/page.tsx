@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { CalendarClock, Heart, Phone } from "lucide-react"
+import { CalendarClock, Heart, MessageSquareText, Phone, Star } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
@@ -26,6 +26,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   SidebarInset,
@@ -41,11 +42,32 @@ type BarberCard = {
   specialty: string | null
   nextAvailabilityISO: string | null
   isFavorite: boolean
+  ratingAverage: number | null
+  ratingCount: number
 }
 
 type Service = {
   id: number
   name: string
+}
+
+type BarberReview = {
+  id: number
+  rating: number
+  comment: string | null
+  clientName: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ReviewDraft = {
+  rating: number
+  comment: string
+}
+
+type ReviewFeedback = {
+  type: "success" | "error"
+  message: string
 }
 
 const getInitials = (name: string) =>
@@ -64,6 +86,13 @@ export default function FavoritesPage() {
   const [selectedServiceId, setSelectedServiceId] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [openReviews, setOpenReviews] = useState<Record<number, boolean>>({})
+  const [reviewsByBarber, setReviewsByBarber] = useState<Record<number, BarberReview[]>>({})
+  const [reviewsFetched, setReviewsFetched] = useState<Record<number, boolean>>({})
+  const [reviewsLoading, setReviewsLoading] = useState<Record<number, boolean>>({})
+  const [reviewDrafts, setReviewDrafts] = useState<Record<number, ReviewDraft>>({})
+  const [reviewSaving, setReviewSaving] = useState<Record<number, boolean>>({})
+  const [reviewFeedback, setReviewFeedback] = useState<Record<number, ReviewFeedback | null>>({})
 
   const buildTenantHeaders = (): HeadersInit => {
     if (typeof window === "undefined") {
@@ -174,12 +203,6 @@ export default function FavoritesPage() {
       isActive = false
       controller.abort()
     }
-    load()
-
-    return () => {
-      isActive = false
-      controller.abort()
-    }
   }, [userId, selectedServiceId])
 
   const barbersView = useMemo(() => {
@@ -231,6 +254,161 @@ export default function FavoritesPage() {
       params.set("serviceId", String(selectedServiceId))
     }
     return `/booking?${params.toString()}`
+  }
+
+  const getDraft = (barberId: number): ReviewDraft => {
+    return reviewDrafts[barberId] ?? { rating: 0, comment: "" }
+  }
+
+  const renderStars = (rating: number, options?: { size?: string; muted?: boolean }) => {
+    const rounded = Math.round(rating)
+    return Array.from({ length: 5 }).map((_, index) => {
+      const filled = index < rounded
+      return (
+        <Star
+          key={index}
+          className={cn(
+            options?.size ?? "h-4 w-4",
+            filled ? "text-amber-400" : options?.muted ? "text-muted-foreground/30" : "text-amber-200",
+          )}
+          fill={filled ? "currentColor" : "none"}
+        />
+      )
+    })
+  }
+
+  const loadReviewsForBarber = async (barberId: number) => {
+    setReviewsLoading((prev) => ({ ...prev, [barberId]: true }))
+    setReviewFeedback((prev) => ({ ...prev, [barberId]: null }))
+
+    try {
+      const response = await fetch(`/api/barbers/${barberId}/reviews?limit=6`, {
+        method: "GET",
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudieron cargar las reseñas")
+      }
+
+      const reviews = Array.isArray(data.reviews) ? (data.reviews as BarberReview[]) : []
+      const ratingAverage = typeof data.summary?.ratingAverage === "number" ? data.summary.ratingAverage : null
+      const ratingCount = typeof data.summary?.ratingCount === "number" ? data.summary.ratingCount : 0
+
+      setReviewsByBarber((prev) => ({ ...prev, [barberId]: reviews }))
+      setReviewsFetched((prev) => ({ ...prev, [barberId]: true }))
+      setBarbers((prev) =>
+        prev.map((barber) =>
+          barber.id === barberId
+            ? { ...barber, ratingAverage, ratingCount }
+            : barber,
+        ),
+      )
+    } catch (err) {
+      setReviewFeedback((prev) => ({
+        ...prev,
+        [barberId]: {
+          type: "error",
+          message: err instanceof Error ? err.message : "No se pudieron cargar las reseñas",
+        },
+      }))
+    } finally {
+      setReviewsLoading((prev) => ({ ...prev, [barberId]: false }))
+    }
+  }
+
+  const toggleReviewsForBarber = (barberId: number) => {
+    setOpenReviews((prev) => {
+      const nextOpen = !prev[barberId]
+      if (nextOpen && !reviewsFetched[barberId] && !reviewsLoading[barberId]) {
+        void loadReviewsForBarber(barberId)
+      }
+      return { ...prev, [barberId]: nextOpen }
+    })
+  }
+
+  const submitReview = async (barberId: number) => {
+    if (!userId) {
+      setReviewFeedback((prev) => ({
+        ...prev,
+        [barberId]: { type: "error", message: "Debes iniciar sesión como cliente para calificar." },
+      }))
+      return
+    }
+
+    const draft = getDraft(barberId)
+    if (draft.rating < 1 || draft.rating > 5) {
+      setReviewFeedback((prev) => ({
+        ...prev,
+        [barberId]: { type: "error", message: "Selecciona de 1 a 5 estrellas." },
+      }))
+      return
+    }
+
+    setReviewSaving((prev) => ({ ...prev, [barberId]: true }))
+    setReviewFeedback((prev) => ({ ...prev, [barberId]: null }))
+
+    try {
+      const response = await fetch(`/api/barbers/${barberId}/reviews`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          userId,
+          rating: draft.rating,
+          comment: draft.comment,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudo guardar la reseña")
+      }
+
+      const savedReview = data.review as BarberReview
+      const ratingAverage = typeof data.summary?.ratingAverage === "number" ? data.summary.ratingAverage : null
+      const ratingCount = typeof data.summary?.ratingCount === "number" ? data.summary.ratingCount : 0
+
+      setReviewsByBarber((prev) => {
+        const current = prev[barberId] ?? []
+        const merged = [savedReview, ...current.filter((item) => item.id !== savedReview.id)]
+        return { ...prev, [barberId]: merged }
+      })
+      setReviewsFetched((prev) => ({ ...prev, [barberId]: true }))
+      setBarbers((prev) =>
+        prev.map((barber) =>
+          barber.id === barberId
+            ? { ...barber, ratingAverage, ratingCount }
+            : barber,
+        ),
+      )
+
+      setReviewFeedback((prev) => ({
+        ...prev,
+        [barberId]: { type: "success", message: "Tu reseña fue guardada correctamente." },
+      }))
+      setReviewDrafts((prev) => ({
+        ...prev,
+        [barberId]: {
+          rating: draft.rating,
+          comment: "",
+        },
+      }))
+    } catch (err) {
+      setReviewFeedback((prev) => ({
+        ...prev,
+        [barberId]: {
+          type: "error",
+          message: err instanceof Error ? err.message : "No se pudo guardar la reseña",
+        },
+      }))
+    } finally {
+      setReviewSaving((prev) => ({ ...prev, [barberId]: false }))
+    }
   }
 
   return (
@@ -349,6 +527,17 @@ export default function FavoritesPage() {
                           </Link>
                         </CardTitle>
                         <CardDescription>{barber.specialty ?? ""}</CardDescription>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                          <div className="flex items-center gap-1">
+                            {renderStars(barber.ratingAverage ?? 0, { size: "h-3.5 w-3.5", muted: true })}
+                          </div>
+                          <span className="font-medium text-foreground">
+                            {barber.ratingAverage == null ? "Sin calificaciones" : `${barber.ratingAverage.toFixed(1)} / 5`}
+                          </span>
+                          <span className="text-muted-foreground">
+                            ({barber.ratingCount} {barber.ratingCount === 1 ? "reseña" : "reseñas"})
+                          </span>
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -394,7 +583,122 @@ export default function FavoritesPage() {
                         Reservar con {barber.primaryName}
                       </Link>
                     </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggleReviewsForBarber(barber.id)}
+                    >
+                      <MessageSquareText className="h-4 w-4" />
+                      {openReviews[barber.id] ? "Ocultar reseñas" : "Ver reseñas"}
+                    </Button>
                   </div>
+
+                  {openReviews[barber.id] ? (
+                    <div className="space-y-3 rounded-lg border border-border/70 bg-muted/40 p-3">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium">Reseñas de clientes</p>
+
+                        {reviewsLoading[barber.id] ? (
+                          <div className="space-y-2">
+                            <Skeleton className="h-12 w-full" />
+                            <Skeleton className="h-12 w-full" />
+                          </div>
+                        ) : null}
+
+                        {!reviewsLoading[barber.id] && (reviewsByBarber[barber.id]?.length ?? 0) === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Aún no hay reseñas para este barbero. Sé la primera persona en calificar.
+                          </p>
+                        ) : null}
+
+                        {!reviewsLoading[barber.id] && (reviewsByBarber[barber.id]?.length ?? 0) > 0
+                          ? reviewsByBarber[barber.id].map((review) => (
+                            <div key={review.id} className="rounded-md border border-border/60 bg-background px-3 py-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-medium text-foreground">{review.clientName}</p>
+                                <span className="text-[11px] text-muted-foreground">
+                                  {format(new Date(review.updatedAt), "d MMM yyyy", { locale: es })}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-1">{renderStars(review.rating, { size: "h-3.5 w-3.5" })}</div>
+                              {review.comment ? (
+                                <p className="mt-1 text-xs text-muted-foreground">{review.comment}</p>
+                              ) : null}
+                            </div>
+                          ))
+                          : null}
+                      </div>
+
+                      <div className="space-y-2 rounded-md border border-border/60 bg-background p-3">
+                        <p className="text-sm font-medium">Califica a {barber.primaryName}</p>
+                        <div className="flex items-center gap-1">
+                          {Array.from({ length: 5 }).map((_, index) => {
+                            const value = index + 1
+                            const draft = getDraft(barber.id)
+                            const selected = value <= draft.rating
+                            return (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() =>
+                                  setReviewDrafts((prev) => ({
+                                    ...prev,
+                                    [barber.id]: {
+                                      rating: value,
+                                      comment: getDraft(barber.id).comment,
+                                    },
+                                  }))
+                                }
+                                className="rounded p-1 hover:bg-muted"
+                                aria-label={`Calificar con ${value} estrellas`}
+                              >
+                                <Star
+                                  className={cn("h-5 w-5", selected ? "text-amber-400" : "text-muted-foreground/40")}
+                                  fill={selected ? "currentColor" : "none"}
+                                />
+                              </button>
+                            )
+                          })}
+                        </div>
+
+                        <Textarea
+                          placeholder="Cuéntale a otros clientes cómo fue tu experiencia"
+                          value={getDraft(barber.id).comment}
+                          onChange={(event) =>
+                            setReviewDrafts((prev) => ({
+                              ...prev,
+                              [barber.id]: {
+                                rating: getDraft(barber.id).rating,
+                                comment: event.target.value,
+                              },
+                            }))
+                          }
+                          maxLength={500}
+                        />
+
+                        {reviewFeedback[barber.id] ? (
+                          <p
+                            className={cn(
+                              "text-xs",
+                              reviewFeedback[barber.id]?.type === "error" ? "text-destructive" : "text-emerald-600",
+                            )}
+                          >
+                            {reviewFeedback[barber.id]?.message}
+                          </p>
+                        ) : null}
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void submitReview(barber.id)}
+                          disabled={reviewSaving[barber.id]}
+                        >
+                          {reviewSaving[barber.id] ? "Guardando..." : "Enviar reseña"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             ))
