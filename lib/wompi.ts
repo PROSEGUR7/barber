@@ -35,6 +35,49 @@ type ReconcileContext = {
   eventName?: string | null
 }
 
+type ReservationClientSnapshot = {
+  clientId: number | null
+  userId: number | null
+  clientName: string | null
+  clientPhone: string | null
+  userEmail: string | null
+}
+
+type ExistingPaymentSnapshot = {
+  id: number
+  estado: string | null
+  wompi_status: string | null
+  wompi_transaction_id: string | null
+}
+
+type N8nReservationPaymentEventPayload = {
+  eventType: "reservation_payment.wompi.updated"
+  source: ReconcileContext["source"]
+  occurredAt: string
+  tenantSchema: string
+  appointmentId: number
+  appointmentStatus: AppointmentState | null
+  payment: {
+    state: PaymentState | null
+    provider: "wompi"
+    method: PaymentMethod
+    amount: number | null
+    amountInCents: number | null
+    currency: string | null
+    wompiStatus: string | null
+    wompiTransactionId: string | null
+    wompiReference: string | null
+    wompiEventName: string | null
+  }
+  client: {
+    id: number | null
+    userId: number | null
+    name: string | null
+    phone: string | null
+    email: string | null
+  }
+}
+
 export type WompiCheckoutData = {
   publicKey: string
   currency: "COP"
@@ -809,6 +852,72 @@ function mapWompiMethodToPaymentMethod(method: string | null | undefined): Payme
   return "otro"
 }
 
+function normalizeStatusForComparison(value: string | null | undefined): string {
+  return (value ?? "").trim().toUpperCase()
+}
+
+function getN8nReservationPaymentWebhookUrl(): string | null {
+  const configured =
+    process.env.N8N_WEBHOOK_PAYMENTS_URL?.trim() ||
+    process.env.N8N_WEBHOOK_URL?.trim() ||
+    process.env.N8N_WEBHOOK_TEST_URL?.trim() ||
+    ""
+
+  if (!configured) {
+    return null
+  }
+
+  return configured
+}
+
+async function sendReservationPaymentEventToN8n(
+  payload: N8nReservationPaymentEventPayload,
+): Promise<void> {
+  const webhookUrl = getN8nReservationPaymentWebhookUrl()
+  if (!webhookUrl) {
+    return
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    })
+
+    if (!response.ok) {
+      console.error("[N8N_WOMPI_PAYMENT_WEBHOOK_FAILED]", {
+        status: response.status,
+        statusText: response.statusText,
+        tenantSchema: payload.tenantSchema,
+        appointmentId: payload.appointmentId,
+        wompiTransactionId: payload.payment.wompiTransactionId,
+        wompiReference: payload.payment.wompiReference,
+      })
+      return
+    }
+
+    console.log("[N8N_WOMPI_PAYMENT_WEBHOOK_SENT]", {
+      tenantSchema: payload.tenantSchema,
+      appointmentId: payload.appointmentId,
+      wompiTransactionId: payload.payment.wompiTransactionId,
+      wompiReference: payload.payment.wompiReference,
+      wompiStatus: payload.payment.wompiStatus,
+    })
+  } catch (error) {
+    console.error("[N8N_WOMPI_PAYMENT_WEBHOOK_ERROR]", {
+      tenantSchema: payload.tenantSchema,
+      appointmentId: payload.appointmentId,
+      wompiTransactionId: payload.payment.wompiTransactionId,
+      wompiReference: payload.payment.wompiReference,
+      error,
+    })
+  }
+}
+
 export async function reconcileWompiTransaction(
   transaction: WompiTransactionData,
   context: ReconcileContext = {},
@@ -848,18 +957,44 @@ export async function reconcileWompiTransaction(
   const wompiStatus = typeof transaction.status === "string" ? transaction.status.trim().toUpperCase() : ""
   const wompiPayload = JSON.stringify(transaction)
   const wompiEventName = context.eventName?.trim() || null
+  const normalizedWompiStatus = normalizeStatusForComparison(wompiStatus)
 
   const client = await pool.connect()
+  let clientSnapshot: ReservationClientSnapshot = {
+    clientId: null,
+    userId: null,
+    clientName: null,
+    clientPhone: null,
+    userEmail: null,
+  }
+  let shouldEmitN8nWebhook = false
+  let nextAppointmentStatusForEvent: AppointmentState | null = null
 
   try {
     await client.query("BEGIN")
 
-    const appointmentResult = await client.query<{ id: number; estado: AppointmentState }>(
-      tenantSql(`SELECT id, estado
-         FROM tenant_base.agendamientos
-        WHERE id = $1
+    const appointmentResult = await client.query<{
+      id: number
+      estado: AppointmentState
+      cliente_id: number | null
+      user_id: number | null
+      cliente_nombre: string | null
+      cliente_telefono: string | null
+      user_correo: string | null
+    }>(
+      tenantSql(`SELECT a.id,
+            a.estado,
+            a.cliente_id,
+            c.user_id,
+            c.nombre AS cliente_nombre,
+            c.telefono AS cliente_telefono,
+            u.correo AS user_correo
+        FROM tenant_base.agendamientos a
+         LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
+         LEFT JOIN tenant_base.users u ON u.id = c.user_id
+        WHERE a.id = $1
         LIMIT 1
-        FOR UPDATE`, resolvedTenantSchema),
+        FOR UPDATE OF a`, resolvedTenantSchema),
       [appointmentId],
     )
 
@@ -872,10 +1007,21 @@ export async function reconcileWompiTransaction(
       }
     }
 
-    const appointmentState = appointmentResult.rows[0].estado
+    const appointmentRow = appointmentResult.rows[0]
+    const appointmentState = appointmentRow.estado
+    clientSnapshot = {
+      clientId: appointmentRow.cliente_id,
+      userId: appointmentRow.user_id,
+      clientName: appointmentRow.cliente_nombre,
+      clientPhone: appointmentRow.cliente_telefono,
+      userEmail: appointmentRow.user_correo,
+    }
 
-    const existingPaymentResult = await client.query<{ id: number }>(
-      tenantSql(`SELECT id
+    const existingPaymentResult = await client.query<ExistingPaymentSnapshot>(
+      tenantSql(`SELECT id,
+            estado::text AS estado,
+            wompi_status,
+            wompi_transaction_id
          FROM tenant_base.pagos
         WHERE agendamiento_id = $1
         ORDER BY id DESC
@@ -885,7 +1031,17 @@ export async function reconcileWompiTransaction(
     )
 
     if (existingPaymentResult.rowCount > 0) {
-      const paymentId = existingPaymentResult.rows[0].id
+      const existingPayment = existingPaymentResult.rows[0]
+      const paymentId = existingPayment.id
+      const previousPaymentState = normalizeStatusForComparison(existingPayment.estado)
+      const previousWompiStatus = normalizeStatusForComparison(existingPayment.wompi_status)
+      const previousTransactionId = (existingPayment.wompi_transaction_id ?? "").trim()
+
+      shouldEmitN8nWebhook =
+        previousPaymentState !== normalizeStatusForComparison(paymentStatus) ||
+        previousWompiStatus !== normalizedWompiStatus ||
+        previousTransactionId !== wompiTransactionId
+
       await client.query(
         tenantSql(`UPDATE tenant_base.pagos
             SET estado = $2::tenant_base.estado_pago_enum,
@@ -918,6 +1074,8 @@ export async function reconcileWompiTransaction(
         ],
       )
     } else {
+      shouldEmitN8nWebhook = true
+
       await client.query(
         tenantSql(`INSERT INTO tenant_base.pagos
           (agendamiento_id, monto, monto_descuento, metodo_pago, fecha_pago, estado, proveedor_pago, wompi_transaction_id, wompi_reference, wompi_currency, wompi_status, wompi_event_name, wompi_payload, wompi_payload_updated_at)
@@ -949,11 +1107,43 @@ export async function reconcileWompiTransaction(
       nextAppointmentStatus = "cancelada"
     }
 
+    nextAppointmentStatusForEvent = nextAppointmentStatus
+
     await client.query("COMMIT")
+
+    if (shouldEmitN8nWebhook) {
+      await sendReservationPaymentEventToN8n({
+        eventType: "reservation_payment.wompi.updated",
+        source: context.source ?? "unknown",
+        occurredAt: new Date().toISOString(),
+        tenantSchema: resolvedTenantSchema,
+        appointmentId,
+        appointmentStatus: nextAppointmentStatusForEvent,
+        payment: {
+          state: paymentStatus,
+          provider: "wompi",
+          method: paymentMethod,
+          amount,
+          amountInCents,
+          currency: wompiCurrency || null,
+          wompiStatus: normalizedWompiStatus || null,
+          wompiTransactionId: wompiTransactionId || null,
+          wompiReference: wompiReference || null,
+          wompiEventName,
+        },
+        client: {
+          id: clientSnapshot.clientId,
+          userId: clientSnapshot.userId,
+          name: clientSnapshot.clientName,
+          phone: clientSnapshot.clientPhone,
+          email: clientSnapshot.userEmail,
+        },
+      })
+    }
 
     return {
       appointmentId,
-      appointmentStatus: nextAppointmentStatus,
+      appointmentStatus: nextAppointmentStatusForEvent,
       paymentStatus,
     }
   } catch (error) {
