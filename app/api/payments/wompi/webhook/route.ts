@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import {
+  fetchLatestWompiTransactionByReference,
   fetchWompiTransactionById,
   isReservationPaymentReference,
   parseTenantBillingReference,
@@ -136,6 +137,17 @@ export async function POST(request: Request) {
       const latest = await fetchWompiTransactionById(transactionId)
       if (latest) {
         transactionForReconciliation = latest
+      } else {
+        const fallbackReference =
+          (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
+          ""
+
+        if (fallbackReference) {
+          const latestByReference = await fetchLatestWompiTransactionByReference(fallbackReference)
+          if (latestByReference) {
+            transactionForReconciliation = latestByReference
+          }
+        }
       }
 
       console.log("[WOMPI_WEBHOOK_TRACE_FETCH_TRANSACTION]", {
