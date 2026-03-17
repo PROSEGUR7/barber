@@ -376,6 +376,32 @@ export default function AdminPlanesScreen() {
           error?: string
         } | null
 
+        if (byReferenceResponse.status === 404) {
+          const notFoundMessage = byReferencePayload?.error?.trim() || "No se encontró transacción de Wompi para la referencia"
+
+          if (hasPaidAccess) {
+            setPendingCheckoutReference(null)
+            if (typeof window !== "undefined") {
+              localStorage.removeItem(PENDING_PLAN_CHECKOUT_REFERENCE_KEY)
+            }
+
+            setInlineNotice({
+              type: "success",
+              title: "Referencia conciliada",
+              message:
+                "Tu plan ya está activo. Limpiamos la referencia pendiente anterior para evitar reintentos innecesarios.",
+            })
+            return
+          }
+
+          setInlineNotice({
+            type: "error",
+            title: "No se encontró pago para esta referencia",
+            message: `${notFoundMessage}. Verifica si abriste otra sesión o si la referencia corresponde a otro checkout.`,
+          })
+          return
+        }
+
         if (!byReferenceResponse.ok || !byReferencePayload?.transactionId) {
           throw new Error(byReferencePayload?.error?.trim() || "No se pudo resolver la transacción de Wompi.")
         }
@@ -443,7 +469,7 @@ export default function AdminPlanesScreen() {
         setIsReconcilingPayment(false)
       }
     },
-    [loadSubscriptionState],
+    [hasPaidAccess, loadSubscriptionState],
   )
 
   const handleSelectPlan = useCallback(async (planId: SaasPlanId, cycleOverride?: BillingCycle) => {
