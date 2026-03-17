@@ -71,6 +71,8 @@ type PromoPricingPreview = {
   } | null
 }
 
+const PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY = "wompiPendingReservationCheckoutReference"
+
 const time12hFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
   minute: "2-digit",
@@ -139,6 +141,9 @@ export default function BookingPage() {
   const [promoError, setPromoError] = useState<string | null>(null)
   const [promoPreview, setPromoPreview] = useState<PromoPricingPreview | null>(null)
   const [isApplyingPromo, setIsApplyingPromo] = useState(false)
+  const [pendingCheckoutReference, setPendingCheckoutReference] = useState<string | null>(null)
+  const [lastAutoReconcileReference, setLastAutoReconcileReference] = useState<string | null>(null)
+  const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
   const wompiSdkPromiseRef = useRef<Promise<void> | null>(null)
 
   const buildTenantHeaders = (): HeadersInit => {
@@ -159,6 +164,25 @@ export default function BookingPage() {
     }
 
     return headers
+  }
+
+  const persistPendingReservationReference = (reference: string) => {
+    const normalizedReference = reference.trim()
+    if (!normalizedReference) {
+      return
+    }
+
+    setPendingCheckoutReference(normalizedReference)
+    if (typeof window !== "undefined") {
+      localStorage.setItem(PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY, normalizedReference)
+    }
+  }
+
+  const clearPendingReservationReference = () => {
+    setPendingCheckoutReference(null)
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY)
+    }
   }
 
   const loadWompiSdk = async () => {
@@ -384,6 +408,19 @@ export default function BookingPage() {
   }, [searchParams, barbers, services, selectedServices.length])
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const pendingReference = localStorage.getItem(PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY)?.trim() ?? ""
+    if (!pendingReference) {
+      return
+    }
+
+    setPendingCheckoutReference(pendingReference)
+  }, [])
+
+  useEffect(() => {
     if (!searchParams) {
       return
     }
@@ -432,6 +469,8 @@ export default function BookingPage() {
             })
             return
           }
+
+          clearPendingReservationReference()
 
           toast({
             title: "Pago aprobado",
@@ -843,6 +882,8 @@ export default function BookingPage() {
           return
         }
 
+        clearPendingReservationReference()
+
         toast({
           title: "Pago aprobado",
           description: "Tu pago fue confirmado y quedó registrado.",
@@ -867,6 +908,71 @@ export default function BookingPage() {
       console.error("Error reconciling Wompi transaction", error)
     }
   }
+
+  const reconcileWompiPaymentByReference = async (reference: string) => {
+    const normalizedReference = reference.trim()
+    if (!normalizedReference) {
+      return
+    }
+
+    setIsReconcilingPayment(true)
+    try {
+      const byReferenceResponse = await fetch(`/api/payments/wompi/reference/${encodeURIComponent(normalizedReference)}`, {
+        method: "GET",
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+
+      const byReferencePayload = (await byReferenceResponse.json().catch(() => null)) as {
+        transactionId?: string | null
+        error?: string
+      } | null
+
+      if (byReferenceResponse.status === 404) {
+        return
+      }
+
+      if (!byReferenceResponse.ok || !byReferencePayload?.transactionId) {
+        throw new Error(byReferencePayload?.error?.trim() || "No se pudo resolver la transacción de Wompi por referencia.")
+      }
+
+      await reconcileWompiTransactionById(byReferencePayload.transactionId)
+    } catch (error) {
+      console.error("Error reconciling Wompi payment by reference", error)
+    } finally {
+      setIsReconcilingPayment(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!searchParams) {
+      return
+    }
+
+    const provider = (searchParams.get("paymentProvider") ?? "").trim().toLowerCase()
+    const reference = (searchParams.get("reference") ?? "").trim()
+    const transactionId = (searchParams.get("id") ?? "").trim()
+
+    if (provider !== "wompi" || !reference || transactionId) {
+      return
+    }
+
+    persistPendingReservationReference(reference)
+    void reconcileWompiPaymentByReference(reference)
+  }, [searchParams])
+
+  useEffect(() => {
+    if (!pendingCheckoutReference || isReconcilingPayment) {
+      return
+    }
+
+    if (lastAutoReconcileReference === pendingCheckoutReference) {
+      return
+    }
+
+    setLastAutoReconcileReference(pendingCheckoutReference)
+    void reconcileWompiPaymentByReference(pendingCheckoutReference)
+  }, [isReconcilingPayment, lastAutoReconcileReference, pendingCheckoutReference])
 
   const openWompiWidget = async () => {
     if (!wompiCheckout) {
@@ -1044,6 +1150,7 @@ export default function BookingPage() {
           description: "Ahora completa el pago en Wompi para confirmar tu cita.",
         })
 
+        persistPendingReservationReference(wompiData.reference)
         setWompiCheckout(wompiData)
         setIsWompiDialogOpen(true)
         setIsConfirmOpen(false)

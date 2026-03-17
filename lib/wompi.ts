@@ -347,14 +347,21 @@ function getDefaultAppUrl() {
 }
 
 function buildRedirectUrl(reference: string, path: string = "/booking"): string {
-  const configured = process.env.WOMPI_REDIRECT_URL?.trim()
-  if (configured) {
-    return configured
-  }
-
+  const configured = process.env.WOMPI_REDIRECT_URL?.trim() || ""
   const appUrl = getDefaultAppUrl().replace(/\/$/, "")
   const normalizedPath = path.startsWith("/") ? path : `/${path}`
-  return `${appUrl}${normalizedPath}?paymentProvider=wompi&reference=${encodeURIComponent(reference)}`
+  const baseRedirect = configured || `${appUrl}${normalizedPath}`
+
+  let redirect: URL
+  try {
+    redirect = new URL(baseRedirect, appUrl)
+  } catch {
+    redirect = new URL(`${appUrl}${normalizedPath}`)
+  }
+
+  redirect.searchParams.set("paymentProvider", "wompi")
+  redirect.searchParams.set("reference", reference)
+  return redirect.toString()
 }
 
 async function getAcceptanceTokens(publicKey: string): Promise<{
