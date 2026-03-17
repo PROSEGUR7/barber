@@ -5,6 +5,7 @@ import {
   fetchWompiTransactionById,
   isReservationPaymentReference,
   parseTenantBillingReference,
+  promoteAppointmentPendingFromCitaReference,
   reconcileWompiTransaction,
   verifyWompiWebhookSignature,
 } from "@/lib/wompi"
@@ -187,6 +188,7 @@ export async function POST(request: Request) {
     }
 
     const normalizedStatus = (transactionForReconciliation?.status ?? "").trim().toUpperCase()
+    const normalizedEventName = eventName.trim().toLowerCase()
     const amountInCents = transactionForReconciliation?.amount_in_cents
     const paymentReference =
       (typeof transactionForReconciliation?.id === "string" && transactionForReconciliation.id.trim()) ||
@@ -195,10 +197,38 @@ export async function POST(request: Request) {
     const referenceForTenantContext =
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
+    const citaReferenceMatch = /^cita[_-](\d+)$/i.test(referenceForTenantContext)
     const parsedReference = parseTenantBillingReference(referenceForTenantContext)
     const isReservationReference =
       isReservationPaymentReference(referenceForTenantContext) ||
       (typeof reconciliation?.appointmentId === "number" && Number.isFinite(reconciliation.appointmentId) && reconciliation.appointmentId > 0)
+
+    let citaPromotion: {
+      matched: boolean
+      updated: boolean
+      tenantSchema: string | null
+      appointmentId: number | null
+      appointmentStatus: string | null
+    } | null = null
+
+    if (normalizedEventName === "transaction.updated" && normalizedStatus === "APPROVED" && citaReferenceMatch) {
+      citaPromotion = await promoteAppointmentPendingFromCitaReference({
+        reference: referenceForTenantContext,
+        wompiTransactionId:
+          typeof transactionForReconciliation?.id === "string" ? transactionForReconciliation.id : transactionId,
+        customerEmail:
+          typeof transactionForReconciliation?.customer_email === "string"
+            ? transactionForReconciliation.customer_email
+            : null,
+      })
+
+      console.log("[WOMPI_WEBHOOK_CITA_PROMOTION]", {
+        event: eventName,
+        transactionId,
+        reference: referenceForTenantContext,
+        result: citaPromotion,
+      })
+    }
 
     let billingRegistration: {
       attempted: boolean
@@ -330,6 +360,7 @@ export async function POST(request: Request) {
       event: eventName,
       transactionId,
       reconciliation,
+      citaPromotion,
       billingRegistration,
     })
 
@@ -338,6 +369,7 @@ export async function POST(request: Request) {
         ok: true,
         received: true,
         reconciliation,
+        citaPromotion,
         billingRegistration,
         billingRejected: billingRegistration.rejected,
         billingRejectReason: billingRegistration.reason,

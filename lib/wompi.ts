@@ -921,6 +921,102 @@ export function isReservationPaymentReference(reference: string | null | undefin
   return normalized.startsWith("RES-") || normalized.startsWith("CITA_") || normalized.startsWith("CITA-")
 }
 
+function parseCitaReference(reference: string | null | undefined): number | null {
+  if (typeof reference !== "string") {
+    return null
+  }
+
+  const match = /^cita[_-](\d+)$/i.exec(reference.trim())
+  if (!match) {
+    return null
+  }
+
+  const appointmentId = Number.parseInt(match[1], 10)
+  if (!Number.isFinite(appointmentId) || appointmentId <= 0) {
+    return null
+  }
+
+  return appointmentId
+}
+
+export async function promoteAppointmentPendingFromCitaReference(options: {
+  reference: string | null | undefined
+  wompiTransactionId?: string | null
+  customerEmail?: string | null
+}): Promise<{
+  matched: boolean
+  updated: boolean
+  tenantSchema: string | null
+  appointmentId: number | null
+  appointmentStatus: AppointmentState | null
+}> {
+  const appointmentId = parseCitaReference(options.reference)
+  if (!appointmentId) {
+    return {
+      matched: false,
+      updated: false,
+      tenantSchema: null,
+      appointmentId: null,
+      appointmentStatus: null,
+    }
+  }
+
+  const matchedTenant = await findTenantForReservationPayment({
+    wompiReferences: typeof options.reference === "string" ? [options.reference] : [],
+    wompiTransactionId: typeof options.wompiTransactionId === "string" ? options.wompiTransactionId.trim() : "",
+    appointmentId,
+    customerEmail: options.customerEmail ?? null,
+    tenantSchemaHint: null,
+  })
+
+  if (!matchedTenant) {
+    return {
+      matched: false,
+      updated: false,
+      tenantSchema: null,
+      appointmentId,
+      appointmentStatus: null,
+    }
+  }
+
+  const resolvedTenantSchema = matchedTenant.tenantSchema
+
+  const updateResult = await pool.query<{ estado: AppointmentState }>(
+    tenantSql(`UPDATE tenant_base.agendamientos
+         SET estado = 'pendiente'::tenant_base.estado_agendamiento_enum
+       WHERE id = $1
+         AND estado::text = 'provisional'
+       RETURNING estado`, resolvedTenantSchema),
+    [matchedTenant.appointmentId],
+  )
+
+  if (updateResult.rowCount > 0) {
+    return {
+      matched: true,
+      updated: true,
+      tenantSchema: resolvedTenantSchema,
+      appointmentId: matchedTenant.appointmentId,
+      appointmentStatus: updateResult.rows[0].estado,
+    }
+  }
+
+  const currentStateResult = await pool.query<{ estado: AppointmentState }>(
+    tenantSql(`SELECT estado
+         FROM tenant_base.agendamientos
+        WHERE id = $1
+        LIMIT 1`, resolvedTenantSchema),
+    [matchedTenant.appointmentId],
+  )
+
+  return {
+    matched: true,
+    updated: false,
+    tenantSchema: resolvedTenantSchema,
+    appointmentId: matchedTenant.appointmentId,
+    appointmentStatus: currentStateResult.rows[0]?.estado ?? null,
+  }
+}
+
 async function getTenantSchemas(): Promise<string[]> {
   const result = await pool.query<{ nspname: string }>(
     `SELECT nspname
