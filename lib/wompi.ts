@@ -27,6 +27,14 @@ export type WompiTransactionData = {
   amount_in_cents?: number | null
   currency?: string | null
   payment_method_type?: string | null
+  payment_link_id?: string | null
+  [key: string]: unknown
+}
+
+type WompiPaymentLinkData = {
+  id?: string | null
+  sku?: string | null
+  reference?: string | null
   [key: string]: unknown
 }
 
@@ -815,16 +823,67 @@ function extractReservationReferenceCandidates(transaction: WompiTransactionData
   return unique
 }
 
-function resolveReservationReference(transaction: WompiTransactionData): {
+async function fetchWompiPaymentLinkById(paymentLinkId: string): Promise<WompiPaymentLinkData | null> {
+  const normalized = paymentLinkId.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const privateKey = getRequiredWompiPrivateKey()
+  const response = await fetch(`${getWompiBaseUrl()}/v1/payment_links/${encodeURIComponent(normalized)}`, {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${privateKey}`,
+    },
+  })
+
+  const payload = (await response.json().catch(() => ({}))) as { data?: WompiPaymentLinkData }
+  if (!response.ok || !payload?.data) {
+    return null
+  }
+
+  return payload.data
+}
+
+async function resolveReservationReference(transaction: WompiTransactionData): Promise<{
   parsed: ParsedReservationReference
   candidates: string[]
-} {
+}> {
   const candidates = extractReservationReferenceCandidates(transaction)
 
   for (const candidate of candidates) {
     const parsed = parseReservationReference(candidate)
     if (parsed.appointmentId) {
       return { parsed, candidates }
+    }
+  }
+
+  const paymentLinkId =
+    (typeof transaction.payment_link_id === "string" && transaction.payment_link_id.trim()) ||
+    getNestedStringValue(transaction as Record<string, unknown>, "payment_link_id") ||
+    null
+
+  if (paymentLinkId) {
+    const paymentLink = await fetchWompiPaymentLinkById(paymentLinkId)
+    if (paymentLink) {
+      const paymentLinkCandidates = [
+        typeof paymentLink.sku === "string" ? paymentLink.sku.trim() : "",
+        typeof paymentLink.reference === "string" ? paymentLink.reference.trim() : "",
+      ].filter(Boolean)
+
+      for (const candidate of paymentLinkCandidates) {
+        if (!candidates.includes(candidate)) {
+          candidates.push(candidate)
+        }
+      }
+
+      for (const candidate of paymentLinkCandidates) {
+        const parsed = parseReservationReference(candidate)
+        if (parsed.appointmentId) {
+          return { parsed, candidates }
+        }
+      }
     }
   }
 
@@ -1005,7 +1064,7 @@ export async function reconcileWompiTransaction(
   appointmentStatus: AppointmentState | null
   paymentStatus: PaymentState | null
 }> {
-  const reservationResolution = resolveReservationReference(transaction)
+  const reservationResolution = await resolveReservationReference(transaction)
   const parsedReservation = reservationResolution.parsed
   const wompiTransactionId = typeof transaction.id === "string" ? transaction.id.trim() : ""
   const wompiReference = typeof transaction.reference === "string" ? transaction.reference.trim() : ""
