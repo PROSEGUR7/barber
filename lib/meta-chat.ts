@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db"
+import { tenantSql } from "@/lib/tenant"
 import {
   ensureMetaTenantConfigTable,
   getMetaConfigByTenantSchema,
@@ -23,6 +24,8 @@ export type ConversationMessage = {
   wamid: string | null
   direction: "inbound" | "outbound"
   owner: "Humano" | "IA"
+  sentByType: "bot" | "human" | "unknown"
+  sentByName: string | null
   type: string
   text: string | null
   mediaId: string | null
@@ -60,6 +63,12 @@ type MessageRow = {
   message_status: string | null
   status_error: string | null
   sent_at: string | null
+  raw_payload: unknown
+}
+
+type OutboundSenderMeta = {
+  type: "bot" | "human" | "unknown"
+  name: string | null
 }
 
 let ensurePromise: Promise<void> | null = null
@@ -148,6 +157,10 @@ function sanitizeConversationId(value: string): string {
   return decodeURIComponent(value).trim()
 }
 
+function normalizePhoneDigits(value: string | null | undefined): string {
+  return (value ?? "").replace(/\D+/g, "")
+}
+
 function conversationWhereSql(conversationId: string): { sql: string; params: string[] } {
   const normalized = sanitizeConversationId(conversationId)
 
@@ -161,6 +174,58 @@ function conversationWhereSql(conversationId: string): { sql: string; params: st
   return {
     sql: "NULLIF(trim(wa_id), '') = $2::text",
     params: [normalized],
+  }
+}
+
+function normalizeSenderType(value: unknown): "bot" | "human" | "unknown" {
+  if (typeof value !== "string") {
+    return "unknown"
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "human" || normalized === "humano" || normalized === "agent" || normalized === "asesor") {
+    return "human"
+  }
+
+  if (normalized === "bot" || normalized === "ia" || normalized === "ai" || normalized === "system" || normalized === "n8n") {
+    return "bot"
+  }
+
+  return "unknown"
+}
+
+function extractOutboundSenderMeta(rawPayload: unknown, direction: "inbound" | "outbound"): OutboundSenderMeta {
+  if (direction === "inbound") {
+    return {
+      type: "human",
+      name: null,
+    }
+  }
+
+  if (!rawPayload || typeof rawPayload !== "object") {
+    return {
+      type: "bot",
+      name: null,
+    }
+  }
+
+  const payload = rawPayload as Record<string, unknown>
+  const sentBy = payload.sent_by
+
+  if (!sentBy || typeof sentBy !== "object") {
+    return {
+      type: "bot",
+      name: null,
+    }
+  }
+
+  const sentByRecord = sentBy as Record<string, unknown>
+  const senderType = normalizeSenderType(sentByRecord.type)
+  const senderName = typeof sentByRecord.name === "string" ? sentByRecord.name.trim() : ""
+
+  return {
+    type: senderType === "unknown" ? "bot" : senderType,
+    name: senderName || null,
   }
 }
 
@@ -247,6 +312,114 @@ export async function ensureMetaWebhookTables() {
   return ensurePromise
 }
 
+async function ensureClientesBotStatusColumn(tenantSchema: string): Promise<void> {
+  await pool.query(
+    tenantSql(
+      `ALTER TABLE tenant_base.clientes
+         ADD COLUMN IF NOT EXISTS estado_bot text NOT NULL DEFAULT 'activo'`,
+      tenantSchema,
+    ),
+  )
+
+  await pool.query(
+    tenantSql(
+      `UPDATE tenant_base.clientes
+          SET estado_bot = 'activo'
+        WHERE estado_bot IS NULL OR trim(estado_bot) = ''`,
+      tenantSchema,
+    ),
+  )
+
+  try {
+    await pool.query(
+      tenantSql(
+        `ALTER TABLE tenant_base.clientes
+           ADD CONSTRAINT chk_clientes_estado_bot
+           CHECK (estado_bot IN ('activo', 'inactivo'))`,
+        tenantSchema,
+      ),
+    )
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : ""
+
+    // 42710: duplicate_object (constraint already exists)
+    if (code !== "42710") {
+      throw error
+    }
+  }
+}
+
+export async function getBotStatusByConversation(
+  conversationId: string,
+  tenantSchemaRaw: string,
+): Promise<{ exists: boolean; active: boolean; clientId: number | null }> {
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
+  await ensureClientesBotStatusColumn(tenantSchema)
+
+  const waId = normalizePhoneDigits(sanitizeConversationId(conversationId))
+  if (!waId) {
+    return { exists: false, active: true, clientId: null }
+  }
+
+  const result = await pool.query<{ id: number; estado_bot: string | null }>(
+    tenantSql(
+      `SELECT id,
+              COALESCE(NULLIF(trim(estado_bot), ''), 'activo') AS estado_bot
+         FROM tenant_base.clientes
+        WHERE regexp_replace(COALESCE(telefono, ''), '\\D+', '', 'g') = $1
+        LIMIT 1`,
+      tenantSchema,
+    ),
+    [waId],
+  )
+
+  if (result.rowCount === 0) {
+    return { exists: false, active: true, clientId: null }
+  }
+
+  const estadoBot = (result.rows[0].estado_bot ?? "activo").trim().toLowerCase()
+  return {
+    exists: true,
+    active: estadoBot !== "inactivo",
+    clientId: result.rows[0].id,
+  }
+}
+
+export async function updateBotStatusByConversation(
+  conversationId: string,
+  active: boolean,
+  tenantSchemaRaw: string,
+): Promise<{ updated: boolean; active: boolean; clientId: number | null }> {
+  const tenantSchema = normalizeTenantSchema(tenantSchemaRaw)
+  await ensureClientesBotStatusColumn(tenantSchema)
+
+  const waId = normalizePhoneDigits(sanitizeConversationId(conversationId))
+  if (!waId) {
+    return { updated: false, active, clientId: null }
+  }
+
+  const nextValue = active ? "activo" : "inactivo"
+  const result = await pool.query<{ id: number }>(
+    tenantSql(
+      `UPDATE tenant_base.clientes
+          SET estado_bot = $2
+        WHERE regexp_replace(COALESCE(telefono, ''), '\\D+', '', 'g') = $1
+        RETURNING id`,
+      tenantSchema,
+    ),
+    [waId, nextValue],
+  )
+
+  return {
+    updated: result.rowCount > 0,
+    active,
+    clientId: result.rowCount > 0 ? result.rows[0].id : null,
+  }
+}
+
 export async function getConversations(
   limit: number,
   tenantSchemaRaw: string,
@@ -270,7 +443,11 @@ export async function getConversations(
                     WHEN message_type = 'video' THEN '[Video]'
                     ELSE 'Sin contenido'
                   END) as snippet,
-         CASE WHEN direction = 'inbound' THEN 'Humano' ELSE 'IA' END as owner,
+         CASE
+           WHEN direction = 'inbound' THEN 'Humano'
+           WHEN lower(COALESCE(raw_payload -> 'sent_by' ->> 'type', '')) IN ('human', 'humano', 'agent', 'asesor') THEN 'Humano'
+           ELSE 'IA'
+         END as owner,
          sent_at,
          display_phone_number,
          direction,
@@ -357,7 +534,8 @@ export async function getMessagesByConversation(
        media_filename,
        message_status,
        status_error,
-       sent_at::text
+       sent_at::text,
+       raw_payload
      FROM tenant_base.meta_webhook_messages
      WHERE tenant_schema = $1
        AND ${where.sql}
@@ -368,11 +546,15 @@ export async function getMessagesByConversation(
 
   return result.rows.map((row) => {
     const direction = row.direction === "outbound" ? "outbound" : "inbound"
+    const senderMeta = extractOutboundSenderMeta(row.raw_payload, direction)
+
     return {
       id: String(row.id),
       wamid: row.wamid,
       direction,
-      owner: direction === "inbound" ? "Humano" : "IA",
+      owner: direction === "inbound" || senderMeta.type === "human" ? "Humano" : "IA",
+      sentByType: senderMeta.type,
+      sentByName: senderMeta.name,
       type: row.message_type?.trim() || "text",
       text: row.message_text,
       mediaId: row.media_id,
@@ -469,6 +651,8 @@ export async function sendMessageToMeta(params: {
   text?: string | null
   file?: File | null
   contactName?: string | null
+  sentByType?: "bot" | "human"
+  sentByName?: string | null
 }): Promise<SendResult> {
   await ensureMetaWebhookTables()
 
@@ -567,6 +751,16 @@ export async function sendMessageToMeta(params: {
 
   const wamid = sendPayload.messages?.[0]?.id?.trim() ?? null
   const sentAt = new Date().toISOString()
+  const sentByType = params.sentByType === "human" ? "human" : "bot"
+  const sentByName = (params.sentByName ?? "").trim() || (sentByType === "human" ? null : "Bot whatsapp")
+  const outboundRawPayload = {
+    sent_by: {
+      type: sentByType,
+      name: sentByName,
+      at: sentAt,
+    },
+    meta_response: sendPayload,
+  }
 
   await pool.query(
     `INSERT INTO tenant_base.meta_webhook_messages (
@@ -606,7 +800,7 @@ export async function sendMessageToMeta(params: {
       mediaCaption,
       mediaFilename,
       sentAt,
-      JSON.stringify(sendPayload),
+      JSON.stringify(outboundRawPayload),
     ],
   )
 

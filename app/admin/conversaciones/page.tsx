@@ -61,6 +61,8 @@ type ChatMessage = {
   wamid: string | null
   direction: "inbound" | "outbound"
   owner: "Humano" | "IA"
+  sentByType: "bot" | "human" | "unknown"
+  sentByName: string | null
   type: string
   text: string | null
   mediaId: string | null
@@ -90,6 +92,13 @@ type ConversationsResponse = {
 type MessagesResponse = {
   ok?: boolean
   messages?: ChatMessage[]
+  error?: string
+  detail?: string
+}
+
+type BotStatusResponse = {
+  ok?: boolean
+  active?: boolean
   error?: string
   detail?: string
 }
@@ -144,6 +153,10 @@ function tenantHeaders(headers: Record<string, string> = {}): Record<string, str
     typeof window === "undefined"
       ? ""
       : (localStorage.getItem("userEmail") ?? "").trim().toLowerCase()
+  const userDisplayName =
+    typeof window === "undefined"
+      ? ""
+      : (localStorage.getItem("userDisplayName") ?? "").trim()
 
   const withUserEmail = userEmail
     ? {
@@ -152,14 +165,50 @@ function tenantHeaders(headers: Record<string, string> = {}): Record<string, str
       }
     : { ...headers }
 
+  const withUserIdentity = userDisplayName
+    ? {
+        ...withUserEmail,
+        "x-user-name": userDisplayName,
+      }
+    : withUserEmail
+
   if (!tenantSchema) {
-    return withUserEmail
+    return withUserIdentity
   }
 
   return {
-    ...withUserEmail,
+    ...withUserIdentity,
     "x-tenant": tenantSchema,
   }
+}
+
+function getOutboundSenderLabel(message: ChatMessage): string {
+  if (message.sentByType === "human") {
+    return `Enviado por: ${message.sentByName?.trim() || "Asesor"}`
+  }
+
+  return `Enviado por: ${message.sentByName?.trim() || "Bot whatsapp"}`
+}
+
+function buildInitials(value: string): string {
+  const parts = value
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+
+  if (parts.length === 0) {
+    return "--"
+  }
+
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("")
+}
+
+function getOutboundSenderInitials(message: ChatMessage): string {
+  const fallbackName = message.sentByType === "human" ? "Asesor" : "Bot whatsapp"
+  return buildInitials(message.sentByName?.trim() || fallbackName)
 }
 
 function formatStatus(status: string | null): string {
@@ -571,6 +620,7 @@ export default function AdminConversacionesPage() {
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [isUpdatingBotState, setIsUpdatingBotState] = useState(false)
 
   const endOfMessagesRef = useRef<HTMLDivElement | null>(null)
   const documentInputRef = useRef<HTMLInputElement | null>(null)
@@ -688,6 +738,22 @@ export default function AdminConversacionesPage() {
       }
 
       setMessages(Array.isArray(data.messages) ? data.messages : [])
+
+      const botStatusResponse = await fetch(
+        withTenantQuery(`/api/admin/conversations/${encodedId}/bot-status`),
+        {
+          cache: "no-store",
+          headers: tenantHeaders(),
+        },
+      )
+
+      const botStatusData = (await botStatusResponse.json().catch(() => ({}))) as BotStatusResponse
+      if (botStatusResponse.ok && botStatusData.ok && typeof botStatusData.active === "boolean") {
+        setBotEnabledByConversation((current) => ({
+          ...current,
+          [conversationId]: botStatusData.active as boolean,
+        }))
+      }
 
       await fetch(withTenantQuery(`/api/admin/conversations/${encodedId}/read`), {
         method: "POST",
@@ -834,6 +900,11 @@ export default function AdminConversacionesPage() {
       return
     }
 
+    if (isBotEnabled) {
+      setError("El bot IA está activo. Desactívalo para enviar mensajes manuales.")
+      return
+    }
+
     const textToSend = composerText
     const fileToSend = selectedFile
 
@@ -887,7 +958,48 @@ export default function AdminConversacionesPage() {
         setIsSending(false)
       }
     })()
-  }, [composerText, loadConversations, loadMessages, selectedConversation, selectedFile])
+  }, [composerText, isBotEnabled, loadConversations, loadMessages, selectedConversation, selectedFile])
+
+  const handleBotToggle = useCallback(
+    async (checked: boolean) => {
+      if (!selectedConversation || isUpdatingBotState) {
+        return
+      }
+
+      setIsUpdatingBotState(true)
+      setError(null)
+
+      try {
+        const response = await fetch(
+          withTenantQuery(`/api/admin/conversations/${encodeURIComponent(selectedConversation.id)}/bot-status`),
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              ...tenantHeaders(),
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ active: checked }),
+          },
+        )
+
+        const payload = (await response.json().catch(() => ({}))) as BotStatusResponse
+        if (!response.ok || !payload.ok || typeof payload.active !== "boolean") {
+          throw new Error(payload.error ?? payload.detail ?? "No se pudo actualizar el estado del bot")
+        }
+
+        setBotEnabledByConversation((current) => ({
+          ...current,
+          [selectedConversation.id]: payload.active as boolean,
+        }))
+      } catch (toggleError) {
+        setError(toggleError instanceof Error ? toggleError.message : "No se pudo actualizar el estado del bot")
+      } finally {
+        setIsUpdatingBotState(false)
+      }
+    },
+    [isUpdatingBotState, selectedConversation],
+  )
 
   const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] ?? null
@@ -1305,11 +1417,9 @@ export default function AdminConversacionesPage() {
                         <Switch
                           checked={isBotEnabled}
                           onCheckedChange={(checked) => {
-                            setBotEnabledByConversation((current) => ({
-                              ...current,
-                              [selectedConversation.id]: checked,
-                            }))
+                            void handleBotToggle(checked)
                           }}
+                          disabled={isUpdatingBotState}
                           aria-label="Activar bot de IA"
                         />
                       </div>
@@ -1353,7 +1463,10 @@ export default function AdminConversacionesPage() {
                             : null
 
                           return (
-                            <div key={message.id} className={cn("flex", isOutbound ? "justify-end" : "justify-start")}>
+                            <div
+                              key={message.id}
+                              className={cn("flex", isOutbound ? "items-center justify-end gap-2" : "justify-start")}
+                            >
                               <div
                                 className={cn(
                                   "max-w-[78%] space-y-2 rounded-2xl px-4 py-3 text-sm shadow-sm",
@@ -1404,7 +1517,20 @@ export default function AdminConversacionesPage() {
                                   <span>{message.timeLabel || message.dateLabel}</span>
                                   {isOutbound && message.status ? <span>{formatStatus(message.status)}</span> : null}
                                 </div>
+
                               </div>
+
+                              {isOutbound ? (
+                                <span
+                                  title={getOutboundSenderLabel(message)}
+                                  className={cn(
+                                    "mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-white/25 text-[10px] font-semibold text-white shadow",
+                                    message.sentByType === "human" ? "bg-sky-500" : "bg-blue-700",
+                                  )}
+                                >
+                                  {getOutboundSenderInitials(message)}
+                                </span>
+                              ) : null}
                             </div>
                           )
                         })
@@ -1527,7 +1653,7 @@ export default function AdminConversacionesPage() {
 
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button type="button" size="icon" variant="outline" aria-label="Adjuntar">
+                          <Button type="button" size="icon" variant="outline" aria-label="Adjuntar" disabled={isBotEnabled || isSending || isUpdatingBotState}>
                             <Plus className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -1556,8 +1682,13 @@ export default function AdminConversacionesPage() {
                         value={composerText}
                         onChange={(event) => setComposerText(event.target.value)}
                         onKeyDown={handleComposerKeyDown}
-                        placeholder={`Escribe un mensaje para ${selectedConversation.name}`}
+                        placeholder={
+                          isBotEnabled
+                            ? "Bot IA activo: desactívalo para responder manualmente"
+                            : `Escribe un mensaje para ${selectedConversation.name}`
+                        }
                         className="min-h-10 max-h-36 resize-none overflow-y-auto"
+                        disabled={isBotEnabled || isSending || isUpdatingBotState}
                       />
 
                       <Button
@@ -1565,6 +1696,7 @@ export default function AdminConversacionesPage() {
                         size="icon"
                         variant="outline"
                         title={isRecordingAudio ? "Detener grabación" : "Grabar nota de voz"}
+                        disabled={isBotEnabled || isSending || isUpdatingBotState}
                         onClick={() => {
                           if (isRecordingAudio) {
                             stopVoiceRecording()

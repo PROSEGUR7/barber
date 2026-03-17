@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { sendMessageToMeta } from "@/lib/meta-chat"
+import { getBotStatusByConversation, sendMessageToMeta } from "@/lib/meta-chat"
 import { resolveTenantSchemaForRequest } from "@/lib/meta-tenant-config"
 
 export const runtime = "nodejs"
@@ -31,6 +31,14 @@ export async function POST(request: Request, context: Params) {
   }
 
   try {
+    const botStatus = await getBotStatusByConversation(conversationId, tenantSchema)
+    if (botStatus.active) {
+      return jsonError(409, {
+        code: "BOT_ACTIVE_HUMAN_SEND_BLOCKED",
+        error: "El bot IA está activo para este cliente. Desactívalo para responder manualmente.",
+      })
+    }
+
     const form = await request.formData()
     const textValue = form.get("text")
     const fileValue = form.get("file")
@@ -39,6 +47,10 @@ export async function POST(request: Request, context: Params) {
     const text = typeof textValue === "string" ? textValue : ""
     const file = fileValue instanceof File ? fileValue : null
     const contactName = typeof contactNameValue === "string" ? contactNameValue : null
+    const sentByName =
+      request.headers.get("x-user-name")?.trim() ||
+      request.headers.get("x-user-email")?.trim() ||
+      null
 
     const result = await sendMessageToMeta({
       tenantSchema,
@@ -46,6 +58,8 @@ export async function POST(request: Request, context: Params) {
       text,
       file,
       contactName,
+      sentByType: "human",
+      sentByName,
     })
 
     return NextResponse.json(

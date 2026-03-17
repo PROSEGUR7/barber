@@ -14,6 +14,8 @@ type SendInput = {
   to: string
   text: string
   contactName: string | null
+  sentByName: string | null
+  sentByType: "bot" | "human"
 }
 
 function jsonError(status: number, payload: { error: string; code?: string; detail?: string }) {
@@ -30,6 +32,15 @@ function pickString(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
 
+function pickSenderType(value: unknown): "bot" | "human" {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (normalized === "human" || normalized === "humano" || normalized === "agent" || normalized === "asesor") {
+    return "human"
+  }
+
+  return "bot"
+}
+
 async function getInputFromRequest(request: Request): Promise<SendInput> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? ""
 
@@ -40,6 +51,8 @@ async function getInputFromRequest(request: Request): Promise<SendInput> {
       to: pickString(body.to) || pickString(body.waId) || pickString(body.numero) || pickString(body.numeroCliente),
       text: pickString(body.text) || pickString(body.message),
       contactName: pickString(body.contactName) || pickString(body.remitente) || null,
+      sentByName: pickString(body.sentByName) || pickString(body.senderName) || null,
+      sentByType: pickSenderType(body.sentByType ?? body.senderType),
     }
   }
 
@@ -53,6 +66,8 @@ async function getInputFromRequest(request: Request): Promise<SendInput> {
       pickString(form.get("numeroCliente")),
     text: pickString(form.get("text")) || pickString(form.get("message")),
     contactName: pickString(form.get("contactName")) || pickString(form.get("remitente")) || null,
+    sentByName: pickString(form.get("sentByName")) || pickString(form.get("senderName")) || null,
+    sentByType: pickSenderType(form.get("sentByType") ?? form.get("senderType")),
   }
 }
 
@@ -111,6 +126,8 @@ export async function POST(request: Request) {
       to: input.to,
       text: input.text,
       contactName: input.contactName,
+      sentByType: input.sentByType,
+      sentByName: input.sentByName,
     })
 
     return NextResponse.json(
