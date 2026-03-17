@@ -86,7 +86,9 @@ export async function GET(_: Request, context: Params) {
       (typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(wompiTransaction.reference)
-    const isReservationReference = isReservationPaymentReference(wompiTransaction.reference)
+    const isReservationReference =
+      isReservationPaymentReference(wompiTransaction.reference) ||
+      (typeof reconciliation?.appointmentId === "number" && Number.isFinite(reconciliation.appointmentId) && reconciliation.appointmentId > 0)
 
     let billingRegistration: {
       attempted: boolean

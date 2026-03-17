@@ -35,6 +35,11 @@ type ReconcileContext = {
   eventName?: string | null
 }
 
+type ParsedReservationReference = {
+  appointmentId: number | null
+  tenantSchemaHint: string | null
+}
+
 type ReservationClientSnapshot = {
   clientId: number | null
   userId: number | null
@@ -733,10 +738,7 @@ export function verifyWompiWebhookSignature(rawBody: string, payload: WompiWebho
   }
 }
 
-function parseReservationReference(reference: string | null | undefined): {
-  appointmentId: number | null
-  tenantSchemaHint: string | null
-} {
+function parseReservationReference(reference: string | null | undefined): ParsedReservationReference {
   if (!reference) {
     return { appointmentId: null, tenantSchemaHint: null }
   }
@@ -774,6 +776,64 @@ function parseReservationReference(reference: string | null | undefined): {
   return { appointmentId: null, tenantSchemaHint: null }
 }
 
+function getNestedStringValue(source: Record<string, unknown>, path: string): string | null {
+  const segments = path
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+
+  let current: unknown = source
+  for (const segment of segments) {
+    if (typeof current !== "object" || current === null || !(segment in current)) {
+      return null
+    }
+
+    current = (current as Record<string, unknown>)[segment]
+  }
+
+  return typeof current === "string" && current.trim() ? current.trim() : null
+}
+
+function extractReservationReferenceCandidates(transaction: WompiTransactionData): string[] {
+  const tx = transaction as Record<string, unknown>
+  const candidates = [
+    getNestedStringValue(tx, "reference"),
+    getNestedStringValue(tx, "sku"),
+    getNestedStringValue(tx, "payment_link.sku"),
+    getNestedStringValue(tx, "payment_link.reference"),
+    getNestedStringValue(tx, "metadata.sku"),
+    getNestedStringValue(tx, "extra.sku"),
+  ].filter((value): value is string => Boolean(value && value.trim()))
+
+  const unique: string[] = []
+  for (const value of candidates) {
+    if (!unique.includes(value)) {
+      unique.push(value)
+    }
+  }
+
+  return unique
+}
+
+function resolveReservationReference(transaction: WompiTransactionData): {
+  parsed: ParsedReservationReference
+  candidates: string[]
+} {
+  const candidates = extractReservationReferenceCandidates(transaction)
+
+  for (const candidate of candidates) {
+    const parsed = parseReservationReference(candidate)
+    if (parsed.appointmentId) {
+      return { parsed, candidates }
+    }
+  }
+
+  return {
+    parsed: { appointmentId: null, tenantSchemaHint: null },
+    candidates,
+  }
+}
+
 export function isReservationPaymentReference(reference: string | null | undefined): boolean {
   if (typeof reference !== "string") {
     return false
@@ -797,7 +857,7 @@ async function getTenantSchemas(): Promise<string[]> {
 }
 
 async function findTenantForReservationPayment(options: {
-  wompiReference: string
+  wompiReferences: string[]
   wompiTransactionId: string
   appointmentId: number | null
   tenantSchemaHint?: string | null
@@ -807,18 +867,18 @@ async function findTenantForReservationPayment(options: {
     : await getTenantSchemas()
 
   for (const tenantSchema of candidateSchemas) {
-    if (options.wompiReference || options.wompiTransactionId) {
+    if ((options.wompiReferences?.length ?? 0) > 0 || options.wompiTransactionId) {
       const paymentMatch = await pool.query<{ agendamiento_id: number }>(
         tenantSql(
           `SELECT agendamiento_id
              FROM tenant_base.pagos
-            WHERE ($1::text <> '' AND wompi_reference = $1::text)
+            WHERE (COALESCE(array_length($1::text[], 1), 0) > 0 AND wompi_reference = ANY($1::text[]))
                OR ($2::text <> '' AND wompi_transaction_id = $2::text)
             ORDER BY id DESC
             LIMIT 1`,
           tenantSchema,
         ),
-        [options.wompiReference, options.wompiTransactionId],
+        [options.wompiReferences, options.wompiTransactionId],
       )
 
       if (paymentMatch.rowCount > 0) {
@@ -945,12 +1005,14 @@ export async function reconcileWompiTransaction(
   appointmentStatus: AppointmentState | null
   paymentStatus: PaymentState | null
 }> {
-  const parsedReservation = parseReservationReference(transaction.reference)
+  const reservationResolution = resolveReservationReference(transaction)
+  const parsedReservation = reservationResolution.parsed
   const wompiTransactionId = typeof transaction.id === "string" ? transaction.id.trim() : ""
   const wompiReference = typeof transaction.reference === "string" ? transaction.reference.trim() : ""
+  const wompiReferenceCandidates = reservationResolution.candidates
 
   const matchedTenant = await findTenantForReservationPayment({
-    wompiReference,
+    wompiReferences: wompiReferenceCandidates,
     wompiTransactionId,
     appointmentId: parsedReservation.appointmentId,
     tenantSchemaHint: parsedReservation.tenantSchemaHint,
@@ -1116,6 +1178,21 @@ export async function reconcileWompiTransaction(
     }
 
     let nextAppointmentStatus: AppointmentState = appointmentState
+    if (paymentStatus === "completo" && appointmentState === "pendiente") {
+      // Keep existing behavior for standard flow where appointment already starts as pendiente.
+      nextAppointmentStatus = "pendiente"
+    }
+
+    if (paymentStatus === "completo" && appointmentState === "provisional") {
+      await client.query(
+        tenantSql(`UPDATE tenant_base.agendamientos
+            SET estado = 'pendiente'::tenant_base.estado_agendamiento_enum
+          WHERE id = $1`, resolvedTenantSchema),
+        [appointmentId],
+      )
+      nextAppointmentStatus = "pendiente"
+    }
+
     if (shouldCancelAppointment && appointmentState !== "cancelada") {
       await client.query(
         tenantSql(`UPDATE tenant_base.agendamientos

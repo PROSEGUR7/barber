@@ -167,7 +167,9 @@ export async function POST(request: Request) {
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(referenceForTenantContext)
-    const isReservationReference = isReservationPaymentReference(referenceForTenantContext)
+    const isReservationReference =
+      isReservationPaymentReference(referenceForTenantContext) ||
+      (typeof reconciliation?.appointmentId === "number" && Number.isFinite(reconciliation.appointmentId) && reconciliation.appointmentId > 0)
 
     let billingRegistration: {
       attempted: boolean
