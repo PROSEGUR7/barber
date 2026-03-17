@@ -949,6 +949,7 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
   tenantSchema: string | null
   appointmentId: number | null
   appointmentStatus: AppointmentState | null
+  reason: string | null
 }> {
   const appointmentId = parseCitaReference(options.reference)
   if (!appointmentId) {
@@ -958,6 +959,7 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
       tenantSchema: null,
       appointmentId: null,
       appointmentStatus: null,
+      reason: "invalid_reference",
     }
   }
 
@@ -976,6 +978,7 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
       tenantSchema: null,
       appointmentId,
       appointmentStatus: null,
+      reason: "tenant_not_found",
     }
   }
 
@@ -997,6 +1000,7 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
       tenantSchema: resolvedTenantSchema,
       appointmentId: matchedTenant.appointmentId,
       appointmentStatus: updateResult.rows[0].estado,
+      reason: "updated",
     }
   }
 
@@ -1008,12 +1012,15 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
     [matchedTenant.appointmentId],
   )
 
+  const currentStatus = currentStateResult.rows[0]?.estado ?? null
+
   return {
     matched: true,
     updated: false,
     tenantSchema: resolvedTenantSchema,
     appointmentId: matchedTenant.appointmentId,
-    appointmentStatus: currentStateResult.rows[0]?.estado ?? null,
+    appointmentStatus: currentStatus,
+    reason: currentStatus ? "already_not_provisional" : "appointment_not_found",
   }
 }
 

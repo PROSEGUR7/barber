@@ -68,9 +68,16 @@ function wompiMethodToAdminMethod(method: string | undefined): string {
   return "otro"
 }
 
-function shouldBypassInvalidWebhookSignature(): boolean {
+function shouldBypassInvalidWebhookSignature(reference: string | null | undefined): boolean {
   const explicitBypass = (process.env.WOMPI_WEBHOOK_ALLOW_INVALID_SIGNATURE ?? "").trim().toLowerCase()
   if (explicitBypass === "true" || explicitBypass === "1" || explicitBypass === "yes") {
+    return true
+  }
+
+  const explicitCitaBypass =
+    (process.env.WOMPI_WEBHOOK_ALLOW_INVALID_SIGNATURE_CITA ?? "").trim().toLowerCase()
+  const isCitaReference = typeof reference === "string" && /^cita[_-](\d+)$/i.test(reference.trim())
+  if (isCitaReference && (explicitCitaBypass === "true" || explicitCitaBypass === "1" || explicitCitaBypass === "yes")) {
     return true
   }
 
@@ -106,6 +113,8 @@ export async function POST(request: Request) {
       currency: payload?.data?.transaction?.currency ?? null,
     })
 
+    const incomingReference =
+      typeof payload?.data?.transaction?.reference === "string" ? payload.data.transaction.reference.trim() : null
     const signatureCheck = verifyWompiWebhookSignature(rawBody, payload)
     console.log("[WOMPI_WEBHOOK_TRACE_SIGNATURE]", {
       dbTarget,
@@ -116,10 +125,11 @@ export async function POST(request: Request) {
     })
 
     if (!signatureCheck.valid) {
-      const bypassInvalidSignature = shouldBypassInvalidWebhookSignature()
+      const bypassInvalidSignature = shouldBypassInvalidWebhookSignature(incomingReference)
       if (!bypassInvalidSignature) {
         console.warn("[WOMPI_WEBHOOK_IGNORED_INVALID_SIGNATURE]", {
           reason: signatureCheck.reason,
+          reference: incomingReference,
         })
 
         return NextResponse.json(
@@ -134,6 +144,7 @@ export async function POST(request: Request) {
 
       console.warn("[WOMPI_WEBHOOK_BYPASS_INVALID_SIGNATURE]", {
         reason: signatureCheck.reason,
+        reference: incomingReference,
       })
     }
 
@@ -209,6 +220,7 @@ export async function POST(request: Request) {
       tenantSchema: string | null
       appointmentId: number | null
       appointmentStatus: string | null
+      reason: string | null
     } | null = null
 
     if (normalizedEventName === "transaction.updated" && normalizedStatus === "APPROVED" && citaReferenceMatch) {
@@ -228,6 +240,18 @@ export async function POST(request: Request) {
         reference: referenceForTenantContext,
         result: citaPromotion,
       })
+
+      if (!citaPromotion.updated) {
+        console.error("[WOMPI_WEBHOOK_CITA_PROMOTION_NOT_UPDATED]", {
+          event: eventName,
+          transactionId,
+          reference: referenceForTenantContext,
+          reason: citaPromotion.reason,
+          tenantSchema: citaPromotion.tenantSchema,
+          appointmentId: citaPromotion.appointmentId,
+          appointmentStatus: citaPromotion.appointmentStatus,
+        })
+      }
     }
 
     let billingRegistration: {
