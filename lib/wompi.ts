@@ -2,6 +2,7 @@ import { createHash } from "crypto"
 
 import { BASE_TENANT_SCHEMA, findUserById } from "@/lib/auth"
 import { pool } from "@/lib/db"
+import { sendMessageToMeta } from "@/lib/meta-chat"
 import { normalizeTenantSchema, tenantSql } from "@/lib/tenant"
 import { getReservationPricingBreakdown } from "@/lib/wallet"
 
@@ -939,6 +940,121 @@ function parseCitaReference(reference: string | null | undefined): number | null
   return appointmentId
 }
 
+function normalizeWhatsappRecipient(phoneRaw: string | null | undefined): string | null {
+  if (typeof phoneRaw !== "string") {
+    return null
+  }
+
+  const digits = phoneRaw.replace(/\D/g, "")
+  if (!digits) {
+    return null
+  }
+
+  return digits
+}
+
+function formatAppointmentDateLabel(value: Date): string {
+  return new Intl.DateTimeFormat("es-CO", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Bogota",
+  }).format(value)
+}
+
+function formatAppointmentTimeLabel(value: Date): string {
+  return new Intl.DateTimeFormat("es-CO", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Bogota",
+  }).format(value)
+}
+
+async function sendReservationPaymentConfirmationWhatsApp(options: {
+  tenantSchema: string
+  appointmentId: number
+}): Promise<void> {
+  try {
+    const detailsResult = await pool.query<{
+      cliente_nombre: string | null
+      cliente_telefono: string | null
+      fecha_cita: string | Date | null
+      barbero_nombre: string | null
+    }>(
+      tenantSql(`SELECT c.nombre AS cliente_nombre,
+            c.telefono AS cliente_telefono,
+            a.fecha_cita,
+            e.nombre AS barbero_nombre
+         FROM tenant_base.agendamientos a
+         LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
+         LEFT JOIN tenant_base.empleados e ON e.id = a.empleado_id
+        WHERE a.id = $1
+        LIMIT 1`, options.tenantSchema),
+      [options.appointmentId],
+    )
+
+    if (detailsResult.rowCount === 0) {
+      console.error("[WOMPI_WHATSAPP_CONFIRMATION_SKIPPED]", {
+        reason: "appointment_not_found",
+        tenantSchema: options.tenantSchema,
+        appointmentId: options.appointmentId,
+      })
+      return
+    }
+
+    const details = detailsResult.rows[0]
+    const recipient = normalizeWhatsappRecipient(details.cliente_telefono)
+    if (!recipient) {
+      console.error("[WOMPI_WHATSAPP_CONFIRMATION_SKIPPED]", {
+        reason: "missing_phone",
+        tenantSchema: options.tenantSchema,
+        appointmentId: options.appointmentId,
+      })
+      return
+    }
+
+    const appointmentDate = details.fecha_cita ? new Date(details.fecha_cita) : null
+    if (!appointmentDate || Number.isNaN(appointmentDate.getTime())) {
+      console.error("[WOMPI_WHATSAPP_CONFIRMATION_SKIPPED]", {
+        reason: "invalid_appointment_date",
+        tenantSchema: options.tenantSchema,
+        appointmentId: options.appointmentId,
+      })
+      return
+    }
+
+    const clienteNombre = (details.cliente_nombre ?? "Cliente").trim() || "Cliente"
+    const barberoNombre = (details.barbero_nombre ?? "nuestro equipo").trim() || "nuestro equipo"
+    const fecha = formatAppointmentDateLabel(appointmentDate)
+    const hora = formatAppointmentTimeLabel(appointmentDate)
+
+    const message = `¡Pago confirmado! ✅ Hola ${clienteNombre}, hemos recibido tu abono. Tu cita para el ${fecha} a las ${hora} con ${barberoNombre} ha sido confirmada exitosamente. ¡Te esperamos!`
+
+    await sendMessageToMeta({
+      tenantSchema: options.tenantSchema,
+      to: recipient,
+      text: message,
+      contactName: clienteNombre,
+      sentByType: "bot",
+      sentByName: "Bot confirmaciones",
+    })
+
+    console.log("[WOMPI_WHATSAPP_CONFIRMATION_SENT]", {
+      tenantSchema: options.tenantSchema,
+      appointmentId: options.appointmentId,
+      recipient,
+    })
+  } catch (error) {
+    console.error("[WOMPI_WHATSAPP_CONFIRMATION_ERROR]", {
+      tenantSchema: options.tenantSchema,
+      appointmentId: options.appointmentId,
+      error,
+    })
+  }
+}
+
 export async function promoteAppointmentPendingFromCitaReference(options: {
   reference: string | null | undefined
   wompiTransactionId?: string | null
@@ -994,6 +1110,11 @@ export async function promoteAppointmentPendingFromCitaReference(options: {
   )
 
   if (updateResult.rowCount > 0) {
+    await sendReservationPaymentConfirmationWhatsApp({
+      tenantSchema: resolvedTenantSchema,
+      appointmentId: matchedTenant.appointmentId,
+    })
+
     return {
       matched: true,
       updated: true,
@@ -1303,6 +1424,7 @@ export async function reconcileWompiTransaction(
   }
   let shouldEmitN8nWebhook = false
   let nextAppointmentStatusForEvent: AppointmentState | null = null
+  let shouldSendWhatsappConfirmation = false
 
   try {
     await client.query("BEGIN")
@@ -1444,6 +1566,7 @@ export async function reconcileWompiTransaction(
         [appointmentId],
       )
       nextAppointmentStatus = "pendiente"
+      shouldSendWhatsappConfirmation = true
     }
 
     if (shouldCancelAppointment && appointmentState !== "cancelada") {
@@ -1487,6 +1610,13 @@ export async function reconcileWompiTransaction(
           phone: clientSnapshot.clientPhone,
           email: clientSnapshot.userEmail,
         },
+      })
+    }
+
+    if (shouldSendWhatsappConfirmation) {
+      await sendReservationPaymentConfirmationWhatsApp({
+        tenantSchema: resolvedTenantSchema,
+        appointmentId,
       })
     }
 
