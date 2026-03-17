@@ -13,6 +13,7 @@
     "db:apply:senior-hardening": "node scripts/apply-senior-hardening-schema.js",
     "db:apply:barber-reviews": "node scripts/apply-barber-reviews-schema.js",
     "db:apply:meta-credenciales": "node scripts/apply-meta-credenciales-schema.js",
+    "db:apply:payment-status-sync-trigger": "node scripts/apply-payment-status-sync-trigger.js",
     "db:apply:plan-change-payment": "node scripts/apply-admin-platform-plan-change-payment.js",
     "db:apply:prepare-subscription-context": "node scripts/apply-admin-platform-preparar-contexto-suscripcion.js",
     "billing:sync-status": "node scripts/sync-billing-status.js",
