@@ -16,7 +16,7 @@ type WompiMerchantResponse = {
   }
 }
 
-type AppointmentState = "pendiente" | "completada" | "cancelada"
+type AppointmentState = "provisional" | "pendiente" | "completada" | "cancelada"
 type PaymentState = "completo" | "pendiente" | "fallido"
 type PaymentMethod = "efectivo" | "tarjeta" | "nequi" | "daviplata" | "otro"
 
@@ -24,6 +24,7 @@ export type WompiTransactionData = {
   id?: string | null
   status?: string | null
   reference?: string | null
+  customer_email?: string | null
   amount_in_cents?: number | null
   currency?: string | null
   payment_method_type?: string | null
@@ -772,6 +773,17 @@ function parseReservationReference(reference: string | null | undefined): Parsed
   }
 
   // Compatibility mode for n8n references like: cita_32
+  const n8nTenantAware = /^cita[_-](tenant_[a-z0-9_]+)[_-](\d+)$/i.exec(trimmed)
+  if (n8nTenantAware) {
+    const tenantSchemaHint = normalizeTenantSchema(n8nTenantAware[1])
+    const appointmentId = Number.parseInt(n8nTenantAware[2], 10)
+    return {
+      appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
+      tenantSchemaHint,
+    }
+  }
+
+  // Compatibility mode for n8n references like: cita_32
   const n8nCompact = /^cita[_-](\d+)$/i.exec(trimmed)
   if (n8nCompact) {
     const appointmentId = Number.parseInt(n8nCompact[1], 10)
@@ -919,6 +931,7 @@ async function findTenantForReservationPayment(options: {
   wompiReferences: string[]
   wompiTransactionId: string
   appointmentId: number | null
+  customerEmail?: string | null
   tenantSchemaHint?: string | null
 }): Promise<{ tenantSchema: string; appointmentId: number } | null> {
   const candidateSchemas = options.tenantSchemaHint
@@ -948,17 +961,87 @@ async function findTenantForReservationPayment(options: {
       }
     }
 
-    if (options.appointmentId) {
-      const appointmentMatch = await pool.query<{ id: number }>(
-        tenantSql(`SELECT id FROM tenant_base.agendamientos WHERE id = $1 LIMIT 1`, tenantSchema),
-        [options.appointmentId],
+    const normalizedCustomerEmail = (options.customerEmail ?? "").trim().toLowerCase()
+    if (options.appointmentId && normalizedCustomerEmail) {
+      const appointmentByEmailMatch = await pool.query<{ id: number }>(
+        tenantSql(
+          `SELECT a.id
+             FROM tenant_base.agendamientos a
+             JOIN tenant_base.clientes c ON c.id = a.cliente_id
+             JOIN tenant_base.users u ON u.id = c.user_id
+            WHERE a.id = $1
+              AND lower(trim(u.correo)) = $2
+            LIMIT 1`,
+          tenantSchema,
+        ),
+        [options.appointmentId, normalizedCustomerEmail],
       )
 
-      if (appointmentMatch.rowCount > 0) {
+      if (appointmentByEmailMatch.rowCount > 0) {
         return {
           tenantSchema,
           appointmentId: options.appointmentId,
         }
+      }
+    }
+  }
+
+  if (options.appointmentId) {
+    const tenantsWithAppointment: Array<{ tenantSchema: string; appointmentStatus: string | null }> = []
+
+    for (const tenantSchema of candidateSchemas) {
+      const appointmentMatch = await pool.query<{ id: number; estado: string | null }>(
+        tenantSql(`SELECT id, estado::text AS estado FROM tenant_base.agendamientos WHERE id = $1 LIMIT 1`, tenantSchema),
+        [options.appointmentId],
+      )
+
+      if (appointmentMatch.rowCount > 0) {
+        tenantsWithAppointment.push({
+          tenantSchema,
+          appointmentStatus: appointmentMatch.rows[0].estado,
+        })
+      }
+    }
+
+    if (tenantsWithAppointment.length === 1) {
+      return {
+        tenantSchema: tenantsWithAppointment[0].tenantSchema,
+        appointmentId: options.appointmentId,
+      }
+    }
+
+    if (tenantsWithAppointment.length > 1) {
+      const provisionalMatches = tenantsWithAppointment.filter(
+        (item) => (item.appointmentStatus ?? "").trim().toLowerCase() === "provisional",
+      )
+
+      if (provisionalMatches.length === 1) {
+        return {
+          tenantSchema: provisionalMatches[0].tenantSchema,
+          appointmentId: options.appointmentId,
+        }
+      }
+
+      const pendingMatches = tenantsWithAppointment.filter(
+        (item) => (item.appointmentStatus ?? "").trim().toLowerCase() === "pendiente",
+      )
+
+      if (pendingMatches.length === 1) {
+        return {
+          tenantSchema: pendingMatches[0].tenantSchema,
+          appointmentId: options.appointmentId,
+        }
+      }
+
+      console.warn("[WOMPI_RESERVATION_AMBIGUOUS_TENANT]", {
+        appointmentId: options.appointmentId,
+        tenants: tenantsWithAppointment.map((item) => item.tenantSchema),
+        wompiReferences: options.wompiReferences,
+      })
+
+      return {
+        tenantSchema: tenantsWithAppointment[0].tenantSchema,
+        appointmentId: options.appointmentId,
       }
     }
   }
@@ -1074,6 +1157,7 @@ export async function reconcileWompiTransaction(
     wompiReferences: wompiReferenceCandidates,
     wompiTransactionId,
     appointmentId: parsedReservation.appointmentId,
+    customerEmail: typeof transaction.customer_email === "string" ? transaction.customer_email : null,
     tenantSchemaHint: parsedReservation.tenantSchemaHint,
   })
 
