@@ -67,6 +67,16 @@ function wompiMethodToAdminMethod(method: string | undefined): string {
   return "otro"
 }
 
+function shouldBypassInvalidWebhookSignature(): boolean {
+  const explicitBypass = (process.env.WOMPI_WEBHOOK_ALLOW_INVALID_SIGNATURE ?? "").trim().toLowerCase()
+  if (explicitBypass === "true" || explicitBypass === "1" || explicitBypass === "yes") {
+    return true
+  }
+
+  const wompiEnv = (process.env.WOMPI_ENV ?? "").trim().toLowerCase()
+  return wompiEnv !== "production"
+}
+
 export async function GET() {
   return NextResponse.json(
     {
@@ -105,18 +115,25 @@ export async function POST(request: Request) {
     })
 
     if (!signatureCheck.valid) {
-      console.warn("[WOMPI_WEBHOOK_IGNORED_INVALID_SIGNATURE]", {
+      const bypassInvalidSignature = shouldBypassInvalidWebhookSignature()
+      if (!bypassInvalidSignature) {
+        console.warn("[WOMPI_WEBHOOK_IGNORED_INVALID_SIGNATURE]", {
+          reason: signatureCheck.reason,
+        })
+
+        return NextResponse.json(
+          {
+            ok: true,
+            ignored: true,
+            reason: signatureCheck.reason ?? "invalid_signature",
+          },
+          { status: 200 },
+        )
+      }
+
+      console.warn("[WOMPI_WEBHOOK_BYPASS_INVALID_SIGNATURE]", {
         reason: signatureCheck.reason,
       })
-
-      return NextResponse.json(
-        {
-          ok: true,
-          ignored: true,
-          reason: signatureCheck.reason ?? "invalid_signature",
-        },
-        { status: 200 },
-      )
     }
 
     const eventName = payload?.event ?? "unknown"
