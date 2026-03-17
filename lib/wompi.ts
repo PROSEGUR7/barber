@@ -753,15 +753,34 @@ function parseReservationReference(reference: string | null | undefined): {
   }
 
   const legacy = /^RES-(\d+)-\d+$/i.exec(trimmed)
-  if (!legacy) {
-    return { appointmentId: null, tenantSchemaHint: null }
+  if (legacy) {
+    const appointmentId = Number.parseInt(legacy[1], 10)
+    return {
+      appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
+      tenantSchemaHint: null,
+    }
   }
 
-  const appointmentId = Number.parseInt(legacy[1], 10)
-  return {
-    appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
-    tenantSchemaHint: null,
+  // Compatibility mode for n8n references like: cita_32
+  const n8nCompact = /^cita[_-](\d+)$/i.exec(trimmed)
+  if (n8nCompact) {
+    const appointmentId = Number.parseInt(n8nCompact[1], 10)
+    return {
+      appointmentId: Number.isFinite(appointmentId) && appointmentId > 0 ? appointmentId : null,
+      tenantSchemaHint: null,
+    }
   }
+
+  return { appointmentId: null, tenantSchemaHint: null }
+}
+
+export function isReservationPaymentReference(reference: string | null | undefined): boolean {
+  if (typeof reference !== "string") {
+    return false
+  }
+
+  const normalized = reference.trim().toUpperCase()
+  return normalized.startsWith("RES-") || normalized.startsWith("CITA_") || normalized.startsWith("CITA-")
 }
 
 async function getTenantSchemas(): Promise<string[]> {

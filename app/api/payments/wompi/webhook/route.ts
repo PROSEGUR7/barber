@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import {
   fetchWompiTransactionById,
+  isReservationPaymentReference,
   parseTenantBillingReference,
   reconcileWompiTransaction,
   verifyWompiWebhookSignature,
@@ -166,7 +167,7 @@ export async function POST(request: Request) {
       (typeof transactionForReconciliation?.reference === "string" && transactionForReconciliation.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(referenceForTenantContext)
-    const isReservationReference = referenceForTenantContext.toUpperCase().startsWith("RES-")
+    const isReservationReference = isReservationPaymentReference(referenceForTenantContext)
 
     let billingRegistration: {
       attempted: boolean

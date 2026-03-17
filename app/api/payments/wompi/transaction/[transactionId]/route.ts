@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server"
 
-import { fetchWompiTransactionById, parseTenantBillingReference, reconcileWompiTransaction } from "@/lib/wompi"
+import {
+  fetchWompiTransactionById,
+  isReservationPaymentReference,
+  parseTenantBillingReference,
+  reconcileWompiTransaction,
+} from "@/lib/wompi"
 import { prepareTenantSubscriptionContext, registerTenantPaymentWithIdempotency, resolveTenantBillingChargeContext } from "@/lib/admin-billing"
 
 type Params = {
@@ -81,8 +86,7 @@ export async function GET(_: Request, context: Params) {
       (typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim()) ||
       ""
     const parsedReference = parseTenantBillingReference(wompiTransaction.reference)
-    const isReservationReference =
-      typeof wompiTransaction.reference === "string" && wompiTransaction.reference.trim().toUpperCase().startsWith("RES-")
+    const isReservationReference = isReservationPaymentReference(wompiTransaction.reference)
 
     let billingRegistration: {
       attempted: boolean
