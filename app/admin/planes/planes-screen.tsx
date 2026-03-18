@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { formatCop, isSaasPlanId, SAAS_PLANS, type SaasPlanId } from "@/lib/saas-plans"
 
 const PENDING_PLAN_CHECKOUT_REFERENCE_KEY = "wompiPendingPlanCheckoutReference"
@@ -59,6 +60,7 @@ const ICON_BY_PLAN: Record<SaasPlanId, typeof Building2> = {
 }
 
 export default function AdminPlanesScreen() {
+  const isMobile = useIsMobile()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [plans, setPlans] = useState<PlanCatalogItem[]>(
@@ -619,10 +621,10 @@ export default function AdminPlanesScreen() {
 
   return (
     <div className="min-h-screen bg-background">
-      <main className="container mx-auto space-y-4 px-4 py-4">
+      <main className="container mx-auto space-y-4 px-3 py-4 sm:px-4">
         <header className="space-y-1.5">
-          <h1 className="text-3xl font-bold">Planes</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-bold sm:text-3xl">Planes</h1>
+          <p className="text-sm text-muted-foreground sm:text-base">
             Escoge uno de los 4 planes disponibles para gestionar tu suscripción.
           </p>
           {inlineNotice && (
@@ -664,14 +666,14 @@ export default function AdminPlanesScreen() {
           )}
         </header>
 
-        <section className="mx-auto w-full max-w-6xl space-y-3">
-          <div className="inline-flex rounded-lg border bg-background p-1">
+        <section className="mx-auto w-full max-w-6xl space-y-3 min-w-0">
+          <div className="flex w-full rounded-lg border bg-background p-1 sm:inline-flex sm:w-auto">
             {cycleOptions.map((option) => (
               <Button
                 key={option.value}
                 type="button"
                 variant={selectedBillingCycle === option.value ? "default" : "ghost"}
-                className="h-8 px-3 text-sm"
+                className="h-8 flex-1 px-2 text-sm sm:flex-none sm:px-3"
                 onClick={() => setSelectedBillingCycle(option.value)}
               >
                 {option.label}
@@ -680,7 +682,7 @@ export default function AdminPlanesScreen() {
           </div>
 
           {!isSubscriptionStateLoading && hasPaidAccess && activePlanCode ? (
-            <div className="grid gap-2 lg:grid-cols-3">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <Card className="gap-1 py-2.5">
                 <CardHeader className="space-y-0.5 p-2.5">
                   <CardTitle className="text-sm">Plan actual</CardTitle>
@@ -703,7 +705,7 @@ export default function AdminPlanesScreen() {
                 <CardContent className="px-2.5 pb-2.5 pt-0 text-sm text-muted-foreground">{remainingTimeHint ?? "Sin cobertura acumulada adicional."}</CardContent>
               </Card>
 
-              <Card className="gap-1.5 py-3 lg:col-span-3">
+              <Card className="gap-1.5 py-3 sm:col-span-2 lg:col-span-3">
                 <CardHeader className="space-y-1 p-3">
                   <CardTitle>Acciones de plan</CardTitle>
                   <CardDescription>Aquí puedes adelantar el pago de tu plan actual o cambiar a otro plan.</CardDescription>
@@ -714,13 +716,17 @@ export default function AdminPlanesScreen() {
                       Tu plan está vencido o en mora ({accessReason ?? "sin acceso"}). Debes pagar para volver a habilitar las demás secciones.
                     </p>
                   )}
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid gap-2 sm:flex sm:flex-wrap">
                     <Button
-                      className="h-8 text-sm"
+                      className="h-auto min-h-8 whitespace-normal py-2 text-left text-sm"
                       onClick={() => void handleSelectPlan(activePlanCode, (activeBillingCycle === "mensual" || activeBillingCycle === "trimestral" || activeBillingCycle === "anual") ? activeBillingCycle : selectedBillingCycle)}
                       disabled={checkoutPlanId === activePlanCode}
                     >
-                      {checkoutPlanId === activePlanCode ? "Cargando..." : `Adelantar pago de ${activePlanName ?? "plan actual"} (${activeBillingCycle ?? selectedBillingCycle})`}
+                      {checkoutPlanId === activePlanCode
+                        ? "Cargando..."
+                        : isMobile
+                          ? `Adelantar pago (${activeBillingCycle ?? selectedBillingCycle})`
+                          : `Adelantar pago de ${activePlanName ?? "plan actual"} (${activeBillingCycle ?? selectedBillingCycle})`}
                     </Button>
                     <Button className="h-8 text-sm" variant="outline" onClick={() => setShowPlanCatalog((previous) => !previous)}>
                       {showPlanCatalog ? "Ocultar otros planes" : "Quiero cambiar de plan"}
@@ -733,7 +739,7 @@ export default function AdminPlanesScreen() {
         </section>
 
         {!isSubscriptionStateLoading && (!hasPaidAccess || showPlanCatalog) && (
-          <section className="mx-auto grid max-w-6xl gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="mx-auto grid max-w-6xl min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {plans.map((plan) => {
               const Icon = ICON_BY_PLAN[plan.id]
               const isSelected = selectedPlanId === plan.id
@@ -749,7 +755,7 @@ export default function AdminPlanesScreen() {
                         <Icon className="h-5 w-5 text-primary" />
                       </div>
                       <div className="flex shrink-0 items-baseline gap-1 text-right">
-                        <span className="whitespace-nowrap text-lg font-bold leading-none lg:text-xl">{formatCop(priceByCycle)}</span>
+                        <span className="whitespace-nowrap text-base font-bold leading-none sm:text-lg lg:text-xl">{formatCop(priceByCycle)}</span>
                         <span className="whitespace-nowrap text-xs text-muted-foreground">{durationLabel}</span>
                       </div>
                     </div>

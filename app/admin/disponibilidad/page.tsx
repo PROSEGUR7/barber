@@ -485,11 +485,7 @@ export default function AdminDisponibilidadPage() {
   ])
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Disponibilidad del equipo</h1>
-        <p className="text-muted-foreground">Administra horarios semanales y excepciones por fecha para cada empleado.</p>
-      </div>
+    <div className="min-w-0 space-y-6 overflow-x-hidden p-4 sm:p-6">
 
       {pageError ? (
         <Alert variant="destructive">
@@ -509,7 +505,7 @@ export default function AdminDisponibilidadPage() {
             onValueChange={(value) => setSelectedEmployeeId(Number(value))}
             disabled={areEmployeesLoading || employees.length === 0}
           >
-            <SelectTrigger className="max-w-lg">
+            <SelectTrigger className="w-full max-w-lg">
               <SelectValue
                 placeholder={areEmployeesLoading ? "Cargando empleados..." : "Selecciona un empleado"}
               />
@@ -528,13 +524,13 @@ export default function AdminDisponibilidadPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Horario semanal</CardTitle>
             <CardDescription>Define días activos y rango de horas base del empleado.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="min-w-0 space-y-4">
             {isLoadingWeekly ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -542,53 +538,93 @@ export default function AdminDisponibilidadPage() {
               </div>
             ) : null}
 
-            <div className="space-y-3">
+            <div className="space-y-3 min-w-0">
               {orderedWeekly.map((rule) => (
-                <div key={rule.dayOfWeek} className="flex items-center gap-3">
-                  <div className="w-28 text-sm font-medium">{DOW_LABELS[rule.dayOfWeek]}</div>
+                <div key={rule.dayOfWeek} className="rounded-md border p-3 sm:border-0 sm:p-0">
+                  <div className="mb-2 flex items-center justify-between sm:mb-0 sm:grid sm:grid-cols-[112px_auto_1fr_auto_1fr] sm:items-center sm:gap-3">
+                    <div className="text-sm font-medium">{DOW_LABELS[rule.dayOfWeek]}</div>
 
-                  <Checkbox
-                    checked={rule.isEnabled}
-                    onCheckedChange={(checked) => {
-                      setWeeklyRules((prev) =>
-                        prev.map((item) =>
-                          item.dayOfWeek === rule.dayOfWeek ? { ...item, isEnabled: Boolean(checked) } : item,
-                        ),
-                      )
-                    }}
-                  />
+                    <Checkbox
+                      checked={rule.isEnabled}
+                      onCheckedChange={(checked) => {
+                        setWeeklyRules((prev) =>
+                          prev.map((item) =>
+                            item.dayOfWeek === rule.dayOfWeek ? { ...item, isEnabled: Boolean(checked) } : item,
+                          ),
+                        )
+                      }}
+                    />
 
-                  <Input
-                    type="time"
-                    value={rule.startTime}
-                    disabled={!rule.isEnabled}
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setWeeklyRules((prev) =>
-                        prev.map((item) =>
-                          item.dayOfWeek === rule.dayOfWeek ? { ...item, startTime: value } : item,
-                        ),
-                      )
-                    }}
-                    className="w-32"
-                  />
+                    <Input
+                      type="time"
+                      value={rule.startTime}
+                      disabled={!rule.isEnabled}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setWeeklyRules((prev) =>
+                          prev.map((item) =>
+                            item.dayOfWeek === rule.dayOfWeek ? { ...item, startTime: value } : item,
+                          ),
+                        )
+                      }}
+                      className="hidden w-full min-w-0 sm:block sm:w-full"
+                    />
 
-                  <span className="text-sm text-muted-foreground">a</span>
+                    <span className="hidden text-sm text-muted-foreground sm:inline">a</span>
 
-                  <Input
-                    type="time"
-                    value={rule.endTime}
-                    disabled={!rule.isEnabled}
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setWeeklyRules((prev) =>
-                        prev.map((item) =>
-                          item.dayOfWeek === rule.dayOfWeek ? { ...item, endTime: value } : item,
-                        ),
-                      )
-                    }}
-                    className="w-32"
-                  />
+                    <Input
+                      type="time"
+                      value={rule.endTime}
+                      disabled={!rule.isEnabled}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setWeeklyRules((prev) =>
+                          prev.map((item) =>
+                            item.dayOfWeek === rule.dayOfWeek ? { ...item, endTime: value } : item,
+                          ),
+                        )
+                      }}
+                      className="hidden w-full min-w-0 sm:block sm:w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 sm:hidden">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Hora inicio</Label>
+                      <Input
+                        type="time"
+                        value={rule.startTime}
+                        disabled={!rule.isEnabled}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setWeeklyRules((prev) =>
+                            prev.map((item) =>
+                              item.dayOfWeek === rule.dayOfWeek ? { ...item, startTime: value } : item,
+                            ),
+                          )
+                        }}
+                        className="w-full min-w-0"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Hora fin</Label>
+                      <Input
+                        type="time"
+                        value={rule.endTime}
+                        disabled={!rule.isEnabled}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setWeeklyRules((prev) =>
+                            prev.map((item) =>
+                              item.dayOfWeek === rule.dayOfWeek ? { ...item, endTime: value } : item,
+                            ),
+                          )
+                        }}
+                        className="w-full min-w-0"
+                      />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -609,7 +645,7 @@ export default function AdminDisponibilidadPage() {
               Marca día libre completo o un rango especial dentro del horario semanal.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="min-w-0 space-y-4">
             <div className="grid gap-4 md:grid-cols-[1fr_220px]">
               <div className="rounded-md border p-3">
                 <Calendar

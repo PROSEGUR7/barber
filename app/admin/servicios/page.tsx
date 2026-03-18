@@ -306,46 +306,11 @@ export default function AdminServiciosPage() {
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Servicios</h1>
-          <p className="text-muted-foreground">
-            Administra el catálogo de servicios, precios y duraciones ofrecidas por la barbería.
-          </p>
-        </header>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Servicios totales</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(services.length)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Servicios activos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.active)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Precio promedio</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatCurrency(metrics.averagePrice)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Duración promedio</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(Math.round(metrics.averageDuration))} min
-              </CardDescription>
-            </CardHeader>
-          </Card>
+        <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CompactMetricCard title="Servicios totales" value={formatNumber(services.length)} />
+          <CompactMetricCard title="Servicios activos" value={formatNumber(metrics.active)} />
+          <CompactMetricCard title="Precio promedio" value={formatCurrency(metrics.averagePrice)} className="col-span-2 xl:col-span-1" />
+          <CompactMetricCard title="Duración promedio" value={`${formatNumber(Math.round(metrics.averageDuration))} min`} className="col-span-2 xl:col-span-1" />
         </section>
 
         <section className="space-y-4">
@@ -532,6 +497,29 @@ function ServicesTableSkeleton() {
           <Skeleton key={index} className="h-10 w-full" />
         ))}
       </CardContent>
+    </Card>
+  )
+}
+
+function CompactMetricCard({
+  title,
+  value,
+  className,
+}: {
+  title: string
+  value: string
+  className?: string
+}) {
+  return (
+    <Card className={className}>
+      <CardHeader className="space-y-1 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium text-muted-foreground sm:text-sm">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-[2rem] font-bold leading-none text-foreground sm:text-3xl">
+          {value}
+        </CardDescription>
+      </CardHeader>
     </Card>
   )
 }

@@ -418,44 +418,11 @@ export default function AdminClientsPage() {
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Gestión de clientes</h1>
-          <p className="text-muted-foreground">Revisa historial, clasificaciones y registra nuevos clientes.</p>
-        </header>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Clientes registrados</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(clients.length)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Citas totales</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.totalAppointments)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Citas próximas</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.upcomingAppointments)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Monto invertido</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatCurrency(metrics.totalSpent)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
+        <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CompactMetricCard title="Clientes registrados" value={formatNumber(clients.length)} />
+          <CompactMetricCard title="Citas totales" value={formatNumber(metrics.totalAppointments)} />
+          <CompactMetricCard title="Citas próximas" value={formatNumber(metrics.upcomingAppointments)} />
+          <CompactMetricCard title="Monto invertido" value={formatCurrency(metrics.totalSpent)} className="col-span-2 xl:col-span-1" />
         </section>
 
         <section className="space-y-4">
@@ -722,6 +689,29 @@ export default function AdminClientsPage() {
         </Sheet>
       </main>
     </div>
+  )
+}
+
+function CompactMetricCard({
+  title,
+  value,
+  className,
+}: {
+  title: string
+  value: string
+  className?: string
+}) {
+  return (
+    <Card className={className}>
+      <CardHeader className="space-y-1 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium text-muted-foreground sm:text-sm">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-[2rem] font-bold leading-none text-foreground sm:text-3xl">
+          {value}
+        </CardDescription>
+      </CardHeader>
+    </Card>
   )
 }
 

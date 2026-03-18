@@ -158,54 +158,12 @@ export default function AdminPagosPage() {
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Pagos y facturación</h1>
-          <p className="text-muted-foreground">
-            Visualiza los pagos de suscripción Fullstack registrados en admin_platform para tu tenant.
-          </p>
-        </header>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Movimientos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.totalRecords)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pagos realizados</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.paidRecords)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pendientes / otros</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(metrics.pendingRecords)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Monto pagado</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatCurrency(metrics.paidAmount)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Monto total registrado</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatCurrency(metrics.totalAmount)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
+        <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <CompactMetricCard title="Movimientos" value={formatNumber(metrics.totalRecords)} />
+          <CompactMetricCard title="Pagos realizados" value={formatNumber(metrics.paidRecords)} />
+          <CompactMetricCard title="Pendientes / otros" value={formatNumber(metrics.pendingRecords)} />
+          <CompactMetricCard title="Monto pagado" value={formatCurrency(metrics.paidAmount)} className="col-span-2 xl:col-span-1" />
+          <CompactMetricCard title="Monto total registrado" value={formatCurrency(metrics.totalAmount)} className="col-span-2 xl:col-span-1" />
         </section>
 
         <section className="space-y-4">
@@ -284,6 +242,29 @@ function PaymentsTableSkeleton() {
           <Skeleton key={index} className="h-10 w-full" />
         ))}
       </CardContent>
+    </Card>
+  )
+}
+
+function CompactMetricCard({
+  title,
+  value,
+  className,
+}: {
+  title: string
+  value: string
+  className?: string
+}) {
+  return (
+    <Card className={className}>
+      <CardHeader className="space-y-1 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium text-muted-foreground sm:text-sm">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-[1.9rem] font-bold leading-none text-foreground sm:text-3xl">
+          {value}
+        </CardDescription>
+      </CardHeader>
     </Card>
   )
 }

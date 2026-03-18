@@ -242,78 +242,12 @@ export default function AdminAgendamientosPage() {
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto space-y-8 px-4 py-8">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Agendamientos</h1>
-          <p className="text-muted-foreground">
-            Visualiza la agenda completa de la barbería con información de clientes, empleados y servicios.
-          </p>
-        </header>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Agendamientos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">{formatNumber(metrics.total)}</CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Activos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">{formatNumber(metrics.active)}</CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Completados</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">{formatNumber(metrics.completed)}</CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Cancelados</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">{formatNumber(metrics.cancelled)}</CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Monto pagado</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">{formatCurrency(metrics.paidAmount)}</CardDescription>
-            </CardHeader>
-          </Card>
-        </section>
-
-        <section className="space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-semibold">Agenda completa</h2>
-              <p className="text-muted-foreground">Filtra por estado o busca por cliente, empleado o servicio.</p>
-            </div>
-            <Button variant="outline" onClick={handleReload}>
-              Recargar
-            </Button>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <Input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Buscar por cliente, empleado o servicio"
-            />
-
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Filtrar por estado" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los estados</SelectItem>
-                {statusOptions.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {getStatusLabel(status)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <CompactMetricCard title="Agendamientos" value={formatNumber(metrics.total)} />
+          <CompactMetricCard title="Activos" value={formatNumber(metrics.active)} />
+          <CompactMetricCard title="Completados" value={formatNumber(metrics.completed)} />
+          <CompactMetricCard title="Cancelados" value={formatNumber(metrics.cancelled)} />
+          <CompactMetricCard title="Monto pagado" value={formatCurrency(metrics.paidAmount)} className="col-span-2 xl:col-span-1" />
         </section>
 
         {shouldShowErrorCard ? (
@@ -366,9 +300,37 @@ export default function AdminAgendamientosPage() {
             <Card className="border-border/60 bg-gradient-to-b from-background/80 via-background to-background/95">
               <CardHeader className="space-y-2">
                 <CardTitle className="text-xl">Agendamientos registrados</CardTitle>
-                <CardDescription>Consulta estado, pago y detalle del servicio con el mismo estándar visual del panel.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-muted-foreground">Busca por cliente, empleado o servicio y filtra por estado.</p>
+                  <Button variant="outline" onClick={handleReload}>
+                    Recargar
+                  </Button>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder="Buscar por cliente, empleado o servicio"
+                  />
+
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Filtrar por estado" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos los estados</SelectItem>
+                      {statusOptions.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {getStatusLabel(status)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="overflow-x-auto rounded-xl border border-border/60 bg-background/60 shadow-sm">
                   <div className="overflow-x-auto">
                     <Table className="min-w-[1080px] text-base">
@@ -443,6 +405,29 @@ function AppointmentsTableSkeleton() {
           <Skeleton key={index} className="h-10 w-full" />
         ))}
       </CardContent>
+    </Card>
+  )
+}
+
+function CompactMetricCard({
+  title,
+  value,
+  className,
+}: {
+  title: string
+  value: string
+  className?: string
+}) {
+  return (
+    <Card className={className}>
+      <CardHeader className="space-y-1 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium text-muted-foreground sm:text-sm">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-[2rem] font-bold leading-none text-foreground sm:text-3xl">
+          {value}
+        </CardDescription>
+      </CardHeader>
     </Card>
   )
 }

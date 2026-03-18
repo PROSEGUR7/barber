@@ -22,6 +22,7 @@ import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useIsMobile } from "@/hooks/use-mobile"
 import type { ClientSummary, EmployeeSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
@@ -179,6 +180,7 @@ function buildTenantHeaders(): HeadersInit {
 }
 
 export default function AdminDashboard() {
+  const isMobile = useIsMobile()
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
   const [clients, setClients] = useState<ClientSummary[]>([])
   const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
@@ -396,6 +398,11 @@ export default function AdminDashboard() {
       }))
   }, [filteredEmployees])
 
+  const revenueByEmployeeChartData = useMemo(
+    () => (isMobile ? revenueByEmployee.slice(0, 5) : revenueByEmployee),
+    [isMobile, revenueByEmployee],
+  )
+
   const appointmentDistribution = useMemo(() => {
     const otherAppointments = Math.max(metrics.totalAppointments - metrics.completedAppointments - metrics.upcomingAppointments, 0)
 
@@ -433,6 +440,11 @@ export default function AdminDashboard() {
       .map(([type, count]) => ({ type, count }))
       .sort((a, b) => b.count - a.count)
   }, [filteredClients])
+
+  const clientsByTypeChartData = useMemo(
+    () => (isMobile ? clientsByType.slice(0, 6) : clientsByType),
+    [clientsByType, isMobile],
+  )
 
   const clientsBySegment = useMemo(() => {
     const grouped = new Map<ActivitySegment, number>([
@@ -478,15 +490,8 @@ export default function AdminDashboard() {
   const hasData = filteredEmployees.length > 0 || filteredClients.length > 0
 
   return (
-    <div className="space-y-6">
-      <main className="space-y-6 pb-6">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Panel de administración</h1>
-          <p className="text-muted-foreground">
-            Segmenta la información por operación y clientes para visualizar ingresos, productividad y estado del
-            negocio en tiempo real.
-          </p>
-        </header>
+    <div className="space-y-4">
+      <main className="space-y-4 pb-4 sm:space-y-5 sm:pb-6">
 
         {hasErrors && (
           <Alert variant="destructive">
@@ -504,15 +509,14 @@ export default function AdminDashboard() {
         )}
 
         <Card>
-          <CardHeader className="space-y-3">
-            <CardTitle>Segmentación del tablero</CardTitle>
-            <CardDescription>Filtra los datos que se muestran según el foco de análisis del negocio.</CardDescription>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Segmentación</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CardContent className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Estado de empleados</p>
               <Select value={employeeStatusFilter} onValueChange={setEmployeeStatusFilter}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Todos los estados" />
                 </SelectTrigger>
                 <SelectContent>
@@ -529,7 +533,7 @@ export default function AdminDashboard() {
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Tipo de cliente</p>
               <Select value={clientTypeFilter} onValueChange={setClientTypeFilter}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Todos los tipos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -546,7 +550,7 @@ export default function AdminDashboard() {
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Segmento de clientes</p>
               <Select value={clientSegmentFilter} onValueChange={setClientSegmentFilter}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Todos los segmentos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -562,7 +566,7 @@ export default function AdminDashboard() {
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Ventana de actividad</p>
               <Select value={activityWindow} onValueChange={(value) => setActivityWindow(value as ActivityWindow)}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Últimos 90 días" />
                 </SelectTrigger>
                 <SelectContent>
@@ -579,14 +583,14 @@ export default function AdminDashboard() {
           <DashboardSkeleton />
         ) : (
           <Tabs value={section} onValueChange={(value) => setSection(value as DashboardSection)}>
-            <TabsList className="w-full justify-start">
-              <TabsTrigger value="general">Vista general</TabsTrigger>
-              <TabsTrigger value="operaciones">Operaciones</TabsTrigger>
-              <TabsTrigger value="clientes">Clientes</TabsTrigger>
+            <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
+              <TabsTrigger value="general" className="shrink-0">Vista general</TabsTrigger>
+              <TabsTrigger value="operaciones" className="shrink-0">Operaciones</TabsTrigger>
+              <TabsTrigger value="clientes" className="shrink-0">Clientes</TabsTrigger>
             </TabsList>
 
             <TabsContent value="general" className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
                 <MetricCard
                   title="Ingresos"
                   value={formatCurrency(metrics.totalRevenue)}
@@ -625,22 +629,35 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid gap-3 sm:gap-4 xl:grid-cols-2">
                 <Card>
                   <CardHeader>
                     <CardTitle>Ingresos por empleado</CardTitle>
                     <CardDescription>Top de rendimiento por facturación acumulada</CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    {revenueByEmployee.length > 0 ? (
-                      <ChartContainer config={revenueChartConfig} className="h-[290px] w-full">
-                        <BarChart data={revenueByEmployee} margin={{ top: 12, right: 8, left: 8, bottom: 0 }}>
+                  <CardContent className="min-w-0 overflow-hidden">
+                    {revenueByEmployeeChartData.length > 0 ? (
+                      <ChartContainer config={revenueChartConfig} className="aspect-auto h-[180px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
+                        <BarChart
+                          data={revenueByEmployeeChartData}
+                          margin={isMobile ? { top: 8, right: 4, left: 0, bottom: 0 } : { top: 12, right: 8, left: 8, bottom: 0 }}
+                        >
                           <CartesianGrid vertical={false} />
-                          <XAxis dataKey="name" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
+                          <XAxis
+                            dataKey="name"
+                            tickLine={false}
+                            axisLine={false}
+                            tickMargin={isMobile ? 6 : 8}
+                            minTickGap={isMobile ? 38 : 24}
+                            tick={{ fontSize: isMobile ? 10 : 12 }}
+                            interval="preserveStartEnd"
+                          />
                           <YAxis
                             tickLine={false}
                             axisLine={false}
                             tickFormatter={(value) => formatCompactNumber(Number(value))}
+                            tick={{ fontSize: isMobile ? 10 : 12 }}
+                            width={isMobile ? 26 : 40}
                           />
                           <ChartTooltip
                             cursor={false}
@@ -660,9 +677,9 @@ export default function AdminDashboard() {
                     <CardTitle>Distribución de citas</CardTitle>
                     <CardDescription>Estado operativo entre citas completadas y pendientes</CardDescription>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="min-w-0 overflow-hidden">
                     {appointmentDistribution.length > 0 ? (
-                      <ChartContainer config={appointmentsChartConfig} className="h-[290px] w-full">
+                      <ChartContainer config={appointmentsChartConfig} className="aspect-auto h-[190px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
                         <PieChart>
                           <ChartTooltip
                             content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} />}
@@ -671,8 +688,8 @@ export default function AdminDashboard() {
                             data={appointmentDistribution}
                             dataKey="value"
                             nameKey="label"
-                            innerRadius={68}
-                            outerRadius={104}
+                            innerRadius={isMobile ? 44 : 54}
+                            outerRadius={isMobile ? 68 : 84}
                             strokeWidth={3}
                           >
                             {appointmentDistribution.map((item) => (
@@ -701,7 +718,7 @@ export default function AdminDashboard() {
             </TabsContent>
 
             <TabsContent value="operaciones" className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                   title="Productividad"
                   value={`${derivedMetrics.completionRate}%`}
@@ -758,7 +775,7 @@ export default function AdminDashboard() {
             </TabsContent>
 
             <TabsContent value="clientes" className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                   title="Clientes activos"
                   value={formatNumber(metrics.activeClientsByWindow)}
@@ -785,19 +802,36 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid gap-3 sm:gap-4 xl:grid-cols-2">
                 <Card>
                   <CardHeader>
                     <CardTitle>Clientes por tipo</CardTitle>
                     <CardDescription>Segmentación de base de clientes según categoría</CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    {clientsByType.length > 0 ? (
-                      <ChartContainer config={clientsChartConfig} className="h-[290px] w-full">
-                        <BarChart data={clientsByType} margin={{ top: 12, right: 8, left: 8, bottom: 0 }}>
+                  <CardContent className="min-w-0 overflow-hidden">
+                    {clientsByTypeChartData.length > 0 ? (
+                      <ChartContainer config={clientsChartConfig} className="aspect-auto h-[180px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
+                        <BarChart
+                          data={clientsByTypeChartData}
+                          margin={isMobile ? { top: 8, right: 4, left: 0, bottom: 0 } : { top: 12, right: 8, left: 8, bottom: 0 }}
+                        >
                           <CartesianGrid vertical={false} />
-                          <XAxis dataKey="type" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
-                          <YAxis tickLine={false} axisLine={false} allowDecimals={false} />
+                          <XAxis
+                            dataKey="type"
+                            tickLine={false}
+                            axisLine={false}
+                            tickMargin={isMobile ? 6 : 8}
+                            minTickGap={isMobile ? 38 : 24}
+                            tick={{ fontSize: isMobile ? 10 : 12 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            allowDecimals={false}
+                            tick={{ fontSize: isMobile ? 10 : 12 }}
+                            width={isMobile ? 26 : 40}
+                          />
                           <ChartTooltip
                             cursor={false}
                             content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} />}
@@ -856,13 +890,13 @@ function MetricCard({
 }) {
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium leading-tight sm:text-sm">{title}</CardTitle>
         {icon}
       </CardHeader>
-      <CardContent>
-        <div className="text-3xl font-bold leading-none tracking-tight">{value}</div>
-        <p className="mt-2 text-xs text-muted-foreground">{description}</p>
+      <CardContent className="px-3 pb-2 pt-0 sm:px-6 sm:pb-4 sm:pt-2">
+        <div className="text-[2rem] font-bold leading-none tracking-tight sm:text-3xl">{value}</div>
+        <p className="mt-1 hidden line-clamp-2 text-[11px] text-muted-foreground sm:mt-2 sm:block sm:text-xs">{description}</p>
       </CardContent>
     </Card>
   )
