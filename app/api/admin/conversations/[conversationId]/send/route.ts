@@ -43,10 +43,15 @@ export async function POST(request: Request, context: Params) {
     const textValue = form.get("text")
     const fileValue = form.get("file")
     const contactNameValue = form.get("contactName")
+    const reactionEmojiValue = form.get("reactionEmoji")
+    const reactionToWamidValue = form.get("reactionToWamid")
 
     const text = typeof textValue === "string" ? textValue : ""
     const file = fileValue instanceof File ? fileValue : null
     const contactName = typeof contactNameValue === "string" ? contactNameValue : null
+    const reactionEmoji = typeof reactionEmojiValue === "string" ? reactionEmojiValue.trim() : ""
+    const reactionToWamid = typeof reactionToWamidValue === "string" ? reactionToWamidValue.trim() : ""
+    const reaction = reactionEmoji && reactionToWamid ? { emoji: reactionEmoji, messageId: reactionToWamid } : null
     const sentByName =
       request.headers.get("x-user-name")?.trim() ||
       request.headers.get("x-user-email")?.trim() ||
@@ -57,6 +62,7 @@ export async function POST(request: Request, context: Params) {
       to: decodeURIComponent(conversationId),
       text,
       file,
+      reaction,
       contactName,
       sentByType: "human",
       sentByName,

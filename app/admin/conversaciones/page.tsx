@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
+  ArrowLeft,
   Camera,
+  ChevronDown,
   Circle,
+  Smile,
   FileAudio,
   FileText,
   Images,
@@ -41,6 +44,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 
 type ChatPreview = {
@@ -71,6 +75,9 @@ type ChatMessage = {
   mediaFilename: string | null
   status: string | null
   statusError: string | null
+  reactionEmoji: string | null
+  reactionToWamid: string | null
+  reactionToSnippet: string | null
   dateLabel: string
   timeLabel: string
   sentAt: string | null
@@ -105,6 +112,24 @@ type BotStatusResponse = {
 
 type FilterMode = "all" | "unread"
 type LoadOptions = { silent?: boolean }
+
+type ChatRenderItem =
+  | {
+      kind: "message"
+      message: ChatMessage
+      latestReaction: ChatMessage | null
+    }
+  | {
+      kind: "orphan-reaction"
+      message: ChatMessage
+    }
+
+const QUICK_REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const
+const EXTENDED_REACTION_EMOJIS = [
+  "👍", "❤️", "😂", "😮", "😢", "🙏", "👏", "🔥", "🎉", "✅",
+  "😁", "😅", "😎", "🤔", "😡", "😭", "🤩", "🙌", "👌", "💯",
+  "🤝", "🥳", "💪", "🫡", "🤯", "😴", "🤗", "🤨", "👀", "🙄",
+] as const
 
 type LameModule = {
   Mp3Encoder: new (channels: number, sampleRate: number, kbps: number) => {
@@ -599,6 +624,7 @@ async function ensureLameJsLoaded(): Promise<LameModule> {
 }
 
 export default function AdminConversacionesPage() {
+  const isMobile = useIsMobile()
   const [conversations, setConversations] = useState<ChatPreview[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
@@ -621,8 +647,15 @@ export default function AdminConversacionesPage() {
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [isUpdatingBotState, setIsUpdatingBotState] = useState(false)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [hasScrollableMessages, setHasScrollableMessages] = useState(false)
+  const [reactionPickerTargetMessageId, setReactionPickerTargetMessageId] = useState<string | null>(null)
+  const [reactionExpandedTargetMessageId, setReactionExpandedTargetMessageId] = useState<string | null>(null)
+  const [isSendingReaction, setIsSendingReaction] = useState(false)
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null)
 
   const endOfMessagesRef = useRef<HTMLDivElement | null>(null)
+  const messagesScrollContainerRef = useRef<HTMLDivElement | null>(null)
   const documentInputRef = useRef<HTMLInputElement | null>(null)
   const galleryInputRef = useRef<HTMLInputElement | null>(null)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
@@ -638,6 +671,14 @@ export default function AdminConversacionesPage() {
   const audioSampleRateRef = useRef<number>(44100)
   const shouldAutoScrollRef = useRef(true)
   const autoScrollTimeoutsRef = useRef<number[]>([])
+  const reactionLongPressTimeoutRef = useRef<number | null>(null)
+
+  const clearReactionLongPress = useCallback(() => {
+    if (reactionLongPressTimeoutRef.current !== null) {
+      window.clearTimeout(reactionLongPressTimeoutRef.current)
+      reactionLongPressTimeoutRef.current = null
+    }
+  }, [])
 
   const clearPendingAutoScrolls = useCallback(() => {
     for (const timeoutId of autoScrollTimeoutsRef.current) {
@@ -646,18 +687,30 @@ export default function AdminConversacionesPage() {
     autoScrollTimeoutsRef.current = []
   }, [])
 
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const container = messagesScrollContainerRef.current
+    const viewport = container?.querySelector("[data-radix-scroll-area-viewport]") as HTMLDivElement | null
+
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight
+      return
+    }
+
+    endOfMessagesRef.current?.scrollIntoView({ behavior, block: "end" })
+  }, [])
+
   const scheduleOpenChatAutoScroll = useCallback(() => {
     clearPendingAutoScrolls()
 
     const runScroll = () => {
       requestAnimationFrame(() => {
-        endOfMessagesRef.current?.scrollIntoView({ behavior: "auto", block: "end" })
+        scrollMessagesToBottom("auto")
       })
     }
 
     runScroll()
 
-    const checkpoints = [120, 280, 520, 820]
+    const checkpoints = [80, 180, 320, 560, 900, 1300]
     checkpoints.forEach((delay) => {
       const timeoutId = window.setTimeout(runScroll, delay)
       autoScrollTimeoutsRef.current.push(timeoutId)
@@ -666,9 +719,9 @@ export default function AdminConversacionesPage() {
     const finalizeId = window.setTimeout(() => {
       shouldAutoScrollRef.current = false
       clearPendingAutoScrolls()
-    }, 900)
+    }, 1600)
     autoScrollTimeoutsRef.current.push(finalizeId)
-  }, [clearPendingAutoScrolls])
+  }, [clearPendingAutoScrolls, scrollMessagesToBottom])
 
   const loadConversations = useCallback(async (options?: LoadOptions) => {
     const silent = options?.silent === true
@@ -699,6 +752,10 @@ export default function AdminConversacionesPage() {
           return current
         }
 
+        if (isMobile) {
+          return null
+        }
+
         if (manualChatClosed) {
           return null
         }
@@ -716,7 +773,7 @@ export default function AdminConversacionesPage() {
         setIsLoadingConversations(false)
       }
     }
-  }, [manualChatClosed])
+  }, [isMobile, manualChatClosed])
 
   const loadMessages = useCallback(async (conversationId: string, options?: LoadOptions) => {
     const silent = options?.silent === true
@@ -792,14 +849,17 @@ export default function AdminConversacionesPage() {
   useEffect(() => {
     return () => {
       clearPendingAutoScrolls()
+      clearReactionLongPress()
     }
-  }, [clearPendingAutoScrolls])
+  }, [clearPendingAutoScrolls, clearReactionLongPress])
 
   useEffect(() => {
     if (!selectedChatId) {
       setMessages([])
       clearPendingAutoScrolls()
       shouldAutoScrollRef.current = false
+      setReactionPickerTargetMessageId(null)
+      setReactionExpandedTargetMessageId(null)
       return
     }
 
@@ -815,6 +875,17 @@ export default function AdminConversacionesPage() {
       scheduleOpenChatAutoScroll()
     })()
   }, [clearPendingAutoScrolls, loadMessages, scheduleOpenChatAutoScroll, selectedChatId])
+
+  useEffect(() => {
+    if (!reactionPickerTargetMessageId) {
+      return
+    }
+
+    if (!messages.some((message) => message.id === reactionPickerTargetMessageId)) {
+      setReactionPickerTargetMessageId(null)
+      setReactionExpandedTargetMessageId(null)
+    }
+  }, [messages, reactionPickerTargetMessageId])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -835,6 +906,51 @@ export default function AdminConversacionesPage() {
 
     scheduleOpenChatAutoScroll()
   }, [messages, scheduleOpenChatAutoScroll])
+
+  useEffect(() => {
+    if (!selectedChatId || isLoadingMessages || !shouldAutoScrollRef.current) {
+      return
+    }
+
+    scheduleOpenChatAutoScroll()
+  }, [isLoadingMessages, scheduleOpenChatAutoScroll, selectedChatId])
+
+  useEffect(() => {
+    if (!selectedChatId) {
+      setIsAtBottom(true)
+      setHasScrollableMessages(false)
+      return
+    }
+
+    const container = messagesScrollContainerRef.current
+    if (!container) {
+      return
+    }
+
+    const viewport = container.querySelector("[data-radix-scroll-area-viewport]") as HTMLDivElement | null
+    if (!viewport) {
+      setIsAtBottom(false)
+      setHasScrollableMessages(messages.length > 0)
+      return
+    }
+
+    const updateIsAtBottom = () => {
+      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+      setIsAtBottom(distanceToBottom <= 24)
+      setHasScrollableMessages(viewport.scrollHeight - viewport.clientHeight > 8)
+    }
+
+    updateIsAtBottom()
+
+    viewport.addEventListener("scroll", updateIsAtBottom, { passive: true })
+    const resizeObserver = new ResizeObserver(() => updateIsAtBottom())
+    resizeObserver.observe(viewport)
+
+    return () => {
+      viewport.removeEventListener("scroll", updateIsAtBottom)
+      resizeObserver.disconnect()
+    }
+  }, [messages, selectedChatId])
 
   useEffect(() => {
     if (!composerRef.current) {
@@ -881,6 +997,9 @@ export default function AdminConversacionesPage() {
     [conversations, selectedChatId],
   )
 
+  const showChatListPanel = !isMobile || !selectedConversation
+  const showChatDetailPanel = !isMobile || Boolean(selectedConversation)
+
   const isBotEnabled = useMemo(() => {
     if (!selectedConversation) {
       return false
@@ -893,6 +1012,51 @@ export default function AdminConversacionesPage() {
     () => conversations.reduce((acc, conversation) => acc + conversation.unreadCount, 0),
     [conversations],
   )
+
+  const chatRenderItems = useMemo<ChatRenderItem[]>(() => {
+    const baseMessages = messages.filter((message) => message.type !== "reaction")
+    const baseWamids = new Set(
+      baseMessages
+        .map((message) => message.wamid?.trim() || "")
+        .filter((wamid) => wamid.length > 0),
+    )
+
+    const latestReactionByTarget = new Map<string, ChatMessage>()
+    const orphanReactions: ChatMessage[] = []
+
+    for (const message of messages) {
+      if (message.type !== "reaction") {
+        continue
+      }
+
+      const targetWamid = message.reactionToWamid?.trim() || ""
+      if (targetWamid && baseWamids.has(targetWamid)) {
+        // Keep only the most recent reaction for each target message.
+        latestReactionByTarget.set(targetWamid, message)
+        continue
+      }
+
+      orphanReactions.push(message)
+    }
+
+    const groupedItems: ChatRenderItem[] = baseMessages.map((message) => {
+      const messageWamid = message.wamid?.trim() || ""
+      const latestReaction = messageWamid ? latestReactionByTarget.get(messageWamid) ?? null : null
+
+      return {
+        kind: "message",
+        message,
+        latestReaction,
+      }
+    })
+
+    const orphanItems: ChatRenderItem[] = orphanReactions.map((message) => ({
+      kind: "orphan-reaction",
+      message,
+    }))
+
+    return [...groupedItems, ...orphanItems]
+  }, [messages])
 
   const handleSendMessage = useCallback(() => {
     if (!selectedConversation) {
@@ -959,6 +1123,60 @@ export default function AdminConversacionesPage() {
       }
     })()
   }, [composerText, isBotEnabled, loadConversations, loadMessages, selectedConversation, selectedFile])
+
+  const handleSendReaction = useCallback(
+    async (targetMessage: ChatMessage, emoji: string) => {
+      if (!selectedConversation) {
+        setError("Selecciona una conversación para reaccionar.")
+        return
+      }
+
+      if (!targetMessage.wamid) {
+        setError("No se pudo identificar el mensaje para reaccionar.")
+        return
+      }
+
+      if (isBotEnabled) {
+        setError("El bot IA está activo. Desactívalo para reaccionar manualmente.")
+        return
+      }
+
+      setError(null)
+      setIsSendingReaction(true)
+      setReactionPickerTargetMessageId(null)
+      setReactionExpandedTargetMessageId(null)
+
+      try {
+        const formData = new FormData()
+        formData.append("text", "")
+        formData.append("contactName", selectedConversation.name)
+        formData.append("reactionEmoji", emoji)
+        formData.append("reactionToWamid", targetMessage.wamid)
+
+        const response = await fetch(withTenantQuery(`/api/admin/conversations/${encodeURIComponent(selectedConversation.id)}/send`), {
+          method: "POST",
+          headers: tenantHeaders(),
+          body: formData,
+        })
+
+        const payload = (await response.json().catch(() => ({}))) as { error?: string; detail?: string; ok?: boolean }
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? payload.detail ?? "No se pudo enviar la reacción")
+        }
+
+        await Promise.all([
+          loadMessages(selectedConversation.id, { silent: true }),
+          loadConversations({ silent: true }),
+        ])
+      } catch (sendError) {
+        console.error("Send reaction error", sendError)
+        setError(sendError instanceof Error ? sendError.message : "No se pudo enviar la reacción")
+      } finally {
+        setIsSendingReaction(false)
+      }
+    },
+    [isBotEnabled, loadConversations, loadMessages, selectedConversation],
+  )
 
   const handleBotToggle = useCallback(
     async (checked: boolean) => {
@@ -1275,10 +1493,7 @@ export default function AdminConversacionesPage() {
 
   return (
     <div className="h-full min-h-0 overflow-hidden bg-background">
-      <main className="container mx-auto flex h-full min-h-0 flex-col gap-4 px-2 py-2 md:px-4 md:py-4">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Conversaciones</h1>
-        </header>
+      <main className="container mx-auto flex h-full min-h-0 flex-col gap-2 px-2 py-2 md:px-4 md:py-4">
 
         {error ? (
           <Alert variant="destructive">
@@ -1298,7 +1513,12 @@ export default function AdminConversacionesPage() {
 
         <section className="min-h-0 flex-1 overflow-hidden rounded-xl border bg-card">
           <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[330px_minmax(0,1fr)]">
-            <aside className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
+            <aside
+              className={cn(
+                "min-h-0 flex-col border-b lg:flex lg:border-r lg:border-b-0",
+                showChatListPanel ? "flex" : "hidden",
+              )}
+            >
               <div className="space-y-4 border-b p-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chats</p>
@@ -1371,7 +1591,7 @@ export default function AdminConversacionesPage() {
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-start justify-between gap-2">
                             <p className="truncate text-sm font-semibold">{conversation.name}</p>
-                            <span className="shrink-0 text-xs text-muted-foreground">{conversation.dateLabel}</span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground">{conversation.dateLabel}</span>
                           </div>
 
                           <p className="truncate text-sm text-muted-foreground">{conversation.snippet}</p>
@@ -1396,23 +1616,38 @@ export default function AdminConversacionesPage() {
               </ScrollArea>
             </aside>
 
-            <div className="relative flex h-full min-h-0 flex-col">
+            <div className={cn("relative h-full min-h-0 flex-col", showChatDetailPanel ? "flex" : "hidden") }>
               {selectedConversation ? (
                 <>
                   <header className="flex items-center justify-between gap-4 border-b px-5 py-3">
                     <div className="min-w-0">
-                      <p className="truncate text-base font-semibold">{selectedConversation.name}</p>
+                      <div className="flex items-center gap-2">
+                        {isMobile ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8"
+                            onClick={() => {
+                              setSelectedChatId(null)
+                              setManualChatClosed(false)
+                            }}
+                            aria-label="Volver a chats"
+                          >
+                            <ArrowLeft className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                        <p className="truncate text-base font-semibold">{selectedConversation.name}</p>
+                      </div>
                       <div className="mt-1 flex items-center gap-2">
                         <p className="text-xs text-muted-foreground">+{normalizePhone(selectedConversation.waId ?? selectedConversation.id)}</p>
-                        <Badge variant="outline">WhatsApp</Badge>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-[150px] items-center justify-between gap-3 rounded-xl border bg-background px-3 py-2">
+                      <div className="flex h-9 w-[120px] items-center justify-between gap-2 rounded-lg border bg-background px-2 py-1.5 md:h-10 md:w-[132px]">
                         <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">BOT IA</p>
-                          <p className="text-sm leading-none">{isBotEnabled ? "Activado" : "Desactivado"}</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">BOT IA</p>
                         </div>
                         <Switch
                           checked={isBotEnabled}
@@ -1427,6 +1662,7 @@ export default function AdminConversacionesPage() {
                       <Button
                         type="button"
                         size="sm"
+                        className="hidden md:inline-flex"
                         onClick={() => {
                           setSelectedChatId(null)
                           setManualChatClosed(true)
@@ -1440,8 +1676,20 @@ export default function AdminConversacionesPage() {
                     </div>
                   </header>
 
-                  <ScrollArea className="min-h-0 flex-1 bg-muted/20 px-5 py-4">
-                    <div className="space-y-4 pb-3">
+                  <div ref={messagesScrollContainerRef} className="min-h-0 flex-1">
+                    <ScrollArea className="h-full bg-muted/20 px-3 py-4 md:px-5">
+                      <div
+                        className="space-y-4 pb-3"
+                        onPointerDown={(event) => {
+                          const target = event.target as HTMLElement
+                          if (target.closest("[data-reaction-ui='1']")) {
+                            return
+                          }
+
+                          setReactionPickerTargetMessageId(null)
+                          setReactionExpandedTargetMessageId(null)
+                        }}
+                      >
                       {isLoadingMessages ? (
                         <div className="space-y-3">
                           {Array.from({ length: 4 }).map((_, index) => (
@@ -1451,28 +1699,108 @@ export default function AdminConversacionesPage() {
                             </div>
                           ))}
                         </div>
-                      ) : messages.length === 0 ? (
+                      ) : chatRenderItems.length === 0 ? (
                         <div className="pt-16 text-center text-muted-foreground">
                           Esta conversación todavía no tiene mensajes.
                         </div>
                       ) : (
-                        messages.map((message) => {
+                        chatRenderItems.map((item) => {
+                          const message = item.message
                           const isOutbound = message.direction === "outbound"
+                          const canReactFromRow = item.kind === "message" && Boolean(message.wamid)
+                          const showReactionHoverButton =
+                            !isMobile &&
+                            canReactFromRow &&
+                            (hoveredMessageId === message.id ||
+                              reactionPickerTargetMessageId === message.id ||
+                              reactionExpandedTargetMessageId === message.id)
                           const mediaUrl = message.mediaId
                             ? withTenantQuery(`/api/admin/conversations/media/${encodeURIComponent(message.mediaId)}`)
                             : null
 
                           return (
                             <div
-                              key={message.id}
+                              key={`${item.kind}-${message.id}`}
                               className={cn("flex", isOutbound ? "items-center justify-end gap-2" : "justify-start")}
+                              onMouseEnter={() => {
+                                if (!isMobile && canReactFromRow) {
+                                  setHoveredMessageId(message.id)
+                                }
+                              }}
+                              onMouseLeave={() => {
+                                if (!isMobile && hoveredMessageId === message.id) {
+                                  setHoveredMessageId(null)
+                                }
+                              }}
                             >
-                              <div
-                                className={cn(
-                                  "max-w-[78%] space-y-2 rounded-2xl px-4 py-3 text-sm shadow-sm",
-                                  isOutbound ? "bg-primary text-primary-foreground" : "bg-background",
-                                )}
-                              >
+                              {showReactionHoverButton && isOutbound ? (
+                                <button
+                                  type="button"
+                                  data-reaction-ui="1"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setReactionPickerTargetMessageId((current) =>
+                                      current === message.id ? null : message.id,
+                                    )
+                                    setReactionExpandedTargetMessageId(null)
+                                  }}
+                                  aria-label="Abrir reacciones"
+                                >
+                                  <Smile className="h-4 w-4" />
+                                </button>
+                              ) : null}
+
+                              <div className={cn("relative flex max-w-[88%] flex-col md:max-w-[78%]", isOutbound ? "items-end" : "items-start")}> 
+                                <div
+                                  data-reaction-ui="1"
+                                  onClick={(event) => {
+                                    if (isMobile || item.kind !== "message" || !message.wamid) {
+                                      return
+                                    }
+
+                                    event.stopPropagation()
+                                    setReactionPickerTargetMessageId((current) =>
+                                      current === message.id ? null : message.id,
+                                    )
+                                    setReactionExpandedTargetMessageId(null)
+                                  }}
+                                  onPointerDown={(event) => {
+                                    if (!isMobile || item.kind !== "message" || !message.wamid) {
+                                      return
+                                    }
+
+                                    event.stopPropagation()
+                                    clearReactionLongPress()
+                                    reactionLongPressTimeoutRef.current = window.setTimeout(() => {
+                                      setReactionPickerTargetMessageId(message.id)
+                                      setReactionExpandedTargetMessageId(null)
+                                    }, 380)
+                                  }}
+                                  onPointerUp={() => clearReactionLongPress()}
+                                  onPointerCancel={() => clearReactionLongPress()}
+                                  onPointerLeave={() => clearReactionLongPress()}
+                                  className={cn(
+                                    "w-full space-y-2 rounded-2xl px-4 py-3 text-sm shadow-sm",
+                                    isOutbound ? "bg-primary text-primary-foreground" : "bg-background",
+                                  )}
+                                >
+                                  {item.kind === "orphan-reaction" ? (
+                                    <div className="space-y-2">
+                                      <div
+                                        className={cn(
+                                          "rounded-lg border px-3 py-2 text-xs",
+                                          isOutbound
+                                            ? "border-primary-foreground/25 bg-primary-foreground/10 text-primary-foreground/90"
+                                            : "border-border bg-muted/60 text-muted-foreground",
+                                        )}
+                                      >
+                                        {message.reactionToSnippet || "Mensaje original"}
+                                      </div>
+                                      <p className="text-lg leading-none">{message.reactionEmoji ?? "👍"}</p>
+                                    </div>
+                                  ) : null}
+
                                 {message.type === "image" && mediaUrl ? (
                                   <a href={mediaUrl} target="_blank" rel="noreferrer" className="block">
                                     <img
@@ -1507,10 +1835,12 @@ export default function AdminConversacionesPage() {
                                   </a>
                                 ) : null}
 
-                                {message.text ? <p className="whitespace-pre-wrap break-words">{message.text}</p> : null}
+                                {message.text && item.kind !== "orphan-reaction" ? (
+                                  <p className="whitespace-pre-wrap break-words break-all">{message.text}</p>
+                                ) : null}
 
-                                {message.mediaCaption && !message.text ? (
-                                  <p className="whitespace-pre-wrap break-words">{message.mediaCaption}</p>
+                                {message.mediaCaption && !message.text && item.kind !== "orphan-reaction" ? (
+                                  <p className="whitespace-pre-wrap break-words break-all">{message.mediaCaption}</p>
                                 ) : null}
 
                                 <div className={cn("flex items-center gap-2 text-[11px]", isOutbound ? "justify-end text-primary-foreground/80" : "text-muted-foreground")}>
@@ -1519,6 +1849,128 @@ export default function AdminConversacionesPage() {
                                 </div>
 
                               </div>
+
+                                {item.kind === "message" && message.wamid && reactionPickerTargetMessageId === message.id ? (
+                                  <div
+                                    data-reaction-ui="1"
+                                    className={cn(
+                                      "absolute z-20 flex items-center gap-1 rounded-full border bg-white px-2 py-1 shadow-lg",
+                                      isOutbound ? "right-2 -top-12" : "left-2 -top-12",
+                                    )}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                  >
+                                    {QUICK_REACTION_EMOJIS.map((emoji) => (
+                                      <button
+                                        key={`${message.id}-${emoji}`}
+                                        type="button"
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-xl transition-transform hover:scale-110"
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          if (isSendingReaction) {
+                                            return
+                                          }
+
+                                          void handleSendReaction(message, emoji)
+                                        }}
+                                        aria-label={`Reaccionar con ${emoji}`}
+                                      >
+                                        {emoji}
+                                      </button>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-lg text-muted-foreground"
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        setReactionExpandedTargetMessageId((current) =>
+                                          current === message.id ? null : message.id,
+                                        )
+                                      }}
+                                      aria-label="Ver más reacciones"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                ) : null}
+
+                                {item.kind === "message" && message.wamid && reactionExpandedTargetMessageId === message.id ? (
+                                  <div
+                                    data-reaction-ui="1"
+                                    className={cn(
+                                      "absolute z-30 w-[280px] rounded-2xl border bg-white p-2 shadow-xl",
+                                      isOutbound ? "right-2 -top-[180px]" : "left-2 -top-[180px]",
+                                    )}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                  >
+                                    <div className="mb-2 flex items-center justify-between px-1">
+                                      <p className="text-xs font-medium text-muted-foreground">Más reacciones</p>
+                                      <button
+                                        type="button"
+                                        className="text-xs text-muted-foreground hover:text-foreground"
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          setReactionExpandedTargetMessageId(null)
+                                        }}
+                                      >
+                                        Cerrar
+                                      </button>
+                                    </div>
+                                    <div className="grid grid-cols-10 gap-1">
+                                      {EXTENDED_REACTION_EMOJIS.map((emoji) => (
+                                        <button
+                                          key={`${message.id}-extended-${emoji}`}
+                                          type="button"
+                                          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-xl transition-transform hover:scale-110"
+                                          onClick={(event) => {
+                                            event.stopPropagation()
+                                            if (isSendingReaction) {
+                                              return
+                                            }
+
+                                            setReactionExpandedTargetMessageId(null)
+                                            void handleSendReaction(message, emoji)
+                                          }}
+                                          aria-label={`Reaccionar con ${emoji}`}
+                                        >
+                                          {emoji}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {item.kind === "message" && item.latestReaction ? (
+                                  <span
+                                    title={`Reacción ${item.latestReaction.timeLabel || item.latestReaction.dateLabel}`}
+                                    className={cn(
+                                      "-mt-2 inline-flex min-w-7 items-center justify-center rounded-full border px-2 py-0.5 text-base leading-none shadow-sm",
+                                      isOutbound
+                                        ? "mr-3 border-primary-foreground/30 bg-muted"
+                                        : "ml-3 border-border bg-muted",
+                                    )}
+                                  >
+                                    {item.latestReaction.reactionEmoji ?? "👍"}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {showReactionHoverButton && !isOutbound ? (
+                                <button
+                                  type="button"
+                                  data-reaction-ui="1"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setReactionPickerTargetMessageId((current) =>
+                                      current === message.id ? null : message.id,
+                                    )
+                                    setReactionExpandedTargetMessageId(null)
+                                  }}
+                                  aria-label="Abrir reacciones"
+                                >
+                                  <Smile className="h-4 w-4" />
+                                </button>
+                              ) : null}
 
                               {isOutbound ? (
                                 <span
@@ -1535,11 +1987,28 @@ export default function AdminConversacionesPage() {
                           )
                         })
                       )}
-                      <div ref={endOfMessagesRef} className="h-px" />
-                    </div>
-                  </ScrollArea>
+                        <div ref={endOfMessagesRef} className="h-px" />
+                      </div>
+                    </ScrollArea>
+                  </div>
 
-                  <footer className="sticky bottom-0 z-20 border-t bg-card p-3">
+                  {messages.length > 0 && hasScrollableMessages && !isAtBottom ? (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="outline"
+                      className="absolute bottom-[78px] right-4 z-30 h-9 w-9 rounded-full bg-background shadow md:bottom-20"
+                      onClick={() => {
+                        scrollMessagesToBottom("smooth")
+                        setIsAtBottom(true)
+                      }}
+                      aria-label="Ir al último mensaje"
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+
+                  <footer className="sticky bottom-0 z-20 bg-card p-2">
                     {selectedFile ? (
                       <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
                         <div className="mb-2 flex items-center justify-end">
@@ -1620,7 +2089,7 @@ export default function AdminConversacionesPage() {
                       </div>
                     ) : null}
 
-                    <div className="mt-2 flex items-end gap-2">
+                    <div className="mt-1 flex items-end gap-2">
                       <input
                         ref={documentInputRef}
                         type="file"
@@ -1653,7 +2122,14 @@ export default function AdminConversacionesPage() {
 
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button type="button" size="icon" variant="outline" aria-label="Adjuntar" disabled={isBotEnabled || isSending || isUpdatingBotState}>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-10 w-10"
+                            aria-label="Adjuntar"
+                            disabled={isBotEnabled || isSending || isUpdatingBotState}
+                          >
                             <Plus className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -1685,7 +2161,7 @@ export default function AdminConversacionesPage() {
                         placeholder={
                           isBotEnabled
                             ? "Bot IA activo: desactívalo para responder manualmente"
-                            : `Escribe un mensaje para ${selectedConversation.name}`
+                            : "Mensaje"
                         }
                         className="min-h-10 max-h-36 resize-none overflow-y-auto"
                         disabled={isBotEnabled || isSending || isUpdatingBotState}
@@ -1695,6 +2171,7 @@ export default function AdminConversacionesPage() {
                         type="button"
                         size="icon"
                         variant="outline"
+                        className="h-10 w-10"
                         title={isRecordingAudio ? "Detener grabación" : "Grabar nota de voz"}
                         disabled={isBotEnabled || isSending || isUpdatingBotState}
                         onClick={() => {

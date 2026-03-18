@@ -15,6 +15,7 @@ type MetaMessage = {
   timestamp?: string
   type?: string
   text?: { body?: string }
+  reaction?: { message_id?: string; emoji?: string }
   image?: { id?: string; mime_type?: string; caption?: string }
   audio?: { id?: string; mime_type?: string }
   document?: { id?: string; mime_type?: string; caption?: string; filename?: string }
@@ -103,6 +104,17 @@ function getMessagePayload(message: MetaMessage): {
   type: string
 } {
   const type = message.type?.trim() || "text"
+
+  if (type === "reaction") {
+    return {
+      text: message.reaction?.emoji?.trim() || null,
+      mediaId: null,
+      mediaMimeType: null,
+      mediaCaption: null,
+      mediaFilename: null,
+      type,
+    }
+  }
 
   if (type === "image") {
     return {
@@ -308,7 +320,19 @@ export async function POST(request: Request) {
               normalized.mediaCaption,
               normalized.mediaFilename,
               sentAt,
-              JSON.stringify(payload),
+              JSON.stringify({
+                source: "meta-webhook",
+                entryId: entry.id?.trim() || null,
+                metadata: {
+                  phoneNumberId: metadata?.phone_number_id?.trim() || null,
+                  displayPhoneNumber: metadata?.display_phone_number?.trim() || null,
+                },
+                contact: {
+                  waId,
+                  name: contactName,
+                },
+                message,
+              }),
             ],
           )
 

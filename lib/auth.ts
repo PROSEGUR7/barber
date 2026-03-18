@@ -246,7 +246,7 @@ async function insertEmployeeProfile(
 }
 
 async function listChildTenantSchemas(): Promise<string[]> {
-  const result = await pool.query<{ schema_name: string }>(
+  const result = await queryWithRetry<{ schema_name: string }>(
     `SELECT n.nspname AS schema_name
        FROM pg_namespace n
       WHERE n.nspname LIKE 'tenant\\_%' ESCAPE '\\'
@@ -257,6 +257,47 @@ async function listChildTenantSchemas(): Promise<string[]> {
   )
 
   return result.rows.map((row) => row.schema_name)
+}
+
+function isRetryablePgError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false
+  }
+
+  const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : ""
+  const message =
+    "message" in error ? String((error as { message?: unknown }).message ?? "").toLowerCase() : ""
+
+  if (code === "57P01" || code === "57P02" || code === "57P03") {
+    return true
+  }
+
+  return (
+    message.includes("connection terminated unexpectedly") ||
+    message.includes("connection terminated") ||
+    message.includes("econnreset") ||
+    message.includes("server closed the connection unexpectedly")
+  )
+}
+
+async function queryWithRetry<T>(queryText: string, params: unknown[], maxAttempts = 2) {
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await pool.query<T>(queryText, params)
+    } catch (error) {
+      lastError = error
+
+      if (!isRetryablePgError(error) || attempt >= maxAttempts) {
+        throw error
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 120 * attempt))
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("PG_QUERY_FAILED")
 }
 
 export async function findUserByEmailAcrossChildTenants(
@@ -304,7 +345,7 @@ export async function findTenantSchemaByEmail(
 
   if (normalizedPreferredTenant && normalizedPreferredTenant !== BASE_TENANT_SCHEMA) {
     const usersTable = usersTableForTenant(normalizedPreferredTenant)
-    const preferredResult = await pool.query<{ id: number }>(
+    const preferredResult = await queryWithRetry<{ id: number }>(
       `SELECT id
          FROM ${usersTable}
         WHERE lower(correo) = lower($1)
@@ -326,7 +367,7 @@ export async function findTenantSchemaByEmail(
     }
 
     const usersTable = usersTableForTenant(schemaName)
-    const result = await pool.query<{ id: number }>(
+    const result = await queryWithRetry<{ id: number }>(
       `SELECT id
          FROM ${usersTable}
         WHERE lower(correo) = lower($1)

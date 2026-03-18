@@ -34,6 +34,9 @@ export type ConversationMessage = {
   mediaFilename: string | null
   status: string | null
   statusError: string | null
+  reactionEmoji: string | null
+  reactionToWamid: string | null
+  reactionToSnippet: string | null
   dateLabel: string
   timeLabel: string
   sentAt: string | null
@@ -64,6 +67,11 @@ type MessageRow = {
   status_error: string | null
   sent_at: string | null
   raw_payload: unknown
+}
+
+type ReactionMeta = {
+  emoji: string | null
+  targetWamid: string | null
 }
 
 type OutboundSenderMeta = {
@@ -102,20 +110,29 @@ export function formatRelativeDate(value: string | null | undefined): string {
   const sameDay = now.toDateString() === date.toDateString()
 
   if (sameDay) {
-    return "hoy"
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .format(date)
+      .replace(" AM", " am")
+      .replace(" PM", " pm")
   }
 
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
+  const startNow = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const dayDiff = Math.floor((startNow.getTime() - startDate.getTime()) / 86400000)
 
-  if (yesterday.toDateString() === date.toDateString()) {
+  if (dayDiff === 1) {
     return "ayer"
   }
 
-  return new Intl.DateTimeFormat("es-CO", {
-    day: "2-digit",
-    month: "short",
-  }).format(date)
+  if (dayDiff === 2) {
+    return "anteayer"
+  }
+
+  return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`
 }
 
 export function formatTimeLabel(value: string | null | undefined): string {
@@ -171,9 +188,11 @@ function conversationWhereSql(conversationId: string): { sql: string; params: st
     }
   }
 
+  const digits = normalizePhoneDigits(normalized)
+
   return {
-    sql: "NULLIF(trim(wa_id), '') = $2::text",
-    params: [normalized],
+    sql: "NULLIF(regexp_replace(COALESCE(wa_id, ''), '\\D+', '', 'g'), '') = $2::text",
+    params: [digits || normalized],
   }
 }
 
@@ -227,6 +246,100 @@ function extractOutboundSenderMeta(rawPayload: unknown, direction: "inbound" | "
     type: senderType === "unknown" ? "bot" : senderType,
     name: senderName || null,
   }
+}
+
+function trimOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+    : []
+}
+
+function normalizeReactionRecord(value: unknown): ReactionMeta {
+  const record = asRecord(value)
+  if (!record) {
+    return { emoji: null, targetWamid: null }
+  }
+
+  return {
+    emoji: trimOrNull(record.emoji),
+    targetWamid: trimOrNull(record.message_id),
+  }
+}
+
+function extractReactionMeta(rawPayload: unknown): ReactionMeta {
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return { emoji: null, targetWamid: null }
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const fromMessage = normalizeReactionRecord(messageRecord?.reaction)
+  if (fromMessage.emoji || fromMessage.targetWamid) {
+    return fromMessage
+  }
+
+  const fromRoot = normalizeReactionRecord(payload.reaction)
+  if (fromRoot.emoji || fromRoot.targetWamid) {
+    return fromRoot
+  }
+
+  // Compatibilidad con payload legado guardado completo: entry[].changes[].value.messages[].reaction
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const legacy = normalizeReactionRecord(message.reaction)
+        if (legacy.emoji || legacy.targetWamid) {
+          return legacy
+        }
+      }
+    }
+  }
+
+  return { emoji: null, targetWamid: null }
+}
+
+function messageTypePlaceholder(type: string | null | undefined): string {
+  const normalized = (type ?? "").trim().toLowerCase()
+
+  switch (normalized) {
+    case "image":
+      return "[Imagen]"
+    case "audio":
+      return "[Audio]"
+    case "document":
+      return "[Documento]"
+    case "video":
+      return "[Video]"
+    case "reaction":
+      return "[Reacción]"
+    default:
+      return "Sin contenido"
+  }
+}
+
+function buildMessageSnippet(text: string | null | undefined, type: string | null | undefined): string {
+  const trimmed = text?.trim()
+  if (trimmed) {
+    return trimmed
+  }
+
+  return messageTypePlaceholder(type)
 }
 
 export async function ensureMetaWebhookTables() {
@@ -432,15 +545,23 @@ export async function getConversations(
     `WITH base AS (
        SELECT
          id,
-         COALESCE(NULLIF(trim(wa_id), ''), concat('unknown-', id::text)) as conversation_id,
-         NULLIF(trim(wa_id), '') as wa_id,
-         COALESCE(NULLIF(trim(contact_name), ''), NULLIF(trim(wa_id), ''), 'Contacto sin nombre') as name,
+         NULLIF(regexp_replace(COALESCE(wa_id, ''), '\\D+', '', 'g'), '') as wa_id_digits,
+         COALESCE(
+           NULLIF(regexp_replace(COALESCE(wa_id, ''), '\\D+', '', 'g'), ''),
+           concat('unknown-', id::text)
+         ) as conversation_id,
+         COALESCE(
+           NULLIF(trim(contact_name), ''),
+           NULLIF(regexp_replace(COALESCE(wa_id, ''), '\\D+', '', 'g'), ''),
+           'Contacto sin nombre'
+         ) as name,
          COALESCE(NULLIF(trim(message_text), ''),
                   CASE
                     WHEN message_type = 'image' THEN '[Imagen]'
                     WHEN message_type = 'audio' THEN '[Audio]'
                     WHEN message_type = 'document' THEN '[Documento]'
                     WHEN message_type = 'video' THEN '[Video]'
+                    WHEN message_type = 'reaction' THEN '[Reacción]'
                     ELSE 'Sin contenido'
                   END) as snippet,
          CASE
@@ -458,7 +579,7 @@ export async function getConversations(
      latest_per_contact AS (
        SELECT DISTINCT ON (conversation_id)
          conversation_id,
-         wa_id,
+         wa_id_digits,
          name,
          snippet,
          owner,
@@ -475,7 +596,7 @@ export async function getConversations(
      )
      SELECT
        latest_per_contact.conversation_id,
-       latest_per_contact.wa_id,
+       latest_per_contact.wa_id_digits AS wa_id,
        latest_per_contact.name,
        latest_per_contact.snippet,
        latest_per_contact.owner,
@@ -522,31 +643,114 @@ export async function getMessagesByConversation(
 
   const where = conversationWhereSql(conversationId)
   const result = await pool.query<MessageRow>(
-    `SELECT
-       id,
-       wamid,
-       direction,
-       message_type,
-       message_text,
-       media_id,
-       media_mime_type,
-       media_caption,
-       media_filename,
-       message_status,
-       status_error,
-       sent_at::text,
-       raw_payload
-     FROM tenant_base.meta_webhook_messages
-     WHERE tenant_schema = $1
-       AND ${where.sql}
-     ORDER BY sent_at ASC NULLS LAST, id ASC
-     LIMIT $3`,
+    `WITH recent AS (
+       SELECT
+         id,
+         wamid,
+         direction,
+         message_type,
+         message_text,
+         media_id,
+         media_mime_type,
+         media_caption,
+         media_filename,
+         message_status,
+         status_error,
+         sent_at::text,
+         raw_payload
+       FROM tenant_base.meta_webhook_messages
+       WHERE tenant_schema = $1
+         AND ${where.sql}
+       ORDER BY sent_at DESC NULLS LAST, id DESC
+       LIMIT $3
+     )
+     SELECT *
+       FROM recent
+      ORDER BY sent_at ASC NULLS LAST, id ASC`,
     [tenantSchema, ...where.params, limit],
   )
 
-  return result.rows.map((row) => {
+  const rowsByWamid = new Map<string, { text: string | null; type: string | null }>()
+  for (const row of result.rows) {
+    if (row.wamid) {
+      rowsByWamid.set(row.wamid, {
+        text: row.message_text,
+        type: row.message_type,
+      })
+    }
+  }
+
+  const missingReactionTargetWamids = new Set<string>()
+
+  const mappedRows = result.rows.map((row) => {
     const direction = row.direction === "outbound" ? "outbound" : "inbound"
     const senderMeta = extractOutboundSenderMeta(row.raw_payload, direction)
+    const reactionMeta = row.message_type?.trim() === "reaction" ? extractReactionMeta(row.raw_payload) : { emoji: null, targetWamid: null }
+
+    if (reactionMeta.targetWamid && !rowsByWamid.has(reactionMeta.targetWamid)) {
+      missingReactionTargetWamids.add(reactionMeta.targetWamid)
+    }
+
+    return {
+      row,
+      direction,
+      senderMeta,
+      reactionMeta,
+    }
+  })
+
+  const reactionTargetSnippets = new Map<string, string>()
+
+  for (const [wamid, value] of rowsByWamid.entries()) {
+    reactionTargetSnippets.set(wamid, buildMessageSnippet(value.text, value.type))
+  }
+
+  if (missingReactionTargetWamids.size > 0) {
+    const missingIds = Array.from(missingReactionTargetWamids)
+    const targetsResult = await pool.query<{ wamid: string | null; message_text: string | null; message_type: string | null }>(
+      `SELECT wamid, message_text, message_type
+         FROM tenant_base.meta_webhook_messages
+        WHERE tenant_schema = $1
+          AND wamid = ANY($2::text[])`,
+      [tenantSchema, missingIds],
+    )
+
+    for (const targetRow of targetsResult.rows) {
+      const wamid = targetRow.wamid?.trim() || null
+      if (!wamid) {
+        continue
+      }
+
+      reactionTargetSnippets.set(wamid, buildMessageSnippet(targetRow.message_text, targetRow.message_type))
+    }
+  }
+
+  return mappedRows.map(({ row, direction, senderMeta, reactionMeta }, index) => {
+    const reactionEmoji = reactionMeta.emoji ?? trimOrNull(row.message_text)
+
+    let fallbackPreviousSnippet: string | null = null
+    if (row.message_type?.trim() === "reaction") {
+      for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+        const previous = mappedRows[previousIndex]?.row
+        if (!previous || previous.message_type?.trim() === "reaction") {
+          continue
+        }
+
+        fallbackPreviousSnippet = buildMessageSnippet(previous.message_text, previous.message_type)
+        break
+      }
+    }
+
+    const reactionToSnippet = reactionMeta.targetWamid
+      ? reactionTargetSnippets.get(reactionMeta.targetWamid) ?? "[Mensaje no disponible]"
+      : fallbackPreviousSnippet
+
+    const messageText =
+      row.message_type?.trim() === "reaction"
+        ? reactionEmoji
+          ? `Reaccionó ${reactionEmoji}`
+          : "Reaccionó a un mensaje"
+        : row.message_text
 
     return {
       id: String(row.id),
@@ -556,13 +760,16 @@ export async function getMessagesByConversation(
       sentByType: senderMeta.type,
       sentByName: senderMeta.name,
       type: row.message_type?.trim() || "text",
-      text: row.message_text,
+      text: messageText,
       mediaId: row.media_id,
       mediaMimeType: row.media_mime_type,
       mediaCaption: row.media_caption,
       mediaFilename: row.media_filename,
       status: row.message_status,
       statusError: row.status_error,
+      reactionEmoji,
+      reactionToWamid: reactionMeta.targetWamid,
+      reactionToSnippet,
       dateLabel: formatRelativeDate(row.sent_at),
       timeLabel: formatTimeLabel(row.sent_at),
       sentAt: row.sent_at,
@@ -650,6 +857,7 @@ export async function sendMessageToMeta(params: {
   to: string
   text?: string | null
   file?: File | null
+  reaction?: { messageId: string; emoji: string } | null
   contactName?: string | null
   sentByType?: "bot" | "human"
   sentByName?: string | null
@@ -669,12 +877,15 @@ export async function sendMessageToMeta(params: {
   const to = params.to.trim()
   const text = params.text?.trim() ?? ""
   const file = params.file ?? null
+  const reactionMessageId = params.reaction?.messageId?.trim() ?? ""
+  const reactionEmoji = params.reaction?.emoji?.trim() ?? ""
+  const hasReaction = reactionMessageId.length > 0 && reactionEmoji.length > 0
 
   if (!to) {
     throw new Error("RECIPIENT_REQUIRED")
   }
 
-  if (text.length === 0 && !file) {
+  if (!hasReaction && text.length === 0 && !file) {
     throw new Error("MESSAGE_EMPTY")
   }
 
@@ -684,7 +895,9 @@ export async function sendMessageToMeta(params: {
   let mediaCaption: string | null = null
   let mediaFilename: string | null = null
 
-  if (file) {
+  if (hasReaction) {
+    messageType = "reaction"
+  } else if (file) {
     const formData = new FormData()
     formData.append("messaging_product", "whatsapp")
     formData.append("file", file, file.name || "archivo")
@@ -716,6 +929,11 @@ export async function sendMessageToMeta(params: {
     payload.text = {
       body: text,
       preview_url: false,
+    }
+  } else if (messageType === "reaction") {
+    payload.reaction = {
+      message_id: reactionMessageId,
+      emoji: reactionEmoji,
     }
   } else if (messageType === "image") {
     payload.image = {
@@ -759,6 +977,13 @@ export async function sendMessageToMeta(params: {
       name: sentByName,
       at: sentAt,
     },
+    reaction:
+      messageType === "reaction"
+        ? {
+            message_id: reactionMessageId,
+            emoji: reactionEmoji,
+          }
+        : undefined,
     meta_response: sendPayload,
   }
 
@@ -794,7 +1019,7 @@ export async function sendMessageToMeta(params: {
       to,
       params.contactName?.trim() || null,
       messageType,
-      text.length > 0 ? text : null,
+      messageType === "reaction" ? reactionEmoji : text.length > 0 ? text : null,
       mediaId,
       mediaMimeType,
       mediaCaption,
@@ -807,7 +1032,7 @@ export async function sendMessageToMeta(params: {
   return {
     wamid,
     type: messageType,
-    text: text.length > 0 ? text : null,
+    text: messageType === "reaction" ? reactionEmoji : text.length > 0 ? text : null,
     mediaId,
     mediaMimeType,
     mediaCaption,
