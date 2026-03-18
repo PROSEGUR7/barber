@@ -606,9 +606,6 @@ export default function AdminAjustesPage() {
       <main className="container mx-auto space-y-8 px-4 py-8">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Ajustes</h1>
-          <p className="text-muted-foreground">
-            Configura en una sola vista tus ajustes personales y la administración de plataforma.
-          </p>
           <div className="inline-flex rounded-lg border bg-background p-1">
             <Button
               type="button"
@@ -817,79 +814,20 @@ export default function AdminAjustesPage() {
         <section className="space-y-4">
           <div className="space-y-1">
             <h2 className="text-2xl font-semibold">Configuración de plataforma</h2>
-            <p className="text-sm text-muted-foreground">
-              Métricas operativas y gestión de códigos promocionales.
-            </p>
           </div>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Administradores</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.totalAdminUsers)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Equipo operativo</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.totalEmployees)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Clientes registrados</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.totalClients)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Servicios activos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.activeServices)} / {formatNumber(summary.totalServices)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CompactMetricCard title="Administradores" value={formatNumber(summary.totalAdminUsers)} />
+          <CompactMetricCard title="Equipo operativo" value={formatNumber(summary.totalEmployees)} />
+          <CompactMetricCard title="Clientes registrados" value={formatNumber(summary.totalClients)} />
+          <CompactMetricCard title="Servicios activos" value={`${formatNumber(summary.activeServices)} / ${formatNumber(summary.totalServices)}`} className="col-span-2 xl:col-span-1" />
           </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Agendamientos totales</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.totalAppointments)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Registros de pagos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(summary.totalPayments)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Monto acumulado</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatCurrency(summary.totalPaymentsAmount)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="space-y-1">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Promo codes activos</CardTitle>
-              <CardDescription className="text-3xl font-bold text-foreground">
-                {formatNumber(activePromoCodes)} / {formatNumber(promoCodes.length)}
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <section className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CompactMetricCard title="Agendamientos totales" value={formatNumber(summary.totalAppointments)} />
+          <CompactMetricCard title="Registros de pagos" value={formatNumber(summary.totalPayments)} />
+          <CompactMetricCard title="Monto acumulado" value={formatCurrency(summary.totalPaymentsAmount)} className="col-span-2 xl:col-span-1" />
+          <CompactMetricCard title="Promo codes activos" value={`${formatNumber(activePromoCodes)} / ${formatNumber(promoCodes.length)}`} className="col-span-2 xl:col-span-1" />
           </section>
 
           {shouldShowErrorCard ? (
@@ -1081,6 +1019,29 @@ export default function AdminAjustesPage() {
         </Sheet>
       </main>
     </div>
+  )
+}
+
+function CompactMetricCard({
+  title,
+  value,
+  className,
+}: {
+  title: string
+  value: string
+  className?: string
+}) {
+  return (
+    <Card className={className}>
+      <CardHeader className="space-y-1 px-3 pb-0 pt-2 sm:px-6 sm:pb-2 sm:pt-4">
+        <CardTitle className="line-clamp-1 text-[13px] font-medium text-muted-foreground sm:text-sm">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-[1.9rem] font-bold leading-none text-foreground sm:text-3xl">
+          {value}
+        </CardDescription>
+      </CardHeader>
+    </Card>
   )
 }
 
