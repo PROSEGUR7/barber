@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import {
+  BarChart3,
   CalendarDays,
   ClipboardList,
   Clock,
@@ -205,6 +206,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       { title: "Servicios", url: "/admin/servicios", icon: Scissors },
       { title: "Planes", url: "/admin/planes", icon: DollarSign },
       { title: "Pagos y Facturación", url: "/admin/pagos", icon: Receipt },
+      { title: "Reportes", url: "/admin/reportes", icon: BarChart3 },
       { title: "Ajustes / Configuración", url: "/admin/ajustes", icon: Settings2 },
     ].map((item) => {
       if (canAccessAdminSections) {

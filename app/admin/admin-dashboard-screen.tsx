@@ -11,13 +11,14 @@ import {
   UserCircle,
   Users,
 } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, Cell, Label, Pie, PieChart, Sector, XAxis, YAxis } from "recharts"
+import { type PieSectorDataItem } from "recharts/types/polar/Pie"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { ChartContainer, ChartStyle, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -40,7 +41,7 @@ type DashboardSection = "general" | "operaciones" | "clientes"
 
 type ActivityWindow = "30" | "90" | "all"
 
-type ActivitySegment = "nuevo" | "ocasional" | "frecuente" | "vip"
+type ClientDbSegment = "nuevo" | "frecuente"
 
 const revenueChartConfig = {
   revenue: {
@@ -49,28 +50,17 @@ const revenueChartConfig = {
   },
 } satisfies ChartConfig
 
-const appointmentsChartConfig = {
-  value: {
-    label: "Citas",
-  },
-  completed: {
-    label: "Completadas",
-    color: "var(--chart-2)",
-  },
-  upcoming: {
-    label: "Próximas",
-    color: "var(--chart-3)",
-  },
-  other: {
-    label: "Otras",
-    color: "var(--chart-4)",
-  },
-} satisfies ChartConfig
-
-const clientsChartConfig = {
+const clientSegmentChartConfig = {
   count: {
     label: "Clientes",
-    color: "var(--chart-5)",
+  },
+  nuevo: {
+    label: "Nuevo",
+    color: "var(--chart-1)",
+  },
+  frecuente: {
+    label: "Frecuente",
+    color: "var(--chart-2)",
   },
 } satisfies ChartConfig
 
@@ -87,33 +77,13 @@ function getNormalizedValue(value: string | null | undefined, fallback: string):
   return sanitized && sanitized.length > 0 ? sanitized : fallback
 }
 
-function getClientSegment(client: ClientSummary): ActivitySegment {
-  if (client.totalSpent >= 180000 || client.completedAppointments >= 14) {
-    return "vip"
+function getClientDbSegment(type: string | null | undefined): ClientDbSegment | null {
+  const normalized = (type ?? "").trim().toLowerCase()
+  if (normalized === "nuevo" || normalized === "frecuente") {
+    return normalized
   }
 
-  if (client.totalSpent >= 80000 || client.completedAppointments >= 8) {
-    return "frecuente"
-  }
-
-  if (client.completedAppointments >= 3 || client.totalAppointments >= 4) {
-    return "ocasional"
-  }
-
-  return "nuevo"
-}
-
-function getClientSegmentLabel(segment: ActivitySegment): string {
-  switch (segment) {
-    case "vip":
-      return "VIP"
-    case "frecuente":
-      return "Frecuente"
-    case "ocasional":
-      return "Ocasional"
-    default:
-      return "Nuevo"
-  }
+  return null
 }
 
 function getCutoffDate(window: ActivityWindow): Date | null {
@@ -180,6 +150,7 @@ function buildTenantHeaders(): HeadersInit {
 }
 
 export default function AdminDashboard() {
+  const clientSegmentChartId = "admin-client-segment-chart"
   const isMobile = useIsMobile()
   const [employees, setEmployees] = useState<EmployeeSummary[]>([])
   const [clients, setClients] = useState<ClientSummary[]>([])
@@ -191,6 +162,7 @@ export default function AdminDashboard() {
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState("all")
   const [clientTypeFilter, setClientTypeFilter] = useState("all")
   const [clientSegmentFilter, setClientSegmentFilter] = useState("all")
+  const [activeClientSegment, setActiveClientSegment] = useState<ClientDbSegment>("nuevo")
   const [activityWindow, setActivityWindow] = useState<ActivityWindow>("90")
 
   const loadEmployees = useCallback(
@@ -324,7 +296,7 @@ export default function AdminDashboard() {
   const filteredClients = useMemo(() => {
     return clients.filter((client) => {
       const typeValue = getNormalizedValue(client.type, "Sin categoría")
-      const segmentValue = getClientSegment(client)
+      const segmentValue = getClientDbSegment(client.type)
 
       const typeMatches = clientTypeFilter === "all" || typeValue === clientTypeFilter
       const segmentMatches = clientSegmentFilter === "all" || segmentValue === clientSegmentFilter
@@ -341,6 +313,7 @@ export default function AdminDashboard() {
       totalAppointments: 0,
       upcomingAppointments: 0,
       completedAppointments: 0,
+      paidAppointments: 0,
       clientsWithUpcomingAppointments: 0,
       activeClientsByWindow: 0,
       newClientsByWindow: 0,
@@ -353,6 +326,7 @@ export default function AdminDashboard() {
       totals.totalAppointments += employee.totalAppointments
       totals.upcomingAppointments += employee.upcomingAppointments
       totals.completedAppointments += employee.completedAppointments
+      totals.paidAppointments += employee.paidAppointments
     }
 
     for (const client of filteredClients) {
@@ -373,10 +347,11 @@ export default function AdminDashboard() {
   }, [activityWindow, filteredClients, filteredEmployees])
 
   const derivedMetrics = useMemo(() => {
-    const averageTicket =
-      metrics.completedAppointments > 0 ? metrics.totalRevenue / metrics.completedAppointments : 0
+    const ticketDenominator = metrics.paidAppointments > 0 ? metrics.paidAppointments : metrics.completedAppointments
+    const averageTicket = ticketDenominator > 0 ? metrics.totalRevenue / ticketDenominator : 0
     const revenuePerEmployee = metrics.totalEmployees > 0 ? metrics.totalRevenue / metrics.totalEmployees : 0
-    const completionRate = getSafeRate(metrics.completedAppointments, metrics.totalAppointments)
+    const effectiveCompletedAppointments = Math.max(metrics.completedAppointments, metrics.paidAppointments)
+    const completionRate = getSafeRate(effectiveCompletedAppointments, metrics.totalAppointments)
     const occupancyRate = getSafeRate(metrics.upcomingAppointments, metrics.totalAppointments)
 
     return {
@@ -403,68 +378,50 @@ export default function AdminDashboard() {
     [isMobile, revenueByEmployee],
   )
 
-  const appointmentDistribution = useMemo(() => {
-    const otherAppointments = Math.max(metrics.totalAppointments - metrics.completedAppointments - metrics.upcomingAppointments, 0)
-
-    return [
-      {
-        key: "completed",
-        label: "Completadas",
-        value: metrics.completedAppointments,
-        fill: "var(--color-completed)",
-      },
-      {
-        key: "upcoming",
-        label: "Próximas",
-        value: metrics.upcomingAppointments,
-        fill: "var(--color-upcoming)",
-      },
-      {
-        key: "other",
-        label: "Otras",
-        value: otherAppointments,
-        fill: "var(--color-other)",
-      },
-    ].filter((item) => item.value > 0)
-  }, [metrics.completedAppointments, metrics.totalAppointments, metrics.upcomingAppointments])
-
-  const clientsByType = useMemo(() => {
-    const grouped = new Map<string, number>()
-
-    for (const client of filteredClients) {
-      const key = getNormalizedValue(client.type, "Sin categoría")
-      grouped.set(key, (grouped.get(key) ?? 0) + 1)
-    }
-
-    return [...grouped.entries()]
-      .map(([type, count]) => ({ type, count }))
-      .sort((a, b) => b.count - a.count)
-  }, [filteredClients])
-
-  const clientsByTypeChartData = useMemo(
-    () => (isMobile ? clientsByType.slice(0, 6) : clientsByType),
-    [clientsByType, isMobile],
-  )
-
   const clientsBySegment = useMemo(() => {
-    const grouped = new Map<ActivitySegment, number>([
+    const grouped = new Map<ClientDbSegment, number>([
       ["nuevo", 0],
-      ["ocasional", 0],
       ["frecuente", 0],
-      ["vip", 0],
     ])
 
     for (const client of filteredClients) {
-      const segment = getClientSegment(client)
-      grouped.set(segment, (grouped.get(segment) ?? 0) + 1)
+      const segment = getClientDbSegment(client.type)
+      if (segment) {
+        grouped.set(segment, (grouped.get(segment) ?? 0) + 1)
+      }
     }
 
-    return (["nuevo", "ocasional", "frecuente", "vip"] as const).map((segment) => ({
+    return (["nuevo", "frecuente"] as const).map((segment) => ({
       segment,
-      label: getClientSegmentLabel(segment),
+      label: segment === "nuevo" ? "Nuevo" : "Frecuente",
       count: grouped.get(segment) ?? 0,
     }))
   }, [filteredClients])
+
+  const clientSegmentOptions = useMemo(
+    () => clientsBySegment.map((segment) => segment.segment),
+    [clientsBySegment],
+  )
+
+  const clientSegmentTotal = useMemo(
+    () => clientsBySegment.reduce((sum, segment) => sum + segment.count, 0),
+    [clientsBySegment],
+  )
+
+  const activeClientSegmentIndex = useMemo(
+    () => clientsBySegment.findIndex((segment) => segment.segment === activeClientSegment),
+    [activeClientSegment, clientsBySegment],
+  )
+
+  useEffect(() => {
+    if (clientSegmentOptions.length === 0) {
+      return
+    }
+
+    if (!clientSegmentOptions.includes(activeClientSegment)) {
+      setActiveClientSegment(clientSegmentOptions[0])
+    }
+  }, [activeClientSegment, clientSegmentOptions])
 
   const businessInsights = useMemo(() => {
     const topEmployee = [...filteredEmployees].sort((a, b) => b.totalRevenue - a.totalRevenue)[0] ?? null
@@ -551,14 +508,12 @@ export default function AdminDashboard() {
               <p className="text-xs font-medium text-muted-foreground">Segmento de clientes</p>
               <Select value={clientSegmentFilter} onValueChange={setClientSegmentFilter}>
                 <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Todos los segmentos" />
+                  <SelectValue placeholder="Todos los segmentos BD" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="nuevo">Nuevo</SelectItem>
-                  <SelectItem value="ocasional">Ocasional</SelectItem>
                   <SelectItem value="frecuente">Frecuente</SelectItem>
-                  <SelectItem value="vip">VIP</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -600,7 +555,7 @@ export default function AdminDashboard() {
                 <MetricCard
                   title="Ticket promedio"
                   value={formatCurrency(derivedMetrics.averageTicket)}
-                  description="Valor promedio por cita completada"
+                  description="Valor promedio por cita pagada"
                   icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
                 />
                 <MetricCard
@@ -629,7 +584,7 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid gap-3 sm:gap-4 xl:grid-cols-2">
+              <div>
                 <Card>
                   <CardHeader>
                     <CardTitle>Ingresos por empleado</CardTitle>
@@ -671,38 +626,6 @@ export default function AdminDashboard() {
                     )}
                   </CardContent>
                 </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Distribución de citas</CardTitle>
-                    <CardDescription>Estado operativo entre citas completadas y pendientes</CardDescription>
-                  </CardHeader>
-                  <CardContent className="min-w-0 overflow-hidden">
-                    {appointmentDistribution.length > 0 ? (
-                      <ChartContainer config={appointmentsChartConfig} className="aspect-auto h-[190px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
-                        <PieChart>
-                          <ChartTooltip
-                            content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} />}
-                          />
-                          <Pie
-                            data={appointmentDistribution}
-                            dataKey="value"
-                            nameKey="label"
-                            innerRadius={isMobile ? 44 : 54}
-                            outerRadius={isMobile ? 68 : 84}
-                            strokeWidth={3}
-                          >
-                            {appointmentDistribution.map((item) => (
-                              <Cell key={item.key} fill={item.fill} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                      </ChartContainer>
-                    ) : (
-                      <EmptyChartState message="No hay citas para graficar con los filtros actuales." />
-                    )}
-                  </CardContent>
-                </Card>
               </div>
 
               <BusinessInsights
@@ -722,7 +645,7 @@ export default function AdminDashboard() {
                 <MetricCard
                   title="Productividad"
                   value={`${derivedMetrics.completionRate}%`}
-                  description="Citas completadas sobre total"
+                  description="Citas completadas o pagadas sobre total"
                   icon={<Activity className="h-4 w-4 text-muted-foreground" />}
                 />
                 <MetricCard
@@ -802,73 +725,89 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid gap-3 sm:gap-4 xl:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Clientes por tipo</CardTitle>
-                    <CardDescription>Segmentación de base de clientes según categoría</CardDescription>
-                  </CardHeader>
-                  <CardContent className="min-w-0 overflow-hidden">
-                    {clientsByTypeChartData.length > 0 ? (
-                      <ChartContainer config={clientsChartConfig} className="aspect-auto h-[180px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
-                        <BarChart
-                          data={clientsByTypeChartData}
-                          margin={isMobile ? { top: 8, right: 4, left: 0, bottom: 0 } : { top: 12, right: 8, left: 8, bottom: 0 }}
-                        >
-                          <CartesianGrid vertical={false} />
-                          <XAxis
-                            dataKey="type"
-                            tickLine={false}
-                            axisLine={false}
-                            tickMargin={isMobile ? 6 : 8}
-                            minTickGap={isMobile ? 38 : 24}
-                            tick={{ fontSize: isMobile ? 10 : 12 }}
-                            interval="preserveStartEnd"
-                          />
-                          <YAxis
-                            tickLine={false}
-                            axisLine={false}
-                            allowDecimals={false}
-                            tick={{ fontSize: isMobile ? 10 : 12 }}
-                            width={isMobile ? 26 : 40}
-                          />
-                          <ChartTooltip
-                            cursor={false}
-                            content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} />}
-                          />
-                          <Bar dataKey="count" fill="var(--color-count)" radius={8} />
-                        </BarChart>
-                      </ChartContainer>
-                    ) : (
-                      <EmptyChartState message="No hay clientes para graficar por tipo." />
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Segmento de actividad</CardTitle>
-                    <CardDescription>Clasificación por frecuencia e inversión de clientes</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {clientsBySegment.map((segment) => {
-                      const share = metrics.totalClients > 0 ? (segment.count / metrics.totalClients) * 100 : 0
-
-                      return (
-                        <div key={segment.segment} className="space-y-1">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="font-medium">{segment.label}</span>
-                            <span className="text-muted-foreground">
-                              {formatNumber(segment.count)} · {Math.round(share)}%
-                            </span>
+              <Card data-chart={clientSegmentChartId} className="flex flex-col">
+                <ChartStyle id={clientSegmentChartId} config={clientSegmentChartConfig} />
+                <CardHeader className="flex-row items-start space-y-0 pb-0">
+                  <div className="grid gap-1">
+                    <CardTitle>Segmentación de clientes</CardTitle>
+                    <CardDescription>Distribución según tipo de cliente guardado en BD</CardDescription>
+                  </div>
+                  <Select value={activeClientSegment} onValueChange={(value) => setActiveClientSegment(value as ClientDbSegment)}>
+                    <SelectTrigger className="ml-auto h-8 w-[150px] rounded-lg pl-2.5" aria-label="Seleccionar segmento">
+                      <SelectValue placeholder="Selecciona segmento" />
+                    </SelectTrigger>
+                    <SelectContent align="end" className="rounded-xl">
+                      {clientSegmentOptions.map((segmentKey) => (
+                        <SelectItem key={segmentKey} value={segmentKey} className="rounded-lg [&_span]:flex">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="flex h-3 w-3 shrink-0 rounded-xs" style={{ backgroundColor: `var(--color-${segmentKey})` }} />
+                            {segmentKey === "nuevo" ? "Nuevo" : "Frecuente"}
                           </div>
-                          <Progress value={Math.min(share, 100)} />
-                        </div>
-                      )
-                    })}
-                  </CardContent>
-                </Card>
-              </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardHeader>
+                <CardContent className="flex flex-1 items-center justify-center pb-2 pt-4 sm:pb-4">
+                  {clientSegmentTotal > 0 ? (
+                    <ChartContainer
+                      id={clientSegmentChartId}
+                      config={clientSegmentChartConfig}
+                      className="mx-auto aspect-square w-full max-w-[360px]"
+                    >
+                      <PieChart>
+                        <ChartTooltip
+                          cursor={false}
+                          content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} hideLabel />}
+                        />
+                        <Pie
+                          data={clientsBySegment}
+                          dataKey="count"
+                          nameKey="segment"
+                          innerRadius={isMobile ? 56 : 74}
+                          strokeWidth={5}
+                          activeIndex={Math.max(activeClientSegmentIndex, 0)}
+                          activeShape={({ outerRadius = 0, ...props }: PieSectorDataItem) => (
+                            <g>
+                              <Sector {...props} outerRadius={outerRadius + 8} />
+                              <Sector {...props} outerRadius={outerRadius + 20} innerRadius={outerRadius + 10} />
+                            </g>
+                          )}
+                        >
+                          {clientsBySegment.map((segment) => (
+                            <Cell key={segment.segment} fill={`var(--color-${segment.segment})`} />
+                          ))}
+                          <Label
+                            content={({ viewBox }) => {
+                              if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) {
+                                return null
+                              }
+
+                              const safeIndex = Math.max(activeClientSegmentIndex, 0)
+                              const activeSegment = clientsBySegment[safeIndex]
+                              const activeCount = activeSegment?.count ?? 0
+                              const activeLabel = activeSegment?.label ?? "Clientes"
+
+                              return (
+                                <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
+                                  <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-3xl font-bold">
+                                    {formatNumber(activeCount)}
+                                  </tspan>
+                                  <tspan x={viewBox.cx} y={(viewBox.cy || 0) + 20} className="fill-muted-foreground text-xs">
+                                    {activeLabel}
+                                  </tspan>
+                                </text>
+                              )
+                            }}
+                          />
+                        </Pie>
+                      </PieChart>
+                    </ChartContainer>
+                  ) : (
+                    <EmptyChartState message="No hay clientes para segmentar con los filtros actuales." />
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
           </Tabs>
         )}

@@ -1,5 +1,8 @@
 "use client"
 
+import { useMemo } from "react"
+import { usePathname } from "next/navigation"
+
 import { AppSidebar } from "@/components/app-sidebar"
 import { AuthGuard } from "@/components/auth-guard"
 import {
@@ -13,7 +16,35 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 
+const ADMIN_SECTION_LABELS: Record<string, string> = {
+  reportes: "Reportes",
+  agendamientos: "Agendamientos",
+  disponibilidad: "Disponibilidad Equipo",
+  conversaciones: "Conversaciones",
+  empleados: "Empleados",
+  clientes: "Clientes",
+  servicios: "Servicios",
+  planes: "Planes",
+  pagos: "Pagos y Facturación",
+  ajustes: "Ajustes / Configuración",
+}
+
+function getAdminSectionLabel(pathname: string): string {
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/admin"
+  if (normalizedPath === "/admin") {
+    return "Dashboard"
+  }
+
+  const segments = normalizedPath.split("/").filter(Boolean)
+  const section = (segments[1] ?? "").toLowerCase()
+
+  return ADMIN_SECTION_LABELS[section] ?? "Administración"
+}
+
 export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+  const sectionLabel = useMemo(() => getAdminSectionLabel(pathname ?? "/admin"), [pathname])
+
   return (
     <AuthGuard allowedRoles={["admin"]}>
       <SidebarProvider>
@@ -30,7 +61,11 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
                   </BreadcrumbItem>
                   <BreadcrumbSeparator className="hidden md:block" />
                   <BreadcrumbItem>
-                    <BreadcrumbPage>Administración</BreadcrumbPage>
+                    <BreadcrumbLink href="/admin">Administración</BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>{sectionLabel}</BreadcrumbPage>
                   </BreadcrumbItem>
                 </BreadcrumbList>
               </Breadcrumb>

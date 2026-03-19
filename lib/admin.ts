@@ -13,6 +13,7 @@ export type EmployeeSummary = {
   totalAppointments: number
   upcomingAppointments: number
   completedAppointments: number
+  paidAppointments: number
   totalRevenue: number
   serviceIds: number[]
   services: string[]
@@ -98,6 +99,91 @@ export type AdminSettingsSummary = {
   totalPaymentsAmount: number
 }
 
+export type AdminReportsGranularity = "day" | "month" | "year"
+
+export type AdminRevenueSeriesPoint = {
+  bucketStart: string
+  revenue: number
+  paymentsCount: number
+  appointmentsCount: number
+}
+
+export type AdminTopServiceReport = {
+  serviceId: number | null
+  serviceName: string
+  revenue: number
+  paidAppointments: number
+}
+
+export type AdminPaymentMethodBreakdown = {
+  method: string
+  paymentsCount: number
+  revenue: number
+}
+
+export type AdminDemandHeatPoint = {
+  dayOfWeek: number
+  hour: number
+  appointments: number
+}
+
+export type AdminRetentionMetrics = {
+  firstTimeClients: number
+  retainedClients: number
+  retentionRatePct: number
+}
+
+export type AdminBarberPerformanceReport = {
+  employeeId: number
+  employeeName: string
+  revenue: number
+  servicesDone: number
+  ratingAverage: number | null
+  ratingCount: number
+}
+
+export type AdminTopClientReport = {
+  clientId: number | null
+  clientName: string
+  paidAppointments: number
+  revenue: number
+}
+
+export type AdminIncomeMetrics = {
+  paymentMethods: AdminPaymentMethodBreakdown[]
+  averageTicketPerClient: number
+}
+
+export type AdminEfficiencyMetrics = {
+  noShowRatePct: number
+  noShowAppointments: number
+  totalAppointments: number
+  occupancyRatePct: number | null
+  productiveMinutes: number
+  availableMinutes: number
+  demandHeatmap: AdminDemandHeatPoint[]
+}
+
+export type AdminClientStaffMetrics = {
+  retention: AdminRetentionMetrics
+  barberPerformance: AdminBarberPerformanceReport[]
+  topClients: AdminTopClientReport[]
+}
+
+export type AdminRevenueReport = {
+  granularity: AdminReportsGranularity
+  series: AdminRevenueSeriesPoint[]
+  totals: {
+    revenue: number
+    paymentsCount: number
+    appointmentsCount: number
+  }
+  topServices: AdminTopServiceReport[]
+  income: AdminIncomeMetrics
+  efficiency: AdminEfficiencyMetrics
+  clientsAndStaff: AdminClientStaffMetrics
+}
+
 export class EmployeeRecordNotFoundError extends Error {
   constructor(message = "EMPLOYEE_RECORD_NOT_FOUND") {
     super(message)
@@ -137,6 +223,7 @@ type EmployeeSummaryRow = {
   total_appointments: string | null
   active_appointments: string | null
   completed_appointments: string | null
+  paid_appointments: string | null
   total_revenue: string | null
   service_ids: number[] | null
   services: string[] | null
@@ -241,7 +328,69 @@ type AdminSettingsSummaryRow = {
   total_payments_amount: string | null
 }
 
+type AdminRevenueSeriesRow = {
+  bucket_start: Date | null
+  revenue: string | null
+  payments_count: string | null
+  appointments_count: string | null
+}
+
+type AdminTopServiceRow = {
+  servicio_id: number | null
+  servicio_nombre: string | null
+  revenue: string | null
+  paid_appointments: string | null
+}
+
+type PaymentMethodBreakdownRow = {
+  metodo_pago: string | null
+  payments_count: string | null
+  revenue: string | null
+}
+
+type AverageTicketRow = {
+  average_ticket_per_client: string | null
+}
+
+type NoShowRow = {
+  total_appointments: string | null
+  no_show_appointments: string | null
+}
+
+type OccupancyRow = {
+  productive_minutes: string | null
+  available_minutes: string | null
+}
+
+type DemandHeatmapRow = {
+  day_of_week: number | null
+  hour_of_day: number | null
+  appointments: string | null
+}
+
+type RetentionRow = {
+  first_time_clients: string | null
+  retained_clients: string | null
+}
+
+type BarberPerformanceRow = {
+  employee_id: number | null
+  employee_name: string | null
+  revenue: string | null
+  services_done: string | null
+  rating_average: string | null
+  rating_count: string | null
+}
+
+type TopClientRow = {
+  client_id: number | null
+  client_name: string | null
+  paid_appointments: string | null
+  revenue: string | null
+}
+
 const PAID_PAYMENT_STATES = [
+  "completo",
   "pagado",
   "aprobado",
   "completado",
@@ -288,6 +437,7 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
   const totalAppointments = Number(row.total_appointments ?? 0)
   const upcomingAppointments = Number(row.active_appointments ?? 0)
   const completedAppointments = Number(row.completed_appointments ?? 0)
+  const paidAppointments = Number(row.paid_appointments ?? 0)
   const totalRevenue = Number(row.total_revenue ?? 0)
 
   return {
@@ -301,6 +451,7 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
     totalAppointments,
     upcomingAppointments,
     completedAppointments,
+    paidAppointments,
     totalRevenue,
     serviceIds,
     services,
@@ -438,6 +589,7 @@ export async function getEmployeesWithStats(filter?: {
       COALESCE(appointments.total_appointments, 0)::text AS total_appointments,
       COALESCE(appointments.active_appointments, 0)::text AS active_appointments,
       COALESCE(appointments.completed_appointments, 0)::text AS completed_appointments,
+      COALESCE(revenue.paid_appointments, 0)::text AS paid_appointments,
       COALESCE(revenue.total_revenue, 0)::text AS total_revenue,
       COALESCE(assigned_services.service_ids, ARRAY[]::int[]) AS service_ids,
       COALESCE(assigned_services.services, ARRAY[]::text[]) AS services
@@ -453,13 +605,34 @@ export async function getEmployeesWithStats(filter?: {
     ) appointments ON TRUE
     LEFT JOIN LATERAL (
       SELECT
+        COUNT(*) AS paid_appointments,
         COALESCE(
-          SUM(COALESCE(s.precio, 0)) FILTER (WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})),
+          SUM(
+            CASE
+              WHEN COALESCE(latest_paid_payment.monto, 0) > 0 THEN latest_paid_payment.monto
+              ELSE COALESCE(s.precio, 0)
+            END
+          ),
           0
         ) AS total_revenue
       FROM tenant_base.agendamientos a
       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+      LEFT JOIN LATERAL (
+        SELECT
+          p.monto,
+          p.estado::text AS estado,
+          p.wompi_status
+        FROM tenant_base.pagos p
+        WHERE p.agendamiento_id = a.id
+        ORDER BY p.fecha_pago DESC NULLS LAST, p.id DESC
+        LIMIT 1
+      ) latest_paid_payment ON TRUE
       WHERE a.empleado_id = e.id
+        AND (
+          LOWER(COALESCE(latest_paid_payment.estado, '')) IN (${PAID_PAYMENT_STATES_SQL})
+          OR UPPER(COALESCE(latest_paid_payment.wompi_status, '')) = 'APPROVED'
+          OR (latest_paid_payment.estado IS NULL AND LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL}))
+        )
     ) revenue ON TRUE
     LEFT JOIN LATERAL (
       SELECT
@@ -507,6 +680,7 @@ export async function getEmployeesWithStats(filter?: {
         totalAppointments: 0,
         upcomingAppointments: 0,
         completedAppointments: 0,
+        paidAppointments: 0,
         totalRevenue: 0,
         serviceIds: [],
         services: [],
@@ -544,6 +718,7 @@ export async function getEmployeesWithStats(filter?: {
         totalAppointments: 0,
         upcomingAppointments: 0,
         completedAppointments: 0,
+        paidAppointments: 0,
         totalRevenue: 0,
         serviceIds: [],
         services: [],
@@ -1272,4 +1447,557 @@ export async function updateAdminUserEmail(input: {
   }
 
   return mapAdminUserSettingsRow(result.rows[0])
+}
+
+export async function getAdminRevenueReport(options?: {
+  tenantSchema?: string | null
+  granularity?: AdminReportsGranularity
+  topServicesLimit?: number
+}): Promise<AdminRevenueReport> {
+  const isRecoverableSchemaError = (error: unknown): boolean => {
+    if (!error || typeof error !== "object") {
+      return false
+    }
+
+    const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : ""
+    return code === "42P01" || code === "42703"
+  }
+
+  const safePercent = (numerator: number, denominator: number): number => {
+    if (denominator <= 0) {
+      return 0
+    }
+
+    return Number(((numerator / denominator) * 100).toFixed(2))
+  }
+
+  const granularity = options?.granularity ?? "day"
+  const topServicesLimit =
+    typeof options?.topServicesLimit === "number" && Number.isFinite(options.topServicesLimit)
+      ? Math.min(Math.max(Math.trunc(options.topServicesLimit), 1), 20)
+      : 5
+
+  const granularitySql: Record<AdminReportsGranularity, string> = {
+    day: "day",
+    month: "month",
+    year: "year",
+  }
+
+  const periodClauseSql: Record<AdminReportsGranularity, string> = {
+    day: "p.fecha_pago >= date_trunc('day', now()) - interval '29 days'",
+    month: "p.fecha_pago >= date_trunc('month', now()) - interval '11 months'",
+    year: "p.fecha_pago >= date_trunc('year', now()) - interval '4 years'",
+  }
+
+  const appointmentPeriodClauseSql: Record<AdminReportsGranularity, string> = {
+    day: "a.fecha_cita >= date_trunc('day', now()) - interval '29 days'",
+    month: "a.fecha_cita >= date_trunc('month', now()) - interval '11 months'",
+    year: "a.fecha_cita >= date_trunc('year', now()) - interval '4 years'",
+  }
+
+  const slotsPeriodClauseSql: Record<AdminReportsGranularity, string> = {
+    day: "he.fecha_hora_inicio >= date_trunc('day', now()) - interval '29 days'",
+    month: "he.fecha_hora_inicio >= date_trunc('month', now()) - interval '11 months'",
+    year: "he.fecha_hora_inicio >= date_trunc('year', now()) - interval '4 years'",
+  }
+
+  const bucketExpression = `date_trunc('${granularitySql[granularity]}', p.fecha_pago)`
+  const fallbackBucketExpression = `date_trunc('${granularitySql[granularity]}', COALESCE(a.fecha_cita, NOW()))`
+  const periodClause = periodClauseSql[granularity]
+  const appointmentPeriodClause = appointmentPeriodClauseSql[granularity]
+  const slotsPeriodClause = slotsPeriodClauseSql[granularity]
+
+  const seriesQuery = `
+    SELECT
+      ${bucketExpression} AS bucket_start,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+            ELSE COALESCE(s.precio, 0)
+          END
+        ),
+        0
+      )::text AS revenue,
+      COUNT(p.id)::text AS payments_count,
+      COUNT(DISTINCT p.agendamiento_id)::text AS appointments_count
+    FROM tenant_base.pagos p
+    LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+    LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+    WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+      AND p.fecha_pago IS NOT NULL
+      AND ${periodClause}
+    GROUP BY 1
+    ORDER BY 1 ASC
+  `
+
+  const topServicesQuery = `
+    SELECT
+      s.id AS servicio_id,
+      s.nombre AS servicio_nombre,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+            ELSE COALESCE(s.precio, 0)
+          END
+        ),
+        0
+      )::text AS revenue,
+      COUNT(DISTINCT p.agendamiento_id)::text AS paid_appointments
+    FROM tenant_base.pagos p
+    LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+    LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+    WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+      AND p.fecha_pago IS NOT NULL
+      AND ${periodClause}
+    GROUP BY s.id, s.nombre
+    ORDER BY
+      COALESCE(
+        SUM(
+          CASE
+            WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+            ELSE COALESCE(s.precio, 0)
+          END
+        ),
+        0
+      ) DESC,
+      COUNT(DISTINCT p.agendamiento_id) DESC
+    LIMIT $1
+  `
+
+  let seriesResult
+  let topServicesResult
+
+  try {
+    ;[seriesResult, topServicesResult] = await Promise.all([
+      pool.query<AdminRevenueSeriesRow>(tenantSql(seriesQuery, options?.tenantSchema)),
+      pool.query<AdminTopServiceRow>(tenantSql(topServicesQuery, options?.tenantSchema), [topServicesLimit]),
+    ])
+  } catch (primaryError) {
+    console.warn("Admin reports primary query failed, using fallback", primaryError)
+
+    const fallbackSeriesQuery = `
+      SELECT
+        ${fallbackBucketExpression} AS bucket_start,
+        COALESCE(SUM(COALESCE(p.monto, 0)), 0)::text AS revenue,
+        COUNT(p.id)::text AS payments_count,
+        COUNT(DISTINCT p.agendamiento_id)::text AS appointments_count
+      FROM tenant_base.pagos p
+      LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+      WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `
+
+    const fallbackTopServicesQuery = `
+      SELECT
+        NULL::int AS servicio_id,
+        'Facturación general'::text AS servicio_nombre,
+        COALESCE(SUM(COALESCE(p.monto, 0)), 0)::text AS revenue,
+        COUNT(DISTINCT p.agendamiento_id)::text AS paid_appointments
+      FROM tenant_base.pagos p
+      WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+    `
+
+    ;[seriesResult, topServicesResult] = await Promise.all([
+      pool.query<AdminRevenueSeriesRow>(tenantSql(fallbackSeriesQuery, options?.tenantSchema)),
+      pool.query<AdminTopServiceRow>(tenantSql(fallbackTopServicesQuery, options?.tenantSchema)),
+    ])
+  }
+
+  const series = seriesResult.rows
+    .filter((row) => row.bucket_start)
+    .map((row) => ({
+      bucketStart: row.bucket_start!.toISOString(),
+      revenue: Number(row.revenue ?? 0),
+      paymentsCount: Number(row.payments_count ?? 0),
+      appointmentsCount: Number(row.appointments_count ?? 0),
+    }))
+
+  const totals = series.reduce(
+    (acc, point) => {
+      acc.revenue += point.revenue
+      acc.paymentsCount += point.paymentsCount
+      acc.appointmentsCount += point.appointmentsCount
+      return acc
+    },
+    {
+      revenue: 0,
+      paymentsCount: 0,
+      appointmentsCount: 0,
+    },
+  )
+
+  const topServices = topServicesResult.rows.map((row) => ({
+    serviceId: row.servicio_id,
+    serviceName: row.servicio_nombre?.trim() || "Servicio no asignado",
+    revenue: Number(row.revenue ?? 0),
+    paidAppointments: Number(row.paid_appointments ?? 0),
+  }))
+
+  const paymentMethodsResult = await pool.query<PaymentMethodBreakdownRow>(
+    tenantSql(
+      `SELECT
+          LOWER(COALESCE(p.metodo_pago::text, 'sin_metodo')) AS metodo_pago,
+          COUNT(*)::text AS payments_count,
+          COALESCE(SUM(COALESCE(p.monto, 0)), 0)::text AS revenue
+       FROM tenant_base.pagos p
+      WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+        AND p.fecha_pago IS NOT NULL
+        AND ${periodClause}
+      GROUP BY 1
+      ORDER BY
+        COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC,
+        COUNT(*) DESC`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const averageTicketResult = await pool.query<AverageTicketRow>(
+    tenantSql(
+      `WITH spend_by_client AS (
+          SELECT
+            a.cliente_id,
+            SUM(COALESCE(p.monto, 0)) AS total_cliente
+          FROM tenant_base.pagos p
+          JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+         WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+           AND p.fecha_pago IS NOT NULL
+           AND ${periodClause}
+         GROUP BY a.cliente_id
+       )
+       SELECT COALESCE(AVG(total_cliente), 0)::text AS average_ticket_per_client
+         FROM spend_by_client`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const noShowResult = await pool.query<NoShowRow>(
+    tenantSql(
+      `SELECT
+          COUNT(*)::text AS total_appointments,
+          COUNT(*) FILTER (
+            WHERE LOWER(a.estado::text) IN ('cancelada', 'no_show', 'noshow', 'inasistencia', 'inasistencia_cliente')
+          )::text AS no_show_appointments
+       FROM tenant_base.agendamientos a
+      WHERE ${appointmentPeriodClause}`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const productiveMinutesResult = await pool.query<OccupancyRow>(
+    tenantSql(
+      `SELECT
+          COALESCE(
+            SUM(
+              GREATEST(
+                EXTRACT(EPOCH FROM (COALESCE(a.fecha_cita_fin, a.fecha_cita + interval '30 minutes') - a.fecha_cita)) / 60.0,
+                0
+              )
+            ) FILTER (
+              WHERE (
+                LOWER(a.estado::text) IN (${ACTIVE_APPOINTMENT_STATES_SQL})
+                OR LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+              )
+            ),
+            0
+          )::text AS productive_minutes,
+          0::text AS available_minutes
+       FROM tenant_base.agendamientos a
+      WHERE ${appointmentPeriodClause}`,
+      options?.tenantSchema,
+    ),
+  )
+
+  let availableMinutes = 0
+  try {
+    const availabilityResult = await pool.query<OccupancyRow>(
+      tenantSql(
+        `SELECT
+            0::text AS productive_minutes,
+            COALESCE(
+              SUM(
+                GREATEST(EXTRACT(EPOCH FROM (he.fecha_hora_fin - he.fecha_hora_inicio)) / 60.0, 0)
+              ) FILTER (WHERE COALESCE(he.disponible, TRUE) = TRUE),
+              0
+            )::text AS available_minutes
+         FROM tenant_base.horarios_empleados he
+        WHERE ${slotsPeriodClause}`,
+        options?.tenantSchema,
+      ),
+    )
+
+    availableMinutes = Number(availabilityResult.rows[0]?.available_minutes ?? 0)
+  } catch (error) {
+    if (!isRecoverableSchemaError(error)) {
+      throw error
+    }
+  }
+
+  const demandHeatmapResult = await pool.query<DemandHeatmapRow>(
+    tenantSql(
+      `SELECT
+          EXTRACT(ISODOW FROM a.fecha_cita)::int AS day_of_week,
+          EXTRACT(HOUR FROM a.fecha_cita)::int AS hour_of_day,
+          COUNT(*)::text AS appointments
+       FROM tenant_base.agendamientos a
+      WHERE ${appointmentPeriodClause}
+        AND (
+          LOWER(a.estado::text) IN (${ACTIVE_APPOINTMENT_STATES_SQL})
+          OR LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+        )
+      GROUP BY 1, 2
+      ORDER BY 1, 2`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const retentionResult = await pool.query<RetentionRow>(
+    tenantSql(
+      `WITH ordered_appointments AS (
+          SELECT
+            a.cliente_id,
+            a.fecha_cita,
+            ROW_NUMBER() OVER (PARTITION BY a.cliente_id ORDER BY a.fecha_cita ASC) AS rn
+          FROM tenant_base.agendamientos a
+          WHERE LOWER(a.estado::text) <> 'cancelada'
+        ),
+        first_second AS (
+          SELECT
+            o1.cliente_id,
+            o1.fecha_cita AS first_appointment,
+            o2.fecha_cita AS second_appointment
+          FROM ordered_appointments o1
+          LEFT JOIN ordered_appointments o2
+            ON o2.cliente_id = o1.cliente_id
+           AND o2.rn = 2
+          WHERE o1.rn = 1
+        )
+        SELECT
+          COUNT(*)::text AS first_time_clients,
+          COUNT(*) FILTER (WHERE second_appointment IS NOT NULL)::text AS retained_clients
+        FROM first_second
+        WHERE first_appointment >= (
+          CASE
+            WHEN '${granularity}' = 'day' THEN date_trunc('day', now()) - interval '29 days'
+            WHEN '${granularity}' = 'month' THEN date_trunc('month', now()) - interval '11 months'
+            ELSE date_trunc('year', now()) - interval '4 years'
+          END
+        )`,
+        options?.tenantSchema,
+      ),
+  )
+
+  let barberPerformanceResult
+  try {
+    barberPerformanceResult = await pool.query<BarberPerformanceRow>(
+      tenantSql(
+        `SELECT
+            e.id AS employee_id,
+            e.nombre AS employee_name,
+            COALESCE(
+              SUM(COALESCE(p.monto, 0)) FILTER (WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})),
+              0
+            )::text AS revenue,
+            COUNT(DISTINCT a.id) FILTER (
+              WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                 OR LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+            )::text AS services_done,
+            ROUND(AVG(r.rating)::numeric, 2)::text AS rating_average,
+            COUNT(r.id)::text AS rating_count
+         FROM tenant_base.empleados e
+         LEFT JOIN tenant_base.agendamientos a
+           ON a.empleado_id = e.id
+          AND ${appointmentPeriodClause}
+         LEFT JOIN tenant_base.pagos p ON p.agendamiento_id = a.id
+         LEFT JOIN tenant_base.empleados_resenas r ON r.empleado_id = e.id
+         GROUP BY e.id, e.nombre
+         ORDER BY
+           COALESCE(SUM(COALESCE(p.monto, 0)) FILTER (WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})), 0) DESC,
+           COUNT(DISTINCT a.id) FILTER (
+             WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                OR LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+           ) DESC`,
+        options?.tenantSchema,
+      ),
+    )
+  } catch (error) {
+    if (!isRecoverableSchemaError(error)) {
+      throw error
+    }
+
+    barberPerformanceResult = await pool.query<BarberPerformanceRow>(
+      tenantSql(
+        `SELECT
+            e.id AS employee_id,
+            e.nombre AS employee_name,
+            COALESCE(
+              SUM(COALESCE(p.monto, 0)) FILTER (WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})),
+              0
+            )::text AS revenue,
+            COUNT(DISTINCT a.id) FILTER (
+              WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                 OR LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+            )::text AS services_done,
+            NULL::text AS rating_average,
+            0::text AS rating_count
+         FROM tenant_base.empleados e
+         LEFT JOIN tenant_base.agendamientos a
+           ON a.empleado_id = e.id
+          AND ${appointmentPeriodClause}
+         LEFT JOIN tenant_base.pagos p ON p.agendamiento_id = a.id
+         GROUP BY e.id, e.nombre
+         ORDER BY
+           COALESCE(SUM(COALESCE(p.monto, 0)) FILTER (WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})), 0) DESC,
+           COUNT(DISTINCT a.id) FILTER (
+             WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                OR LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+           ) DESC`,
+        options?.tenantSchema,
+      ),
+    )
+  }
+
+  const topClientsResult = await pool.query<TopClientRow>(
+    tenantSql(
+      `SELECT
+          c.id AS client_id,
+          c.nombre AS client_name,
+          COUNT(DISTINCT a.id) FILTER (
+            WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+               OR LOWER(lp.estado_pago) IN (${PAID_PAYMENT_STATES_SQL})
+          )::text AS paid_appointments,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN COALESCE(lp.monto, 0) > 0 THEN lp.monto
+                ELSE COALESCE(s.precio, 0)
+              END
+            ) FILTER (
+              WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                 OR LOWER(lp.estado_pago) IN (${PAID_PAYMENT_STATES_SQL})
+            ),
+            0
+          )::text AS revenue
+       FROM tenant_base.agendamientos a
+       LEFT JOIN tenant_base.clientes c ON c.id = a.cliente_id
+       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+       LEFT JOIN LATERAL (
+         SELECT
+           p.estado::text AS estado_pago,
+           p.monto
+         FROM tenant_base.pagos p
+         WHERE p.agendamiento_id = a.id
+         ORDER BY p.fecha_pago DESC NULLS LAST, p.id DESC
+         LIMIT 1
+       ) lp ON TRUE
+      WHERE ${appointmentPeriodClause}
+      GROUP BY c.id, c.nombre
+      HAVING COALESCE(
+        SUM(
+          CASE
+            WHEN COALESCE(lp.monto, 0) > 0 THEN lp.monto
+            ELSE COALESCE(s.precio, 0)
+          END
+        ) FILTER (
+          WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+             OR LOWER(lp.estado_pago) IN (${PAID_PAYMENT_STATES_SQL})
+        ),
+        0
+      ) > 0
+      ORDER BY
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(lp.monto, 0) > 0 THEN lp.monto
+              ELSE COALESCE(s.precio, 0)
+            END
+          ) FILTER (
+            WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+               OR LOWER(lp.estado_pago) IN (${PAID_PAYMENT_STATES_SQL})
+          ),
+          0
+        ) DESC,
+        COUNT(DISTINCT a.id) FILTER (
+          WHERE LOWER(a.estado::text) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+             OR LOWER(lp.estado_pago) IN (${PAID_PAYMENT_STATES_SQL})
+        ) DESC
+      LIMIT 10`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const paymentMethods = paymentMethodsResult.rows.map((row) => ({
+    method: row.metodo_pago?.trim() || "sin_metodo",
+    paymentsCount: Number(row.payments_count ?? 0),
+    revenue: Number(row.revenue ?? 0),
+  }))
+
+  const averageTicketPerClient = Number(averageTicketResult.rows[0]?.average_ticket_per_client ?? 0)
+
+  const totalAppointments = Number(noShowResult.rows[0]?.total_appointments ?? 0)
+  const noShowAppointments = Number(noShowResult.rows[0]?.no_show_appointments ?? 0)
+  const noShowRatePct = safePercent(noShowAppointments, totalAppointments)
+
+  const productiveMinutes = Number(productiveMinutesResult.rows[0]?.productive_minutes ?? 0)
+  const occupancyRatePct = availableMinutes > 0 ? safePercent(productiveMinutes, availableMinutes) : null
+
+  const demandHeatmap = demandHeatmapResult.rows
+    .filter((row) => Number.isInteger(row.day_of_week) && Number.isInteger(row.hour_of_day))
+    .map((row) => ({
+      dayOfWeek: Number(row.day_of_week),
+      hour: Number(row.hour_of_day),
+      appointments: Number(row.appointments ?? 0),
+    }))
+
+  const firstTimeClients = Number(retentionResult.rows[0]?.first_time_clients ?? 0)
+  const retainedClients = Number(retentionResult.rows[0]?.retained_clients ?? 0)
+
+  const barberPerformance = barberPerformanceResult.rows
+    .filter((row) => Number.isInteger(row.employee_id))
+    .map((row) => ({
+      employeeId: Number(row.employee_id),
+      employeeName: row.employee_name?.trim() || "Sin nombre",
+      revenue: Number(row.revenue ?? 0),
+      servicesDone: Number(row.services_done ?? 0),
+      ratingAverage: row.rating_average == null ? null : Number(row.rating_average),
+      ratingCount: Number(row.rating_count ?? 0),
+    }))
+
+  const topClients = topClientsResult.rows.map((row) => ({
+    clientId: row.client_id,
+    clientName: row.client_name?.trim() || "Cliente",
+    paidAppointments: Number(row.paid_appointments ?? 0),
+    revenue: Number(row.revenue ?? 0),
+  }))
+
+  return {
+    granularity,
+    series,
+    totals,
+    topServices,
+    income: {
+      paymentMethods,
+      averageTicketPerClient,
+    },
+    efficiency: {
+      noShowRatePct,
+      noShowAppointments,
+      totalAppointments,
+      occupancyRatePct,
+      productiveMinutes,
+      availableMinutes,
+      demandHeatmap,
+    },
+    clientsAndStaff: {
+      retention: {
+        firstTimeClients,
+        retainedClients,
+        retentionRatePct: safePercent(retainedClients, firstTimeClients),
+      },
+      barberPerformance,
+      topClients,
+    },
+  }
 }
