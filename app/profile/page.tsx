@@ -122,6 +122,12 @@ export default function ProfilePage() {
     setLoadError(null)
 
     try {
+      const storedRole = typeof window !== "undefined" ? (localStorage.getItem("userRole") ?? "").trim().toLowerCase() : ""
+      if (storedRole === "admin") {
+        router.replace("/admin/ajustes")
+        return
+      }
+
       const storedEmail = typeof window !== "undefined" ? localStorage.getItem("userEmail")?.trim() ?? "" : ""
 
       if (!storedEmail) {

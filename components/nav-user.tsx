@@ -29,7 +29,8 @@ export function NavUser({
   const isDark = resolvedTheme === "dark"
 
   const handleGoToSettings = () => {
-    router.push("/profile")
+    const role = typeof window !== "undefined" ? (localStorage.getItem("userRole") ?? "").trim().toLowerCase() : ""
+    router.push(role === "admin" ? "/admin/ajustes" : "/profile")
   }
 
   const handleLogout = () => {
