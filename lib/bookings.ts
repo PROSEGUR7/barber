@@ -18,27 +18,6 @@ function formatDateInTimeZone(date: Date, timeZone: string): string {
   return `${year}-${month}-${day}`
 }
 
-function formatTimestampInTimeZone(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(date)
-
-  const year = parts.find((p) => p.type === "year")?.value ?? "0000"
-  const month = parts.find((p) => p.type === "month")?.value ?? "00"
-  const day = parts.find((p) => p.type === "day")?.value ?? "00"
-  const hour = parts.find((p) => p.type === "hour")?.value ?? "00"
-  const minute = parts.find((p) => p.type === "minute")?.value ?? "00"
-  const second = parts.find((p) => p.type === "second")?.value ?? "00"
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
-}
-
 type ServiceRow = {
   id: number
   nombre: string
@@ -337,6 +316,7 @@ export async function reserveAppointments(options: {
     throw error
   }
 
+  const requestedStartISO = startInstant.toISOString()
   const slotDateLocal = formatDateInTimeZone(startInstant, BOOKING_TIME_ZONE)
 
   await ensureMaterializedEmployeeDay({ employeeId, date: slotDateLocal, tenantSchema })
@@ -346,16 +326,14 @@ export async function reserveAppointments(options: {
   try {
     await client.query("BEGIN")
 
-    const startLocalTs = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
-
     // Business rule: max 2 appointments per client per day (excluding cancelled).
     const dailyCountResult = await client.query<{ count: number }>(
       tenantSql(`SELECT COUNT(*)::int AS count
          FROM tenant_base.agendamientos a
         WHERE a.cliente_id = $1
-          AND DATE(a.fecha_cita) = DATE($2::timestamptz)
+          AND (a.fecha_cita AT TIME ZONE $3)::date = ($2::timestamptz AT TIME ZONE $3)::date
           AND a.estado::text IN ('pendiente', 'confirmada')`, tenantSchema),
-      [clientId, startLocalTs],
+      [clientId, requestedStartISO, BOOKING_TIME_ZONE],
     )
 
     const existingCount = Number(dailyCountResult.rows[0]?.count ?? 0)
@@ -412,7 +390,6 @@ export async function reserveAppointments(options: {
       tenantSchema,
     })
 
-    const requestedStartISO = startInstant.toISOString()
     const hasSlot = availableSlots.some((slot) => slot.start === requestedStartISO)
 
     if (!hasSlot) {
@@ -421,7 +398,7 @@ export async function reserveAppointments(options: {
       throw error
     }
 
-    const startLocalForInsert = formatTimestampInTimeZone(startInstant, BOOKING_TIME_ZONE)
+    const startForInsert = requestedStartISO
 
     const overlapResult = await client.query<{ exists: boolean }>(
       tenantSql(`SELECT EXISTS(
@@ -433,7 +410,7 @@ export async function reserveAppointments(options: {
               tstzrange($2::timestamptz, $2::timestamptz + make_interval(mins := $3), '[)')
           LIMIT 1
        ) AS exists`, tenantSchema),
-      [employeeId, startLocalForInsert, totalDurationMin],
+      [employeeId, startForInsert, totalDurationMin],
     )
 
     if (overlapResult.rows[0]?.exists) {
@@ -451,7 +428,7 @@ export async function reserveAppointments(options: {
          'no notificado'::tenant_base.notificado_enum,
          now())
        RETURNING id`, tenantSchema),
-      [clientId, employeeId, primaryServiceId, startLocalForInsert, totalDurationMin],
+      [clientId, employeeId, primaryServiceId, startForInsert, totalDurationMin],
     )
 
     const insertedId = insertResult.rows[0]?.id
@@ -487,6 +464,7 @@ type AppointmentRow = {
 
 const CANCELABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
 const RESCHEDULABLE_STATUSES: AppointmentStatus[] = ["pendiente"]
+const COMPLETABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada", "provisional"]
 
 let hasEnsuredRescheduleAuditTable = false
 
@@ -523,8 +501,11 @@ export async function getAppointmentsForUser(options: {
   const { userId, scope, statuses = [], limit = 100, tenantSchema } = options
 
   const statusArray = statuses.length > 0 ? statuses : null
-  const dateComparator = scope === "upcoming" ? ">=" : "<"
   const orderDirection = scope === "upcoming" ? "ASC" : "DESC"
+  const scopeCondition =
+    scope === "upcoming"
+      ? "(a.fecha_cita >= now() OR a.estado::text IN ('pendiente', 'confirmada', 'provisional'))"
+      : "(a.fecha_cita < now() AND a.estado::text NOT IN ('pendiente', 'confirmada', 'provisional'))"
 
   const result = await pool.query<AppointmentRow>(
     tenantSql(`SELECT a.id,
@@ -569,11 +550,11 @@ export async function getAppointmentsForUser(options: {
          LIMIT 1
        ) p ON TRUE
       WHERE c.user_id = $1
-        AND a.fecha_cita ${dateComparator} (now() AT TIME ZONE $4)
+        AND ${scopeCondition}
         AND ($2::text[] IS NULL OR a.estado::text = ANY($2::text[]))
       ORDER BY a.fecha_cita ${orderDirection}
       LIMIT $3`, tenantSchema),
-    [userId, statusArray, limit, BOOKING_TIME_ZONE],
+    [userId, statusArray, limit],
   )
 
   return result.rows.map((row) => ({
@@ -725,7 +706,6 @@ export async function rescheduleAppointment(options: {
   }
 
   const clientId = await resolveClientIdForUser(userId, tenantSchema)
-  const newStartLocalTs = formatTimestampInTimeZone(newStart, BOOKING_TIME_ZONE)
 
   const client = await pool.connect()
   try {
@@ -757,9 +737,9 @@ export async function rescheduleAppointment(options: {
          FROM tenant_base.agendamientos a
         WHERE a.cliente_id = $1
           AND a.id <> $2
-          AND DATE(a.fecha_cita) = DATE($3::timestamptz)
+          AND (a.fecha_cita AT TIME ZONE $4)::date = ($3::timestamptz AT TIME ZONE $4)::date
           AND a.estado::text IN ('pendiente', 'confirmada')`, tenantSchema),
-      [clientId, appointmentId, newStartLocalTs],
+      [clientId, appointmentId, requestedStartISO, BOOKING_TIME_ZONE],
     )
 
     const existingCount = Number(dailyCountResult.rows[0]?.count ?? 0)
@@ -800,7 +780,7 @@ export async function rescheduleAppointment(options: {
               tstzrange($3::timestamptz, $3::timestamptz + make_interval(mins := $4), '[)')
           LIMIT 1
        ) AS exists`, tenantSchema),
-      [appointment.empleado_id, appointmentId, newStartLocalTs, durationMin],
+      [appointment.empleado_id, appointmentId, requestedStartISO, durationMin],
     )
 
     if (overlapResult.rows[0]?.exists) {
@@ -817,7 +797,7 @@ export async function rescheduleAppointment(options: {
         WHERE id = $3
           AND cliente_id = $4
           AND estado::text = 'pendiente'`, tenantSchema),
-      [newStartLocalTs, durationMin, appointmentId, clientId],
+      [requestedStartISO, durationMin, appointmentId, clientId],
     )
 
     if (update.rowCount === 0) {
@@ -838,5 +818,42 @@ export async function rescheduleAppointment(options: {
     throw error
   } finally {
     client.release()
+  }
+}
+
+export async function completeAppointment(options: {
+  appointmentId: number
+  userId: number
+  tenantSchema?: string | null
+}): Promise<void> {
+  const { appointmentId, userId, tenantSchema } = options
+  const appointment = await ensureAppointmentOwnership(appointmentId, userId, tenantSchema)
+
+  if (!COMPLETABLE_STATUSES.includes(appointment.estado as AppointmentStatus)) {
+    const error = new Error("APPOINTMENT_NOT_COMPLETABLE")
+    ;(error as { code?: string }).code = "APPOINTMENT_NOT_COMPLETABLE"
+    throw error
+  }
+
+  const appointmentEnd = appointment.fecha_cita_fin ?? appointment.fecha_cita
+  if (!(appointmentEnd instanceof Date) || Number.isNaN(appointmentEnd.getTime()) || appointmentEnd.getTime() > Date.now()) {
+    const error = new Error("APPOINTMENT_NOT_FINISHED_YET")
+    ;(error as { code?: string }).code = "APPOINTMENT_NOT_FINISHED_YET"
+    throw error
+  }
+
+  const result = await pool.query(
+    tenantSql(`UPDATE tenant_base.agendamientos
+        SET estado = 'completada'::tenant_base.estado_agendamiento_enum
+      WHERE id = $1
+        AND cliente_id = (SELECT id FROM tenant_base.clientes WHERE user_id = $2 LIMIT 1)
+        AND estado::text = ANY($3::text[])`, tenantSchema),
+    [appointmentId, userId, COMPLETABLE_STATUSES],
+  )
+
+  if (result.rowCount === 0) {
+    const error = new Error("APPOINTMENT_COMPLETE_FAILED")
+    ;(error as { code?: string }).code = "APPOINTMENT_COMPLETE_FAILED"
+    throw error
   }
 }

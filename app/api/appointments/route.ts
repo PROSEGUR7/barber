@@ -25,7 +25,7 @@ function parseStatuses(searchParams: URLSearchParams, scope: "upcoming" | "histo
     return expanded
   }
 
-  return scope === "upcoming" ? ["pendiente", "confirmada"] : ["completada", "cancelada"]
+  return scope === "upcoming" ? ["pendiente", "confirmada", "provisional"] : ["completada", "cancelada"]
 }
 
 export async function GET(request: Request) {

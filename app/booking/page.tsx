@@ -71,7 +71,14 @@ type PromoPricingPreview = {
   } | null
 }
 
+type PendingReservationCheckoutDetails = {
+  start: string
+  end: string | null
+}
+
 const PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY = "wompiPendingReservationCheckoutReference"
+const PENDING_RESERVATION_CHECKOUT_DETAILS_PREFIX = "wompiPendingReservationCheckoutDetails:"
+const WOMPI_SUCCESS_POPUP_SEEN_PREFIX = "wompiReservationSuccessSeen:"
 
 const time12hFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
@@ -144,6 +151,8 @@ export default function BookingPage() {
   const [pendingCheckoutReference, setPendingCheckoutReference] = useState<string | null>(null)
   const [lastAutoReconcileReference, setLastAutoReconcileReference] = useState<string | null>(null)
   const [isReconcilingPayment, setIsReconcilingPayment] = useState(false)
+  const [isPaymentSuccessDialogOpen, setIsPaymentSuccessDialogOpen] = useState(false)
+  const [paymentSuccessScheduleLabel, setPaymentSuccessScheduleLabel] = useState<string | null>(null)
   const wompiSdkPromiseRef = useRef<Promise<void> | null>(null)
 
   const buildTenantHeaders = (): HeadersInit => {
@@ -178,11 +187,118 @@ export default function BookingPage() {
     }
   }
 
-  const clearPendingReservationReference = () => {
+  const getPendingReservationDetailsStorageKey = (reference: string): string =>
+    `${PENDING_RESERVATION_CHECKOUT_DETAILS_PREFIX}${reference.trim()}`
+
+  const persistPendingReservationDetails = (reference: string, details: PendingReservationCheckoutDetails) => {
+    const normalizedReference = reference.trim()
+    if (!normalizedReference || typeof window === "undefined") {
+      return
+    }
+
+    localStorage.setItem(getPendingReservationDetailsStorageKey(normalizedReference), JSON.stringify(details))
+  }
+
+  const readPendingReservationDetails = (reference: string | null | undefined): PendingReservationCheckoutDetails | null => {
+    const normalizedReference = (reference ?? "").trim()
+    if (!normalizedReference || typeof window === "undefined") {
+      return null
+    }
+
+    try {
+      const raw = localStorage.getItem(getPendingReservationDetailsStorageKey(normalizedReference))
+      if (!raw) {
+        return null
+      }
+
+      const parsed = JSON.parse(raw) as PendingReservationCheckoutDetails
+      if (!parsed || typeof parsed.start !== "string") {
+        return null
+      }
+
+      return {
+        start: parsed.start,
+        end: typeof parsed.end === "string" ? parsed.end : null,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const clearPendingReservationDetails = (reference: string | null | undefined) => {
+    const normalizedReference = (reference ?? "").trim()
+    if (!normalizedReference || typeof window === "undefined") {
+      return
+    }
+
+    localStorage.removeItem(getPendingReservationDetailsStorageKey(normalizedReference))
+  }
+
+  const formatReservationScheduleLabel = (details: PendingReservationCheckoutDetails): string | null => {
+    const startInstant = new Date(details.start)
+    if (Number.isNaN(startInstant.getTime())) {
+      return null
+    }
+
+    const dateLabel = format(startInstant, "EEEE d 'de' MMMM", { locale: es })
+    const startLabel = formatTime12h(startInstant)
+
+    if (details.end) {
+      const endInstant = new Date(details.end)
+      if (!Number.isNaN(endInstant.getTime()) && endInstant.getTime() > startInstant.getTime()) {
+        return `${dateLabel} de ${startLabel} a ${formatTime12h(endInstant)}`
+      }
+    }
+
+    return `${dateLabel} a las ${startLabel}`
+  }
+
+  const resolveReservationScheduleLabel = (
+    referenceCandidates: Array<string | null | undefined>,
+  ): string | null => {
+    for (const candidate of referenceCandidates) {
+      const details = readPendingReservationDetails(candidate)
+      if (!details) {
+        continue
+      }
+
+      const label = formatReservationScheduleLabel(details)
+      if (label) {
+        return label
+      }
+    }
+
+    return null
+  }
+
+  const clearPendingReservationReference = (referenceToClear?: string | null) => {
+    const normalizedReferenceToClear = (referenceToClear ?? pendingCheckoutReference ?? "").trim()
+
     setPendingCheckoutReference(null)
     if (typeof window !== "undefined") {
       localStorage.removeItem(PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY)
+      clearPendingReservationDetails(normalizedReferenceToClear)
     }
+  }
+
+  const openPaymentSuccessDialogOnce = (
+    transactionId: string | null | undefined,
+    scheduleLabel: string | null = null,
+  ) => {
+    const normalizedTransactionId = (transactionId ?? "").trim()
+
+    if (typeof window !== "undefined" && normalizedTransactionId) {
+      const storageKey = `${WOMPI_SUCCESS_POPUP_SEEN_PREFIX}${normalizedTransactionId}`
+      const alreadyShown = sessionStorage.getItem(storageKey)
+      if (alreadyShown === "1") {
+        return
+      }
+
+      sessionStorage.setItem(storageKey, "1")
+    }
+
+    setPaymentSuccessScheduleLabel(scheduleLabel)
+    setIsPaymentSuccessDialogOpen(true)
   }
 
   const loadWompiSdk = async () => {
@@ -459,6 +575,11 @@ export default function BookingPage() {
         const status = String(data.status ?? "").toUpperCase()
         const billingRejected = Boolean(data.billingRejected)
         const billingRejectMessage = getBillingRejectMessage(data)
+        const reconciliationReference =
+          typeof data.reference === "string" && data.reference.trim()
+            ? data.reference.trim()
+            : null
+        const scheduleLabel = resolveReservationScheduleLabel([reconciliationReference, pendingCheckoutReference])
 
         if (status === "APPROVED") {
           if (billingRejected) {
@@ -470,12 +591,13 @@ export default function BookingPage() {
             return
           }
 
-          clearPendingReservationReference()
+          clearPendingReservationReference(reconciliationReference)
 
           toast({
             title: "Pago aprobado",
             description: "Tu pago fue confirmado con Wompi.",
           })
+          openPaymentSuccessDialogOnce(transactionId, scheduleLabel)
           return
         }
 
@@ -871,6 +993,11 @@ export default function BookingPage() {
       const status = String(data.status ?? "").toUpperCase()
       const billingRejected = Boolean(data.billingRejected)
       const billingRejectMessage = getBillingRejectMessage(data)
+      const reconciliationReference =
+        typeof data.reference === "string" && data.reference.trim()
+          ? data.reference.trim()
+          : null
+      const scheduleLabel = resolveReservationScheduleLabel([reconciliationReference, pendingCheckoutReference])
 
       if (status === "APPROVED") {
         if (billingRejected) {
@@ -882,12 +1009,13 @@ export default function BookingPage() {
           return
         }
 
-        clearPendingReservationReference()
+        clearPendingReservationReference(reconciliationReference)
 
         toast({
           title: "Pago aprobado",
           description: "Tu pago fue confirmado y quedó registrado.",
         })
+        openPaymentSuccessDialogOnce(transactionId, scheduleLabel)
         return
       }
 
@@ -1151,6 +1279,10 @@ export default function BookingPage() {
         })
 
         persistPendingReservationReference(wompiData.reference)
+        persistPendingReservationDetails(wompiData.reference, {
+          start: selectedSlot.start,
+          end: endInstant ? endInstant.toISOString() : selectedSlot.end ?? null,
+        })
         setWompiCheckout(wompiData)
         setIsWompiDialogOpen(true)
         setIsConfirmOpen(false)
@@ -1371,17 +1503,13 @@ export default function BookingPage() {
 
     if (visibleSlots.length === 0) {
       return (
-        <Empty className="border border-dashed border-border/60 bg-muted/40">
-          <EmptyMedia variant="icon">
-            <CalendarX className="size-6" />
-          </EmptyMedia>
-          <EmptyHeader>
-            <EmptyTitle>Sin horarios disponibles</EmptyTitle>
-            <EmptyDescription>
-              No encontramos horarios para la fecha seleccionada. Prueba con otra fecha u horario cercano.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        <div className="mx-auto w-full max-w-[150px] rounded-xl border border-dashed border-border/60 bg-muted/35 px-3 py-5 text-center">
+          <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-background/70">
+            <CalendarX className="size-4 text-muted-foreground" />
+          </div>
+          <p className="text-sm font-semibold leading-tight">Sin horarios</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Prueba con otra fecha.</p>
+        </div>
       )
     }
 
@@ -1394,7 +1522,7 @@ export default function BookingPage() {
           key={slot.start}
           variant={isSelected ? "default" : "outline"}
           onClick={() => setSelectedSlot(slot)}
-          className="w-full shadow-none"
+          className="h-8 w-fit min-w-[120px] px-3 text-sm shadow-none"
         >
           {startLabel}
         </Button>
@@ -1449,26 +1577,28 @@ export default function BookingPage() {
             <CardContent className="p-4 sm:p-6">
               <div className="overflow-hidden rounded-3xl border border-border/70 bg-background">
                 <div className="overflow-hidden rounded-2xl">
-                  <div className="grid gap-0 md:min-h-[420px] md:grid-cols-[minmax(0,420px)_minmax(0,200px)] md:gap-8">
-                    <div className="p-4 sm:p-6">
-                      <Calendar
-                        mode="single"
-                        selected={selectedDate}
-                        onSelect={(date) => {
-                          setSelectedDate(date ?? undefined)
-                        }}
-                        disabled={(date) => !!today && !!date && date < today}
-                        showOutsideDays={false}
-                        className="bg-transparent p-0 [--cell-size:--spacing(8)] sm:[--cell-size:--spacing(9)] md:[--cell-size:--spacing(10)]"
-                        formatters={{
-                          formatWeekdayName: (date) =>
-                            date.toLocaleString("es-ES", { weekday: "short" }),
-                        }}
-                      />
+                  <div className="grid gap-0 lg:min-h-[420px] lg:grid-cols-[minmax(0,1fr)_minmax(0,170px)] lg:gap-6">
+                    <div className="p-3 sm:p-6">
+                      <div className="mx-auto w-full max-w-[390px]">
+                        <Calendar
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={(date) => {
+                            setSelectedDate(date ?? undefined)
+                          }}
+                          disabled={(date) => !!today && !!date && date < today}
+                          showOutsideDays={false}
+                          className="mx-auto w-full bg-transparent p-0 [--cell-size:1.9rem] sm:[--cell-size:2.1rem] md:[--cell-size:2.25rem] lg:[--cell-size:2.4rem]"
+                          formatters={{
+                            formatWeekdayName: (date) =>
+                              date.toLocaleString("es-ES", { weekday: "short" }),
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="border-t md:border-l md:border-t-0">
-                      <div className="max-h-[320px] overflow-y-auto p-4 [scrollbar-gutter:stable] sm:max-h-[420px] sm:p-6">
-                        <div className="grid gap-2">{renderSlotsContent()}</div>
+                    <div className="border-t lg:border-l lg:border-t-0">
+                      <div className="max-h-[300px] overflow-y-auto p-4 [scrollbar-gutter:stable] sm:max-h-[360px] sm:p-6 lg:max-h-[420px] lg:pr-3">
+                        <div className="grid justify-items-end gap-1.5">{renderSlotsContent()}</div>
                       </div>
                     </div>
                   </div>
@@ -1665,6 +1795,27 @@ export default function BookingPage() {
 
                         <AlertDialogFooter>
                           <AlertDialogCancel>Cerrar</AlertDialogCancel>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+
+                    <AlertDialog open={isPaymentSuccessDialogOpen} onOpenChange={setIsPaymentSuccessDialogOpen}>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Reserva y pago confirmados</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Tu cita fue reservada y pagada exitosamente.
+                            {paymentSuccessScheduleLabel
+                              ? ` Te esperamos el ${paymentSuccessScheduleLabel}.`
+                              : " Te esperamos en la fecha y hora seleccionadas."}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogAction asChild>
+                            <Button type="button" onClick={() => setIsPaymentSuccessDialogOpen(false)}>
+                              Entendido
+                            </Button>
+                          </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>

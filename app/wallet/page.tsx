@@ -66,6 +66,7 @@ export default function WalletPage() {
   const [isSubmittingPromo, setIsSubmittingPromo] = useState(false)
   const [promoCode, setPromoCode] = useState("")
   const [promoError, setPromoError] = useState<string | null>(null)
+  const [downloadingReceiptId, setDownloadingReceiptId] = useState<number | null>(null)
 
   const receiptsAnchorId = "wallet-history"
 
@@ -212,6 +213,93 @@ export default function WalletPage() {
     element?.scrollIntoView({ behavior: "smooth", block: "start" })
   }
 
+  const buildReceiptDownloadUrl = (receipt: WalletReceipt): string | null => {
+    if (!userId || !receipt.actionHref) {
+      return null
+    }
+
+    const tenant = readTenant()
+    const params = new URLSearchParams({ userId: String(userId) })
+    if (tenant) {
+      params.set("tenant", tenant)
+    }
+
+    return `${receipt.actionHref}?${params.toString()}`
+  }
+
+  const resolveFilenameFromDisposition = (contentDisposition: string | null, fallback: string): string => {
+    if (!contentDisposition) {
+      return fallback
+    }
+
+    const match = contentDisposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i)
+    if (!match?.[1]) {
+      return fallback
+    }
+
+    const raw = match[1].trim()
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return raw
+    }
+  }
+
+  const handleDownloadReceipt = async (receipt: WalletReceipt) => {
+    const downloadUrl = buildReceiptDownloadUrl(receipt)
+    if (!downloadUrl) {
+      toast({
+        title: "No se pudo descargar",
+        description: "No encontramos tu sesión activa para generar el comprobante.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setDownloadingReceiptId(receipt.id)
+    try {
+      const response = await fetch(downloadUrl, {
+        method: "GET",
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        toast({
+          title: "No se pudo descargar",
+          description: payload?.error ?? "No se pudo generar el comprobante en este momento.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const blob = await response.blob()
+      const objectUrl = window.URL.createObjectURL(blob)
+      const filename = resolveFilenameFromDisposition(
+        response.headers.get("content-disposition"),
+        `factura-${receipt.id}.txt`,
+      )
+
+      const link = document.createElement("a")
+      link.href = objectUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(objectUrl)
+    } catch (error) {
+      console.error("Error downloading receipt", error)
+      toast({
+        title: "Error de conexión",
+        description: "No pudimos descargar el comprobante. Intenta nuevamente.",
+        variant: "destructive",
+      })
+    } finally {
+      setDownloadingReceiptId(null)
+    }
+  }
+
   const submitPromo = async () => {
     const uid = requireUser()
     if (!uid) return
@@ -355,11 +443,7 @@ export default function WalletPage() {
                   ))
                 ) : wallet.receipts.length ? (
                   wallet.receipts.map((receipt) => {
-                    const tenant = readTenant()
-                    const downloadHref =
-                      userId && receipt.actionHref
-                        ? `${receipt.actionHref}?userId=${userId}${tenant ? `&tenant=${encodeURIComponent(tenant)}` : ""}`
-                        : null
+                    const canDownload = Boolean(buildReceiptDownloadUrl(receipt))
                     return (
                       <div key={receipt.id} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
                         <div className="flex items-center gap-3">
@@ -369,9 +453,17 @@ export default function WalletPage() {
                             <p className="text-muted-foreground">{receipt.subtitle}</p>
                           </div>
                         </div>
-                        {downloadHref ? (
-                          <Button asChild variant="ghost" size="sm" className="text-primary hover:text-primary">
-                            <a href={downloadHref}>Descargar</a>
+                        {canDownload ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-primary hover:text-primary"
+                            onClick={() => {
+                              void handleDownloadReceipt(receipt)
+                            }}
+                            disabled={downloadingReceiptId === receipt.id}
+                          >
+                            {downloadingReceiptId === receipt.id ? "Descargando..." : "Descargar"}
                           </Button>
                         ) : (
                           <Button variant="ghost" size="sm" className="text-muted-foreground" disabled>

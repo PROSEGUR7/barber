@@ -493,7 +493,7 @@ export default function BarberAvailabilityPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <Checkbox checked={exceptionEnabled} onCheckedChange={(c) => setExceptionEnabled(Boolean(c))} />
-                    <span className="text-sm text-muted-foreground">Disponible ese día</span>
+                    <span className="text-sm text-muted-foreground">Bloquear rango horario (no disponible)</span>
                   </div>
 
                   <div className="grid gap-2">
@@ -538,7 +538,7 @@ export default function BarberAvailabilityPage() {
                           <AlertDialogDescription>
                             ¿Deseas guardar esta excepción para el {format(exceptionDate, "EEEE d 'de' MMMM", { locale: es })}?
                             {exceptionEnabled
-                              ? `\nHorario: ${exceptionStart} a ${exceptionEnd}.`
+                              ? `\nNo disponible de ${exceptionStart} a ${exceptionEnd}.`
                               : "\nQuedará marcado como no disponible."}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
@@ -580,7 +580,7 @@ export default function BarberAvailabilityPage() {
                           <div>
                             <div className="font-medium text-sm">{ex.date}</div>
                             <div className="text-xs text-muted-foreground">
-                              {ex.type === "custom" && ex.startTime && ex.endTime ? `${ex.startTime} - ${ex.endTime}` : "No disponible"}
+                              {ex.type === "custom" && ex.startTime && ex.endTime ? `No disponible ${ex.startTime} - ${ex.endTime}` : "No disponible"}
                               {ex.note ? ` · ${ex.note}` : ""}
                             </div>
                           </div>

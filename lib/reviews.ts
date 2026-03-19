@@ -61,6 +61,34 @@ async function ensureReviewsSchema(tenantSchema?: string | null): Promise<void> 
     ),
   )
 
+  // Keep only the latest review per (cliente_id, empleado_id) so we can enforce one-review-per-client.
+  await pool.query(
+    tenantSql(
+      `WITH ranked AS (
+         SELECT
+           id,
+           ROW_NUMBER() OVER (
+             PARTITION BY cliente_id, empleado_id
+             ORDER BY updated_at DESC, created_at DESC, id DESC
+           ) AS rn
+         FROM tenant_base.empleados_resenas
+       )
+       DELETE FROM tenant_base.empleados_resenas r
+       USING ranked x
+       WHERE r.id = x.id
+         AND x.rn > 1;`,
+      tenantSchema,
+    ),
+  )
+
+  await pool.query(
+    tenantSql(
+      `CREATE UNIQUE INDEX IF NOT EXISTS empleados_resenas_unique_cliente_empleado_idx
+         ON tenant_base.empleados_resenas (cliente_id, empleado_id);`,
+      tenantSchema,
+    ),
+  )
+
   ensuredReviewSchemas.add(tenantKey)
 }
 

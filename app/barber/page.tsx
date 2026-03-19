@@ -174,6 +174,8 @@ export default function BarberDashboard() {
     .filter((apt) => apt.status === "completada")
     .reduce((sum, apt) => sum + (apt.price ?? 0), 0)
 
+  const averageTicket = completedCount > 0 ? Math.round(totalEarnings / completedCount) : 0
+
   const daySummary = useMemo(() => {
     const nonCancelled = selectedDayAppointments.filter((apt) => apt.status !== "cancelada")
     const starts = nonCancelled.map((apt) => new Date(apt.start).getTime()).filter(Number.isFinite)
@@ -230,41 +232,53 @@ export default function BarberDashboard() {
           </div>
 
           {/* Stats */}
-          <div className="grid md:grid-cols-3 gap-4 mb-8">
+          <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Card>
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-1.5">
                 <CardDescription>Citas Hoy</CardDescription>
-                <CardTitle className="text-3xl">{selectedDayAppointments.length}</CardTitle>
+                <CardTitle className="text-2xl">{selectedDayAppointments.length}</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-0">
                 <p className="text-xs text-muted-foreground">Total de citas programadas</p>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-1.5">
                 <CardDescription>Pendientes</CardDescription>
-                <CardTitle className="text-3xl text-yellow-500">{pendingCount}</CardTitle>
+                <CardTitle className="text-2xl text-yellow-500">{pendingCount}</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-0">
                 <p className="text-xs text-muted-foreground">Por atender</p>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-1.5">
                 <CardDescription>Completadas</CardDescription>
-                <CardTitle className="text-3xl text-green-500">{completedCount}</CardTitle>
+                <CardTitle className="text-2xl text-green-500">{completedCount}</CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">Ingresos: ${totalEarnings}</p>
+              <CardContent className="pt-0">
+                <p className="text-xs text-muted-foreground">Servicios cerrados del día</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-1.5">
+                <CardDescription>Ingreso diario</CardDescription>
+                <CardTitle className="text-2xl text-primary">${daySummary.estimated}</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <p className="text-xs text-muted-foreground">
+                  Ticket promedio: ${averageTicket}
+                </p>
               </CardContent>
             </Card>
           </div>
 
-          <div className="grid lg:grid-cols-3 gap-6" id="mis-citas">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]" id="mis-citas">
             {/* Appointments List */}
-            <div className="lg:col-span-2">
+            <div>
               <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="w-full">
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="today">Hoy</TabsTrigger>
@@ -306,18 +320,19 @@ export default function BarberDashboard() {
                       </CardContent>
                     </Card>
                   ) : (
-                    selectedDayAppointments.map((appointment) => (
+                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
+                      {selectedDayAppointments.map((appointment) => (
                       <Card key={appointment.id}>
-                        <CardContent className="p-6">
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="flex items-start gap-4">
-                              <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-                                <User className="h-6 w-6 text-primary" />
+                        <CardContent className="p-4">
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+                                <User className="h-4 w-4 text-primary" />
                               </div>
                               <div>
-                                <h3 className="font-semibold text-lg mb-1">{appointment.clientName}</h3>
-                                <p className="text-sm text-muted-foreground mb-2">{appointment.serviceName}</p>
-                                <div className="flex items-center gap-4 text-sm">
+                                <h3 className="mb-0.5 text-base font-semibold leading-tight">{appointment.clientName}</h3>
+                                <p className="mb-1 text-sm text-muted-foreground">{appointment.serviceName}</p>
+                                <div className="flex flex-wrap items-center gap-3 text-sm">
                                   <span className="flex items-center gap-1">
                                     <Clock className="h-4 w-4 text-muted-foreground" />
                                     {format(new Date(appointment.start), "HH:mm", { locale: es })}
@@ -337,13 +352,13 @@ export default function BarberDashboard() {
                             </Badge>
                           </div>
 
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             {appointment.status === "pendiente" && (
                               <>
                                 <Button
                                   size="sm"
                                   onClick={() => updateStatus(appointment.id, "completada")}
-                                  className="flex-1"
+                                  className="h-8"
                                   disabled={updatingId === appointment.id}
                                 >
                                   <CheckCircle className="h-4 w-4 mr-2" />
@@ -353,7 +368,7 @@ export default function BarberDashboard() {
                                   size="sm"
                                   variant="outline"
                                   onClick={() => updateStatus(appointment.id, "cancelada")}
-                                  className="flex-1"
+                                  className="h-8"
                                   disabled={updatingId === appointment.id}
                                 >
                                   <XCircle className="h-4 w-4 mr-2" />
@@ -362,19 +377,20 @@ export default function BarberDashboard() {
                               </>
                             )}
                             {appointment.status === "completada" && (
-                              <div className="w-full text-center py-2 text-sm text-green-500 font-medium">
+                              <div className="w-full py-1 text-center text-sm font-medium text-green-500">
                                 Cita completada exitosamente
                               </div>
                             )}
                             {appointment.status === "cancelada" && (
-                              <div className="w-full text-center py-2 text-sm text-red-500 font-medium">
+                              <div className="w-full py-1 text-center text-sm font-medium text-red-500">
                                 Cita cancelada
                               </div>
                             )}
                           </div>
                         </CardContent>
                       </Card>
-                    ))
+                    ))}
+                    </div>
                   )}
                 </TabsContent>
 
@@ -412,18 +428,18 @@ export default function BarberDashboard() {
                       </CardContent>
                     </Card>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
                       {appointments.map((appointment) => (
                         <Card key={appointment.id}>
-                          <CardContent className="p-6">
-                            <div className="flex items-start justify-between mb-4">
-                              <div className="flex items-start gap-4">
-                                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-                                  <User className="h-6 w-6 text-primary" />
+                          <CardContent className="p-4">
+                            <div className="mb-1.5 flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+                                  <User className="h-4 w-4 text-primary" />
                                 </div>
                                 <div>
-                                  <h3 className="font-semibold text-lg mb-1">{appointment.clientName}</h3>
-                                  <p className="text-sm text-muted-foreground mb-2">{appointment.serviceName}</p>
+                                  <h3 className="mb-0.5 text-base font-semibold leading-tight">{appointment.clientName}</h3>
+                                  <p className="mb-1 text-sm text-muted-foreground">{appointment.serviceName}</p>
                                   <div className="flex items-center gap-4 text-sm">
                                     <span className="flex items-center gap-1">
                                       <Clock className="h-4 w-4 text-muted-foreground" />
@@ -477,13 +493,13 @@ export default function BarberDashboard() {
                       </CardContent>
                     </Card>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
                       {appointments.map((appointment) => (
                         <Card key={appointment.id}>
-                          <CardContent className="p-6">
-                            <div className="flex items-start justify-between mb-2">
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between gap-3">
                               <div>
-                                <h3 className="font-semibold">{appointment.clientName}</h3>
+                                <h3 className="text-base font-semibold leading-tight">{appointment.clientName}</h3>
                                 <p className="text-sm text-muted-foreground">{appointment.serviceName}</p>
                                 <p className="text-sm text-muted-foreground">
                                   {format(new Date(appointment.start), "EEEE d 'de' MMMM · HH:mm", { locale: es })}
@@ -509,8 +525,15 @@ export default function BarberDashboard() {
                   <CardTitle>Calendario</CardTitle>
                   <CardDescription>Selecciona una fecha para ver citas</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Calendar mode="single" selected={selectedDate} onSelect={setSelectedDate} className="rounded-md" />
+                <CardContent className="pt-0">
+                  <div className="rounded-xl border bg-muted/20 p-3">
+                    <Calendar
+                      mode="single"
+                      selected={selectedDate}
+                      onSelect={setSelectedDate}
+                      className="mx-auto w-full max-w-[320px] rounded-md bg-background p-1"
+                    />
+                  </div>
                 </CardContent>
               </Card>
 

@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { tenantSql } from "@/lib/tenant"
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 
 type PaymentMethodRow = {
   brand: string
@@ -149,7 +150,7 @@ export type WalletReceipt = {
 export type WalletReceiptDownload = {
   filename: string
   contentType: string
-  body: string
+  body: Uint8Array
 }
 
 export type WalletSummary = {
@@ -209,6 +210,170 @@ function formatCopAmount(value: number): string {
     currency: "COP",
     minimumFractionDigits: 0,
   }).format(value)
+}
+
+async function buildWalletReceiptPdf(options: {
+  id: number
+  dateLabel: string
+  serviceName: string
+  barberName: string
+  paymentMethod: string
+  paymentStatus: string
+  subtotalLabel: string
+  discountLabel: string
+  totalLabel: string
+}): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create()
+  const page = pdf.addPage([595, 842])
+  const { width, height } = page.getSize()
+
+  const fontRegular = await pdf.embedFont(StandardFonts.Helvetica)
+  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold)
+
+  const colors = {
+    textPrimary: rgb(0.09, 0.1, 0.13),
+    textMuted: rgb(0.38, 0.41, 0.47),
+    line: rgb(0.9, 0.91, 0.93),
+    chipBg: rgb(0.95, 0.97, 1),
+    chipText: rgb(0.15, 0.35, 0.65),
+    totalBg: rgb(0.97, 0.98, 1),
+  }
+
+  const marginX = 48
+  const maxWidth = width - marginX * 2
+  let y = height - 64
+
+  page.drawText("COMPROBANTE DE SERVICIO", {
+    x: marginX,
+    y,
+    size: 18,
+    font: fontBold,
+    color: colors.textPrimary,
+  })
+
+  const receiptCode = `#${options.id}`
+  const chipWidth = Math.max(74, fontBold.widthOfTextAtSize(receiptCode, 11) + 24)
+  page.drawRectangle({
+    x: width - marginX - chipWidth,
+    y: y - 6,
+    width: chipWidth,
+    height: 24,
+    color: colors.chipBg,
+    borderColor: colors.line,
+    borderWidth: 1,
+  })
+  page.drawText(receiptCode, {
+    x: width - marginX - chipWidth + 12,
+    y: y + 2,
+    size: 11,
+    font: fontBold,
+    color: colors.chipText,
+  })
+
+  y -= 34
+  page.drawText("Softdatai Barberia", {
+    x: marginX,
+    y,
+    size: 12,
+    font: fontRegular,
+    color: colors.textMuted,
+  })
+
+  y -= 20
+  page.drawLine({
+    start: { x: marginX, y },
+    end: { x: marginX + maxWidth, y },
+    thickness: 1,
+    color: colors.line,
+  })
+
+  y -= 34
+  const details: Array<[string, string]> = [
+    ["Fecha", options.dateLabel],
+    ["Servicio", options.serviceName],
+    ["Barbero", options.barberName],
+    ["Metodo de pago", options.paymentMethod],
+    ["Estado", options.paymentStatus],
+  ]
+
+  for (const [label, value] of details) {
+    page.drawText(label, {
+      x: marginX,
+      y,
+      size: 10,
+      font: fontBold,
+      color: colors.textMuted,
+    })
+    page.drawText(value, {
+      x: marginX + 150,
+      y,
+      size: 11,
+      font: fontRegular,
+      color: colors.textPrimary,
+      maxWidth: maxWidth - 150,
+    })
+    y -= 26
+  }
+
+  y -= 6
+  page.drawLine({
+    start: { x: marginX, y },
+    end: { x: marginX + maxWidth, y },
+    thickness: 1,
+    color: colors.line,
+  })
+
+  y -= 34
+  const amountRows: Array<[string, string, boolean]> = [
+    ["Subtotal", options.subtotalLabel, false],
+    ["Descuento", options.discountLabel, false],
+    ["Total pagado", options.totalLabel, true],
+  ]
+
+  for (const [label, value, isTotal] of amountRows) {
+    if (isTotal) {
+      page.drawRectangle({
+        x: marginX,
+        y: y - 10,
+        width: maxWidth,
+        height: 32,
+        color: colors.totalBg,
+        borderColor: colors.line,
+        borderWidth: 1,
+      })
+    }
+
+    page.drawText(label, {
+      x: marginX + 12,
+      y,
+      size: isTotal ? 12 : 11,
+      font: isTotal ? fontBold : fontRegular,
+      color: colors.textPrimary,
+    })
+
+    const valueSize = isTotal ? 13 : 11
+    const valueFont = isTotal ? fontBold : fontRegular
+    const valueWidth = valueFont.widthOfTextAtSize(value, valueSize)
+    page.drawText(value, {
+      x: marginX + maxWidth - valueWidth - 12,
+      y,
+      size: valueSize,
+      font: valueFont,
+      color: colors.textPrimary,
+    })
+
+    y -= isTotal ? 44 : 28
+  }
+
+  page.drawText("Documento generado automaticamente por Softdatai.", {
+    x: marginX,
+    y: 56,
+    size: 9,
+    font: fontRegular,
+    color: colors.textMuted,
+  })
+
+  return pdf.save()
 }
 
 export async function getWalletDataForUser(userId: number, tenantSchema?: string | null): Promise<WalletData> {
@@ -947,22 +1112,21 @@ export async function getWalletReceiptDownloadForUser(options: {
       }).format(new Date(row.fecha_cita))
     : "N/A"
 
-  const body = [
-    `Factura / Comprobante #${row.id}`,
-    `Fecha: ${dateLabel}`,
-    `Servicio: ${row.servicio_nombre ?? "Servicio"}`,
-    `Profesional: ${row.empleado_nombre ?? "No asignado"}`,
-    `Método de pago: ${row.metodo_pago ?? "No registrado"}`,
-    `Estado: ${row.estado ?? "pendiente"}`,
-    "",
-    `Subtotal: ${formatCopAmount(amount)}`,
-    `Descuento: ${formatCopAmount(discount)}`,
-    `Total: ${formatCopAmount(total)}`,
-  ].join("\n")
+  const body = await buildWalletReceiptPdf({
+    id: row.id,
+    dateLabel,
+    serviceName: row.servicio_nombre ?? "Servicio",
+    barberName: row.empleado_nombre ?? "No asignado",
+    paymentMethod: row.metodo_pago ?? "No registrado",
+    paymentStatus: row.estado ?? "pendiente",
+    subtotalLabel: formatCopAmount(amount),
+    discountLabel: formatCopAmount(discount),
+    totalLabel: formatCopAmount(total),
+  })
 
   return {
-    filename: `factura-${row.id}.txt`,
-    contentType: "text/plain; charset=utf-8",
+    filename: `factura-${row.id}.pdf`,
+    contentType: "application/pdf",
     body,
   }
 }

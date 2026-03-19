@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db"
 import { getAvailabilitySlots } from "@/lib/bookings"
+import { tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
 
@@ -38,13 +39,13 @@ export type FavoriteBarber = {
   nextAvailabilityISO: string | null
 }
 
-async function getAnyActiveServiceId(): Promise<number | null> {
+async function getAnyActiveServiceId(tenantSchema?: string | null): Promise<number | null> {
   const result = await pool.query<{ id: number }>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.servicios
       WHERE estado = 'activo'
       ORDER BY id ASC
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
   )
 
   return result.rows[0]?.id ?? null
@@ -53,8 +54,9 @@ async function getAnyActiveServiceId(): Promise<number | null> {
 async function computeNextAvailabilityISO(options: {
   employeeId: number
   serviceId: number
+  tenantSchema?: string | null
 }): Promise<string | null> {
-  const { employeeId, serviceId } = options
+  const { employeeId, serviceId, tenantSchema } = options
 
   const now = new Date()
   const today = formatDateInTimeZone(now, BOOKING_TIME_ZONE)
@@ -64,6 +66,7 @@ async function computeNextAvailabilityISO(options: {
     serviceId,
     employeeId,
     date: today,
+    tenantSchema,
   })
 
   const firstToday = todaysSlots.find((slot) => new Date(slot.start).getTime() > now.getTime())
@@ -75,16 +78,17 @@ async function computeNextAvailabilityISO(options: {
     serviceId,
     employeeId,
     date: tomorrow,
+    tenantSchema,
   })
 
   return tomorrowSlots[0]?.start ?? null
 }
 
-export async function listFavoriteBarbersForUser(userId: number): Promise<FavoriteBarber[]> {
-  const serviceId = await getAnyActiveServiceId()
+export async function listFavoriteBarbersForUser(userId: number, tenantSchema?: string | null): Promise<FavoriteBarber[]> {
+  const serviceId = await getAnyActiveServiceId(tenantSchema)
 
   const result = await pool.query<FavoriteRow>(
-    `SELECT e.id AS empleado_id,
+    tenantSql(`SELECT e.id AS empleado_id,
             e.nombre AS empleado_nombre,
             e.telefono AS empleado_telefono,
             (
@@ -97,7 +101,7 @@ export async function listFavoriteBarbersForUser(userId: number): Promise<Favori
        JOIN tenant_base.clientes c ON c.id = f.cliente_id
        JOIN tenant_base.empleados e ON e.id = f.empleado_id
       WHERE c.user_id = $1
-      ORDER BY f.created_at DESC, e.nombre ASC`,
+      ORDER BY f.created_at DESC, e.nombre ASC`, tenantSchema),
     [userId],
   )
 
@@ -115,7 +119,7 @@ export async function listFavoriteBarbersForUser(userId: number): Promise<Favori
   const withNext = await Promise.all(
     base.map(async (barber) => ({
       ...barber,
-      nextAvailabilityISO: await computeNextAvailabilityISO({ employeeId: barber.id, serviceId }),
+      nextAvailabilityISO: await computeNextAvailabilityISO({ employeeId: barber.id, serviceId, tenantSchema }),
     })),
   )
 
@@ -125,14 +129,15 @@ export async function listFavoriteBarbersForUser(userId: number): Promise<Favori
 export async function addFavoriteBarber(options: {
   userId: number
   barberId: number
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { userId, barberId } = options
+  const { userId, barberId, tenantSchema } = options
 
   const clientResult = await pool.query<{ id: number }>(
-    `SELECT id
+    tenantSql(`SELECT id
        FROM tenant_base.clientes
       WHERE user_id = $1
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
     [userId],
   )
 
@@ -144,9 +149,9 @@ export async function addFavoriteBarber(options: {
   }
 
   await pool.query(
-    `INSERT INTO tenant_base.clientes_favoritos_empleados (cliente_id, empleado_id)
+    tenantSql(`INSERT INTO tenant_base.clientes_favoritos_empleados (cliente_id, empleado_id)
      VALUES ($1, $2)
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING`, tenantSchema),
     [clientId, barberId],
   )
 }
@@ -154,15 +159,16 @@ export async function addFavoriteBarber(options: {
 export async function removeFavoriteBarber(options: {
   userId: number
   barberId: number
+  tenantSchema?: string | null
 }): Promise<void> {
-  const { userId, barberId } = options
+  const { userId, barberId, tenantSchema } = options
 
   await pool.query(
-    `DELETE FROM tenant_base.clientes_favoritos_empleados f
+    tenantSql(`DELETE FROM tenant_base.clientes_favoritos_empleados f
       USING tenant_base.clientes c
       WHERE c.id = f.cliente_id
         AND c.user_id = $1
-        AND f.empleado_id = $2`,
+        AND f.empleado_id = $2`, tenantSchema),
     [userId, barberId],
   )
 }

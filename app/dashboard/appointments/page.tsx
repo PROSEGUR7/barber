@@ -1,14 +1,16 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { format, startOfDay, startOfToday } from "date-fns"
+import { format, isSameDay, startOfDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import {
+  CheckCircle2,
   CalendarX,
   Clock,
   DollarSign,
   RefreshCcw,
   Scissors,
+  Star,
   User as UserIcon,
   XCircle,
 } from "lucide-react"
@@ -76,7 +78,7 @@ type StatusFilterValue = "default" | "all" | AppointmentStatus
 
 const statusOptions: Record<Scope, { value: StatusFilterValue; label: string }[]> = {
   upcoming: [
-    { value: "default", label: "Pendiente y confirmada" },
+    { value: "default", label: "Pendiente, provisional y confirmada" },
     { value: "all", label: "Todos los estados" },
     { value: "pendiente", label: "Solo pendientes" },
     { value: "confirmada", label: "Solo confirmadas" },
@@ -90,6 +92,7 @@ const statusOptions: Record<Scope, { value: StatusFilterValue; label: string }[]
 }
 
 const statusLabels: Record<string, string> = {
+  provisional: "Provisional",
   pendiente: "Pendiente",
   confirmada: "Confirmada",
   cancelada: "Cancelada",
@@ -97,6 +100,7 @@ const statusLabels: Record<string, string> = {
 }
 
 const statusClassNameMap: Record<string, string> = {
+  provisional: "bg-slate-100 text-slate-900 border-transparent",
   pendiente: "bg-amber-100 text-amber-900 border-transparent",
   confirmada: "bg-emerald-100 text-emerald-900 border-transparent",
   cancelada: "bg-rose-100 text-rose-900 border-transparent",
@@ -104,6 +108,18 @@ const statusClassNameMap: Record<string, string> = {
 }
 
 const MANAGEABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada"]
+const FINALIZABLE_STATUSES: AppointmentStatus[] = ["pendiente", "confirmada", "provisional"]
+const AUTO_REVIEW_PROMPT_SEEN_PREFIX = "appointmentAutoReviewPromptSeen:"
+
+type ReviewDraft = {
+  appointmentId: number
+  barberId: number
+  barberName: string
+  serviceName: string
+  rating: number
+  comment: string
+  needsCompletion: boolean
+}
 
 function getPaymentStatusLabel(status: string | null | undefined, isPaid: boolean): string {
   if (isPaid) return "Pagado"
@@ -130,6 +146,7 @@ function getPaymentStatusClass(status: string | null | undefined, isPaid: boolea
 
 export default function AppointmentsPage() {
   const { toast } = useToast()
+  const [now, setNow] = useState(() => Date.now())
 
   const [userId, setUserId] = useState<number | null>(null)
   const [activeScope, setActiveScope] = useState<Scope>("upcoming")
@@ -167,6 +184,10 @@ export default function AppointmentsPage() {
   const [isLoadingSlots, setIsLoadingSlots] = useState(false)
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<AvailabilitySlot | null>(null)
   const [isSubmittingReschedule, setIsSubmittingReschedule] = useState(false)
+  const [completeLoadingId, setCompleteLoadingId] = useState<number | null>(null)
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false)
+  const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null)
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false)
 
   const buildTenantHeaders = (): HeadersInit => {
     if (typeof window === "undefined") {
@@ -187,6 +208,16 @@ export default function AppointmentsPage() {
 
     return headers
   }
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now())
+    }, 30_000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -357,6 +388,72 @@ export default function AppointmentsPage() {
     setIsSubmittingReschedule(false)
   }
 
+  const getAppointmentEndMs = (appointment: Appointment): number => {
+    const endCandidate = appointment.end ?? appointment.start
+    const endMs = new Date(endCandidate).getTime()
+    return Number.isFinite(endMs) ? endMs : Number.NaN
+  }
+
+  const canFinalizeAppointment = useCallback(
+    (appointment: Appointment): boolean => {
+      if (!FINALIZABLE_STATUSES.includes(appointment.status as AppointmentStatus)) {
+        return false
+      }
+
+      const endMs = getAppointmentEndMs(appointment)
+      if (!Number.isFinite(endMs)) {
+        return false
+      }
+
+      return endMs <= now
+    },
+    [now],
+  )
+
+  const hasQueuedServicesPending = useCallback(
+    (appointment: Appointment): boolean => {
+      const appointmentStart = new Date(appointment.start)
+      if (Number.isNaN(appointmentStart.getTime())) {
+        return false
+      }
+
+      return appointments.upcoming.some((other) => {
+        if (other.id === appointment.id) {
+          return false
+        }
+
+        if (!FINALIZABLE_STATUSES.includes(other.status as AppointmentStatus)) {
+          return false
+        }
+
+        if (other.barber.id !== appointment.barber.id) {
+          return false
+        }
+
+        const otherStart = new Date(other.start)
+        if (Number.isNaN(otherStart.getTime())) {
+          return false
+        }
+
+        return isSameDay(otherStart, appointmentStart)
+      })
+    },
+    [appointments.upcoming],
+  )
+
+  const openReviewDialogForAppointment = (appointment: Appointment, needsCompletion: boolean) => {
+    setReviewDraft({
+      appointmentId: appointment.id,
+      barberId: appointment.barber.id,
+      barberName: appointment.barber.name,
+      serviceName: appointment.service.name,
+      rating: 5,
+      comment: "",
+      needsCompletion,
+    })
+    setReviewDialogOpen(true)
+  }
+
   useEffect(() => {
     if (!rescheduleDialogOpen || !rescheduleAppointment || !rescheduleDate) {
       return
@@ -494,6 +591,182 @@ export default function AppointmentsPage() {
     }
   }
 
+  const handleCompleteAppointment = async (appointment: Appointment) => {
+    if (!userId) {
+      toast({
+        title: "Inicia sesión nuevamente",
+        description: "No encontramos tu sesión activa. Vuelve a iniciar sesión.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setCompleteLoadingId(appointment.id)
+
+    try {
+      const completeResponse = await fetch(`/api/appointments/${appointment.id}/complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({ userId }),
+      })
+
+      const completeData = await completeResponse.json().catch(() => ({}))
+
+      if (!completeResponse.ok) {
+        toast({
+          title: "No se pudo finalizar la cita",
+          description: completeData.error ?? "Inténtalo nuevamente en unos segundos.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`${AUTO_REVIEW_PROMPT_SEEN_PREFIX}${appointment.id}`, "1")
+      }
+
+      toast({
+        title: "Cita finalizada",
+        description: "Gracias. Ahora cuéntanos cómo te fue con el servicio.",
+      })
+
+      if (hasQueuedServicesPending(appointment)) {
+        toast({
+          title: "Servicio finalizado",
+          description: "Cuando termines los servicios en cola te pediremos una sola calificación del resultado.",
+        })
+      } else {
+        openReviewDialogForAppointment(appointment, false)
+      }
+      refreshAll()
+    } catch (error) {
+      console.error("Error completing appointment", error)
+      toast({
+        title: "Error de conexión",
+        description: "No pudimos comunicar con el servidor. Intenta nuevamente.",
+        variant: "destructive",
+      })
+    } finally {
+      setCompleteLoadingId(null)
+    }
+  }
+
+  const submitReview = async () => {
+    if (!reviewDraft || !userId) {
+      return
+    }
+
+    setIsSubmittingReview(true)
+
+    try {
+      if (reviewDraft.needsCompletion) {
+        const completeResponse = await fetch(`/api/appointments/${reviewDraft.appointmentId}/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...buildTenantHeaders(),
+          },
+          body: JSON.stringify({ userId }),
+        })
+
+        const completeData = await completeResponse.json().catch(() => ({}))
+        if (!completeResponse.ok) {
+          toast({
+            title: "No se pudo finalizar la cita",
+            description: completeData.error ?? "Inténtalo nuevamente en unos segundos.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
+
+      const response = await fetch(`/api/barbers/${reviewDraft.barberId}/reviews`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          userId,
+          rating: reviewDraft.rating,
+          comment: reviewDraft.comment.trim() || undefined,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        const isReviewTooEarly =
+          response.status === 409 &&
+          typeof data.error === "string" &&
+          /calificar|completada|despu[eé]s/i.test(data.error)
+
+        toast({
+          title: "No se pudo guardar la reseña",
+          description: isReviewTooEarly
+            ? "Completa primero todos los servicios en cola para habilitar la calificación final."
+            : data.error ?? "Intenta nuevamente en unos segundos.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({
+        title: "Gracias por tu reseña",
+        description: `Tu calificación para ${reviewDraft.barberName} fue guardada correctamente.`,
+      })
+
+      setReviewDialogOpen(false)
+      setReviewDraft(null)
+      refreshAll()
+    } catch (error) {
+      console.error("Error saving review", error)
+      toast({
+        title: "Error de conexión",
+        description: "No pudimos guardar tu reseña. Intenta nuevamente.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSubmittingReview(false)
+    }
+  }
+
+  useEffect(() => {
+    if (appointments.upcoming.length === 0 || reviewDialogOpen || completeLoadingId != null) {
+      return
+    }
+
+    const dueAppointment = appointments.upcoming.find((appointment) => {
+      if (!canFinalizeAppointment(appointment)) {
+        return false
+      }
+
+      if (hasQueuedServicesPending(appointment)) {
+        return false
+      }
+
+      if (typeof window === "undefined") {
+        return true
+      }
+
+      const seenKey = `${AUTO_REVIEW_PROMPT_SEEN_PREFIX}${appointment.id}`
+      return sessionStorage.getItem(seenKey) !== "1"
+    })
+
+    if (!dueAppointment) {
+      return
+    }
+
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(`${AUTO_REVIEW_PROMPT_SEEN_PREFIX}${dueAppointment.id}`, "1")
+    }
+
+    openReviewDialogForAppointment(dueAppointment, true)
+  }, [appointments.upcoming, canFinalizeAppointment, completeLoadingId, hasQueuedServicesPending, reviewDialogOpen])
+
   const renderAppointments = (scope: Scope) => {
     if (isLoading[scope]) {
       return (
@@ -586,6 +859,7 @@ export default function AppointmentsPage() {
           const canManage = MANAGEABLE_STATUSES.includes(
             appointment.status as AppointmentStatus,
           )
+          const canFinalize = canFinalizeAppointment(appointment)
 
           return (
             <Card key={appointment.id} className="border border-border/60 shadow-sm">
@@ -639,6 +913,24 @@ export default function AppointmentsPage() {
                     >
                       <RefreshCcw className="mr-1 size-4" /> Reprogramar
                     </Button>
+                    {canFinalize && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          void handleCompleteAppointment(appointment)
+                        }}
+                        disabled={completeLoadingId === appointment.id}
+                      >
+                        {completeLoadingId === appointment.id ? (
+                          "Finalizando..."
+                        ) : (
+                          <>
+                            <CheckCircle2 className="mr-1 size-4" /> Finalizar cita
+                          </>
+                        )}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -882,6 +1174,102 @@ export default function AppointmentsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={reviewDialogOpen}
+        onOpenChange={(open) => {
+          setReviewDialogOpen(open)
+          if (!open && !isSubmittingReview) {
+            setReviewDraft(null)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>¿Cómo te fue en la cita?</DialogTitle>
+            <DialogDescription>
+              {reviewDraft
+                ? `Cuéntanos cómo fue tu experiencia con ${reviewDraft.barberName} en ${reviewDraft.serviceName}.`
+                : "Cuéntanos cómo fue tu experiencia en la cita."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Calificación</p>
+              <div className="flex flex-wrap gap-2">
+                {[1, 2, 3, 4, 5].map((value) => {
+                  const isActive = (reviewDraft?.rating ?? 0) >= value
+
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      className={cn(
+                        "inline-flex items-center rounded-md border px-2.5 py-1.5 text-sm transition",
+                        isActive
+                          ? "border-amber-300 bg-amber-50 text-amber-700"
+                          : "border-border bg-background text-muted-foreground hover:border-amber-200 hover:text-amber-700",
+                      )}
+                      onClick={() => {
+                        setReviewDraft((current) => {
+                          if (!current) return current
+                          return { ...current, rating: value }
+                        })
+                      }}
+                    >
+                      <Star className={cn("mr-1 size-4", isActive && "fill-amber-400 text-amber-500")} />
+                      {value}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="review-comment" className="text-sm font-medium">
+                Comentario (opcional)
+              </label>
+              <textarea
+                id="review-comment"
+                value={reviewDraft?.comment ?? ""}
+                onChange={(event) => {
+                  const nextValue = event.target.value
+                  setReviewDraft((current) => {
+                    if (!current) return current
+                    return { ...current, comment: nextValue.slice(0, 500) }
+                  })
+                }}
+                rows={4}
+                maxLength={500}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Ejemplo: Excelente atención, puntual y muy buen resultado."
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setReviewDialogOpen(false)
+                setReviewDraft(null)
+              }}
+              disabled={isSubmittingReview}
+            >
+              Omitir por ahora
+            </Button>
+            <Button
+              onClick={() => {
+                void submitReview()
+              }}
+              disabled={isSubmittingReview || !reviewDraft || reviewDraft.rating < 1}
+            >
+              {isSubmittingReview ? "Guardando..." : "Enviar calificación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

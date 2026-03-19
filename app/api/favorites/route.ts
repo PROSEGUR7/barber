@@ -6,6 +6,7 @@ import {
   listFavoriteBarbersForUser,
   removeFavoriteBarber,
 } from "@/lib/favorites"
+import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   userId: z.coerce.number().int().positive(),
@@ -18,10 +19,11 @@ const bodySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const url = new URL(request.url)
     const { userId } = querySchema.parse({ userId: url.searchParams.get("userId") })
 
-    const favorites = await listFavoriteBarbersForUser(userId)
+    const favorites = await listFavoriteBarbersForUser(userId, tenantSchema)
     return NextResponse.json({ favorites })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -35,8 +37,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const { userId, barberId } = bodySchema.parse(await request.json())
-    await addFavoriteBarber({ userId, barberId })
+    await addFavoriteBarber({ userId, barberId, tenantSchema })
     return NextResponse.json({ ok: true }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -62,8 +65,9 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const tenantSchema = await resolveTenantSchemaForRequest(request)
     const { userId, barberId } = bodySchema.parse(await request.json())
-    await removeFavoriteBarber({ userId, barberId })
+    await removeFavoriteBarber({ userId, barberId, tenantSchema })
     return NextResponse.json({ ok: true }, { status: 200 })
   } catch (error) {
     if (error instanceof z.ZodError) {

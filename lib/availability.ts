@@ -39,6 +39,76 @@ type ExceptionRow = {
   nota: string | null
 }
 
+type TimeBlock = {
+  startTime: string
+  endTime: string
+}
+
+function toMinutes(hhmm: string): number {
+  const [hRaw, mRaw] = hhmm.split(":")
+  const hours = Number(hRaw)
+  const minutes = Number(mRaw)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return Number.NaN
+  }
+  return hours * 60 + minutes
+}
+
+function toHHMM(totalMinutes: number): string {
+  const clamped = Math.max(0, Math.min(24 * 60, Math.round(totalMinutes)))
+  const hours = String(Math.floor(clamped / 60)).padStart(2, "0")
+  const minutes = String(clamped % 60).padStart(2, "0")
+  return `${hours}:${minutes}`
+}
+
+function subtractBlockedRange(base: TimeBlock, blocked: TimeBlock): TimeBlock[] {
+  const baseStart = toMinutes(base.startTime)
+  const baseEnd = toMinutes(base.endTime)
+  const blockedStart = toMinutes(blocked.startTime)
+  const blockedEnd = toMinutes(blocked.endTime)
+
+  if (!Number.isFinite(baseStart) || !Number.isFinite(baseEnd) || baseStart >= baseEnd) {
+    return []
+  }
+
+  if (!Number.isFinite(blockedStart) || !Number.isFinite(blockedEnd) || blockedStart >= blockedEnd) {
+    return [base]
+  }
+
+  const overlapStart = Math.max(baseStart, blockedStart)
+  const overlapEnd = Math.min(baseEnd, blockedEnd)
+
+  if (overlapStart >= overlapEnd) {
+    return [base]
+  }
+
+  const fragments: TimeBlock[] = []
+  if (baseStart < overlapStart) {
+    fragments.push({ startTime: toHHMM(baseStart), endTime: toHHMM(overlapStart) })
+  }
+  if (overlapEnd < baseEnd) {
+    fragments.push({ startTime: toHHMM(overlapEnd), endTime: toHHMM(baseEnd) })
+  }
+
+  return fragments
+}
+
+function applyBlockedRanges(baseBlocks: TimeBlock[], blockedRanges: TimeBlock[]): TimeBlock[] {
+  if (baseBlocks.length === 0 || blockedRanges.length === 0) {
+    return baseBlocks
+  }
+
+  let currentBlocks = [...baseBlocks]
+  for (const blocked of blockedRanges) {
+    currentBlocks = currentBlocks.flatMap((block) => subtractBlockedRange(block, blocked))
+    if (currentBlocks.length === 0) {
+      break
+    }
+  }
+
+  return currentBlocks
+}
+
 function isMissingTableError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -268,15 +338,19 @@ export async function ensureMaterializedEmployeeAvailability(options: {
 
       let blocks: Array<{ startTime: string; endTime: string }> = []
 
-      if (custom.length > 0) {
-        blocks = custom.map((ex) => ({ startTime: ex.startTime, endTime: ex.endTime }))
-      } else if (hasOff) {
+      if (hasOff) {
         blocks = []
       } else {
         const dow = toDow(date)
-        blocks = weeklyRules
+        const weeklyBlocks = weeklyRules
           .filter((rule) => (rule.active ?? true) && rule.dow === dow)
           .map((rule) => ({ startTime: rule.startTime, endTime: rule.endTime }))
+
+        const blockedRanges = custom
+          .map((ex) => ({ startTime: ex.startTime, endTime: ex.endTime }))
+          .filter((range) => toMinutes(range.startTime) < toMinutes(range.endTime))
+
+        blocks = applyBlockedRanges(weeklyBlocks, blockedRanges)
       }
 
       // Replace any existing blocks for that date (idempotent and keeps queries simple).
