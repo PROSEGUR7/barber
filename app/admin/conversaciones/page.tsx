@@ -1811,6 +1811,16 @@ export default function AdminConversacionesPage() {
                                   </a>
                                 ) : null}
 
+                                {message.type === "sticker" && mediaUrl ? (
+                                  <a href={mediaUrl} target="_blank" rel="noreferrer" className="inline-block">
+                                    <img
+                                      src={mediaUrl}
+                                      alt="Sticker enviado"
+                                      className="h-44 w-44 rounded-lg object-contain"
+                                    />
+                                  </a>
+                                ) : null}
+
                                 {message.type === "audio" && mediaUrl ? (
                                   <CompactAudioPlayer
                                     src={mediaUrl}
@@ -1841,6 +1851,10 @@ export default function AdminConversacionesPage() {
 
                                 {message.mediaCaption && !message.text && item.kind !== "orphan-reaction" ? (
                                   <p className="whitespace-pre-wrap break-words break-all">{message.mediaCaption}</p>
+                                ) : null}
+
+                                {message.type === "sticker" && !mediaUrl && item.kind !== "orphan-reaction" ? (
+                                  <p className="whitespace-pre-wrap break-words break-all">[Sticker]</p>
                                 ) : null}
 
                                 <div className={cn("flex items-center gap-2 text-[11px]", isOutbound ? "justify-end text-primary-foreground/80" : "text-muted-foreground")}>

@@ -314,12 +314,58 @@ function extractReactionMeta(rawPayload: unknown): ReactionMeta {
   return { emoji: null, targetWamid: null }
 }
 
+function extractStickerMediaMeta(rawPayload: unknown): { mediaId: string | null; mediaMimeType: string | null } {
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return { mediaId: null, mediaMimeType: null }
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const messageSticker = asRecord(messageRecord?.sticker)
+  const messageStickerId = trimOrNull(messageSticker?.id)
+  if (messageStickerId) {
+    return {
+      mediaId: messageStickerId,
+      mediaMimeType: trimOrNull(messageSticker?.mime_type),
+    }
+  }
+
+  // Compatibilidad con payload legado guardado completo: entry[].changes[].value.messages[].sticker
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const type = trimOrNull(message.type)?.toLowerCase()
+        if (type !== "sticker") {
+          continue
+        }
+
+        const sticker = asRecord(message.sticker)
+        const stickerId = trimOrNull(sticker?.id)
+        if (stickerId) {
+          return {
+            mediaId: stickerId,
+            mediaMimeType: trimOrNull(sticker?.mime_type),
+          }
+        }
+      }
+    }
+  }
+
+  return { mediaId: null, mediaMimeType: null }
+}
+
 function messageTypePlaceholder(type: string | null | undefined): string {
   const normalized = (type ?? "").trim().toLowerCase()
 
   switch (normalized) {
     case "image":
       return "[Imagen]"
+    case "sticker":
+      return "[Sticker]"
     case "audio":
       return "[Audio]"
     case "document":
@@ -558,6 +604,7 @@ export async function getConversations(
          COALESCE(NULLIF(trim(message_text), ''),
                   CASE
                     WHEN message_type = 'image' THEN '[Imagen]'
+                    WHEN message_type = 'sticker' THEN '[Sticker]'
                     WHEN message_type = 'audio' THEN '[Audio]'
                     WHEN message_type = 'document' THEN '[Documento]'
                     WHEN message_type = 'video' THEN '[Video]'
@@ -752,6 +799,14 @@ export async function getMessagesByConversation(
           : "Reaccionó a un mensaje"
         : row.message_text
 
+    const normalizedType = row.message_type?.trim() || "text"
+    const stickerMediaMeta =
+      normalizedType === "sticker" && !row.media_id
+        ? extractStickerMediaMeta(row.raw_payload)
+        : { mediaId: null, mediaMimeType: null }
+    const mediaId = row.media_id ?? stickerMediaMeta.mediaId
+    const mediaMimeType = row.media_mime_type ?? stickerMediaMeta.mediaMimeType
+
     return {
       id: String(row.id),
       wamid: row.wamid,
@@ -759,10 +814,10 @@ export async function getMessagesByConversation(
       owner: direction === "inbound" || senderMeta.type === "human" ? "Humano" : "IA",
       sentByType: senderMeta.type,
       sentByName: senderMeta.name,
-      type: row.message_type?.trim() || "text",
+      type: normalizedType,
       text: messageText,
-      mediaId: row.media_id,
-      mediaMimeType: row.media_mime_type,
+      mediaId,
+      mediaMimeType,
       mediaCaption: row.media_caption,
       mediaFilename: row.media_filename,
       status: row.message_status,

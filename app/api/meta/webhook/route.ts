@@ -17,6 +17,7 @@ type MetaMessage = {
   text?: { body?: string }
   reaction?: { message_id?: string; emoji?: string }
   image?: { id?: string; mime_type?: string; caption?: string }
+  sticker?: { id?: string; mime_type?: string }
   audio?: { id?: string; mime_type?: string }
   document?: { id?: string; mime_type?: string; caption?: string; filename?: string }
   video?: { id?: string; mime_type?: string; caption?: string }
@@ -122,6 +123,17 @@ function getMessagePayload(message: MetaMessage): {
       mediaId: message.image?.id?.trim() || null,
       mediaMimeType: message.image?.mime_type?.trim() || null,
       mediaCaption: message.image?.caption?.trim() || null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  if (type === "sticker") {
+    return {
+      text: null,
+      mediaId: message.sticker?.id?.trim() || null,
+      mediaMimeType: message.sticker?.mime_type?.trim() || null,
+      mediaCaption: null,
       mediaFilename: null,
       type,
     }
