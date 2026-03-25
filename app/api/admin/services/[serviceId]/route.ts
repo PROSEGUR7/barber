@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { ServiceRecordNotFoundError, deleteService, updateService } from "@/lib/admin"
+import { InvalidServicePackageError, ServiceRecordNotFoundError, deleteService, updateService } from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
@@ -16,6 +16,9 @@ const serviceSchema = z.object({
   price: z.coerce.number().min(0),
   durationMin: z.coerce.number().int().min(5).max(600),
   status: z.enum(["activo", "inactivo"]).default("activo"),
+  serviceType: z.enum(["individual", "paquete"]).default("individual"),
+  categoryName: z.string().trim().max(120).nullable().optional(),
+  packageItemServiceIds: z.array(z.coerce.number().int().positive()).max(50).optional().default([]),
 })
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
@@ -72,11 +75,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ servi
       price: parsed.data.price,
       durationMin: parsed.data.durationMin,
       status: parsed.data.status,
+      serviceType: parsed.data.serviceType,
+      categoryName: parsed.data.categoryName ?? null,
+      packageItemServiceIds: parsed.data.packageItemServiceIds,
       tenantSchema,
     })
 
     return NextResponse.json({ ok: true, service }, { status: 200 })
   } catch (error) {
+    if (error instanceof InvalidServicePackageError) {
+      return jsonError(400, {
+        code: error.message,
+        error: "No se pudo actualizar el paquete. Verifica los servicios seleccionados.",
+      })
+    }
+
     if (error instanceof ServiceRecordNotFoundError) {
       return jsonError(404, {
         code: "SERVICE_NOT_FOUND",

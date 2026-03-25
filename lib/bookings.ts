@@ -217,7 +217,7 @@ export async function getAvailabilitySlots(options: {
           CROSS JOIN LATERAL generate_series(
             b.ini,
             b.fin - make_interval(mins := (SELECT duracion_min FROM svc)),
-            interval '30 min'
+            make_interval(mins := GREATEST((SELECT duracion_min FROM svc), 5))
           ) AS gs
       ),
       libres AS (

@@ -7,6 +7,7 @@ import { AdminServicesTable } from "@/components/admin/services-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -73,6 +74,9 @@ export default function AdminServiciosPage() {
   const [formDescription, setFormDescription] = useState("")
   const [formPrice, setFormPrice] = useState("")
   const [formDurationMin, setFormDurationMin] = useState("")
+  const [formServiceType, setFormServiceType] = useState<"individual" | "paquete">("individual")
+  const [formCategoryName, setFormCategoryName] = useState("")
+  const [formPackageItemServiceIds, setFormPackageItemServiceIds] = useState<number[]>([])
   const [formStatus, setFormStatus] = useState<"activo" | "inactivo">("activo")
   const [formError, setFormError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -84,6 +88,9 @@ export default function AdminServiciosPage() {
     setFormDescription("")
     setFormPrice("")
     setFormDurationMin("")
+    setFormServiceType("individual")
+    setFormCategoryName("")
+    setFormPackageItemServiceIds([])
     setFormStatus("activo")
     setFormError(null)
   }, [])
@@ -172,6 +179,22 @@ export default function AdminServiciosPage() {
 
   const shouldShowErrorCard = Boolean(servicesError) && !areServicesLoading && services.length === 0
 
+  const availableIndividualServices = useMemo(() => {
+    return services
+      .filter((service) => {
+        if (service.serviceType === "paquete") {
+          return false
+        }
+
+        if (editingService && service.id === editingService.id) {
+          return false
+        }
+
+        return true
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
+  }, [editingService, services])
+
   const handleReload = useCallback(() => {
     void loadServices()
   }, [loadServices])
@@ -187,6 +210,9 @@ export default function AdminServiciosPage() {
     setFormDescription(service.description ?? "")
     setFormPrice(String(service.price))
     setFormDurationMin(String(service.durationMin))
+    setFormServiceType(service.serviceType)
+    setFormCategoryName(service.category.name ?? "")
+    setFormPackageItemServiceIds(service.packageItemServiceIds)
     setFormStatus(service.status?.trim().toLowerCase() === "inactivo" ? "inactivo" : "activo")
     setFormError(null)
     setIsFormOpen(true)
@@ -198,6 +224,7 @@ export default function AdminServiciosPage() {
 
     const name = formName.trim()
     const description = formDescription.trim()
+    const categoryName = formCategoryName.trim()
     const price = Number(formPrice.replace(",", "."))
     const durationMin = Number(formDurationMin)
 
@@ -213,6 +240,11 @@ export default function AdminServiciosPage() {
 
     if (!Number.isInteger(durationMin) || durationMin < 5 || durationMin > 600) {
       setFormError("La duración debe ser un número entero entre 5 y 600 minutos.")
+      return
+    }
+
+    if (formServiceType === "paquete" && formPackageItemServiceIds.length === 0) {
+      setFormError("Selecciona al menos un servicio individual para construir el paquete.")
       return
     }
 
@@ -234,6 +266,9 @@ export default function AdminServiciosPage() {
           description: description.length > 0 ? description : null,
           price,
           durationMin,
+          serviceType: formServiceType,
+          categoryName: categoryName.length > 0 ? categoryName : null,
+          packageItemServiceIds: formServiceType === "paquete" ? formPackageItemServiceIds : [],
           status: formStatus,
         }),
       })
@@ -364,6 +399,42 @@ export default function AdminServiciosPage() {
                         <FieldDescription>Opcional. Puedes detallar beneficios o alcance.</FieldDescription>
                       </Field>
                       <Field>
+                        <FieldLabel htmlFor="service-type">Tipo de servicio</FieldLabel>
+                        <Select
+                          value={formServiceType}
+                          onValueChange={(value: "individual" | "paquete") => {
+                            setFormServiceType(value)
+                            if (value === "individual") {
+                              setFormPackageItemServiceIds([])
+                            }
+                            setFormError(null)
+                          }}
+                        >
+                          <SelectTrigger id="service-type">
+                            <SelectValue placeholder="Selecciona el tipo" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="individual">Servicio individual</SelectItem>
+                            <SelectItem value="paquete">Paquete</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FieldDescription>
+                          Los paquetes se componen de servicios individuales y pueden tener precio propio.
+                        </FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="service-category">Categoría</FieldLabel>
+                        <Input
+                          id="service-category"
+                          value={formCategoryName}
+                          onChange={(event) => {
+                            setFormCategoryName(event.target.value)
+                            setFormError(null)
+                          }}
+                          placeholder="Ej. Barbería premium, Masajes, Facial"
+                        />
+                      </Field>
+                      <Field>
                         <FieldLabel htmlFor="service-price">Precio</FieldLabel>
                         <Input
                           id="service-price"
@@ -396,6 +467,54 @@ export default function AdminServiciosPage() {
                           required
                         />
                       </Field>
+                      {formServiceType === "paquete" && (
+                        <Field>
+                          <FieldLabel>Servicios incluidos en el paquete</FieldLabel>
+                          <div className="max-h-60 space-y-2 overflow-y-auto rounded-md border border-border/60 p-3">
+                            {availableIndividualServices.length === 0 ? (
+                              <p className="text-sm text-muted-foreground">
+                                No hay servicios individuales disponibles para agregar al paquete.
+                              </p>
+                            ) : (
+                              availableIndividualServices.map((service) => {
+                                const checked = formPackageItemServiceIds.includes(service.id)
+
+                                return (
+                                  <label
+                                    key={service.id}
+                                    className="flex cursor-pointer items-start gap-3 rounded-md border border-transparent px-2 py-1 hover:border-border/60 hover:bg-muted/40"
+                                  >
+                                    <Checkbox
+                                      checked={checked}
+                                      onCheckedChange={(value) => {
+                                        const isChecked = value === true
+
+                                        setFormPackageItemServiceIds((current) => {
+                                          if (isChecked) {
+                                            return [...new Set([...current, service.id])]
+                                          }
+
+                                          return current.filter((itemId) => itemId !== service.id)
+                                        })
+                                        setFormError(null)
+                                      }}
+                                    />
+                                    <span className="text-sm">
+                                      <span className="font-medium">{service.name}</span>
+                                      <span className="ml-2 text-muted-foreground">
+                                        {formatCurrency(service.price)} · {formatNumber(service.durationMin)} min
+                                      </span>
+                                    </span>
+                                  </label>
+                                )
+                              })
+                            )}
+                          </div>
+                          <FieldDescription>
+                            Puedes ajustar el precio del paquete libremente sin alterar los servicios individuales.
+                          </FieldDescription>
+                        </Field>
+                      )}
                       <Field>
                         <FieldLabel htmlFor="service-status">Estado</FieldLabel>
                         <Select

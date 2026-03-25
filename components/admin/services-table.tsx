@@ -71,6 +71,8 @@ import { cn } from '@/lib/utils'
 
 const COLUMN_LABELS: Record<string, string> = {
   name: 'Servicio',
+  serviceType: 'Tipo',
+  category: 'Categoría',
   description: 'Descripción',
   price: 'Precio',
   durationMin: 'Duración',
@@ -121,7 +123,12 @@ export function AdminServicesTable({
     return services.filter((service) => {
       const matchesSearch =
         search.length === 0 ||
-        [service.name, service.description ?? '']
+        [
+          service.name,
+          service.description ?? '',
+          normalizeServiceType(service.serviceType),
+          service.category.name ?? '',
+        ]
           .map((value) => value.toLowerCase())
           .some((value) => value.includes(search))
 
@@ -191,6 +198,30 @@ export function AdminServicesTable({
           </div>
         ),
         enableSorting: false,
+      },
+      {
+        id: 'serviceType',
+        accessorFn: (service) => service.serviceType,
+        header: ({ column }: HeaderContext<ServiceSummary, unknown>) => (
+          <SortableHeader column={column} title='Tipo' />
+        ),
+        cell: ({ row }: CellContext<ServiceSummary, unknown>) => (
+          <Badge variant='outline'>
+            {normalizeServiceType(row.original.serviceType)}
+          </Badge>
+        ),
+      },
+      {
+        id: 'category',
+        accessorFn: (service) => service.category.name ?? 'Sin categoría',
+        header: ({ column }: HeaderContext<ServiceSummary, unknown>) => (
+          <SortableHeader column={column} title='Categoría' />
+        ),
+        cell: ({ row }: CellContext<ServiceSummary, unknown>) => (
+          <span className='text-sm text-muted-foreground'>
+            {row.original.category.name ?? 'Sin categoría'}
+          </span>
+        ),
       },
       {
         accessorKey: 'price',
@@ -307,6 +338,8 @@ export function AdminServicesTable({
 
     const header = [
       'Servicio',
+      'Tipo',
+      'Categoría',
       'Descripción',
       'Precio',
       'Duración (min)',
@@ -316,6 +349,8 @@ export function AdminServicesTable({
       const service = row.original
       return [
         escapeCsv(service.name),
+        escapeCsv(normalizeServiceType(service.serviceType)),
+        escapeCsv(service.category.name ?? ''),
         escapeCsv(service.description ?? ''),
         escapeCsv(String(service.price)),
         escapeCsv(String(service.durationMin)),
@@ -632,6 +667,11 @@ function normalizeStatus(status: string | null | undefined) {
       .replace(/[_-]+/g, ' ')
       .replace(/\b\w/g, (char) => char.toUpperCase()),
   }
+}
+
+function normalizeServiceType(serviceType: string | null | undefined) {
+  const normalized = String(serviceType ?? 'individual').trim().toLowerCase()
+  return normalized === 'paquete' ? 'Paquete' : 'Servicio individual'
 }
 
 function getStatusVariant(status: string | null | undefined) {

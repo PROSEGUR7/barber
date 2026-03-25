@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { createService, getServicesCatalog } from "@/lib/admin"
+import { InvalidServicePackageError, createService, getServicesCatalog } from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
@@ -12,6 +12,9 @@ const serviceSchema = z.object({
   price: z.coerce.number().min(0),
   durationMin: z.coerce.number().int().min(5).max(600),
   status: z.enum(["activo", "inactivo"]).default("activo"),
+  serviceType: z.enum(["individual", "paquete"]).default("individual"),
+  categoryName: z.string().trim().max(120).nullable().optional(),
+  packageItemServiceIds: z.array(z.coerce.number().int().positive()).max(50).optional().default([]),
 })
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
@@ -85,11 +88,21 @@ export async function POST(request: Request) {
       price: parsed.data.price,
       durationMin: parsed.data.durationMin,
       status: parsed.data.status,
+      serviceType: parsed.data.serviceType,
+      categoryName: parsed.data.categoryName ?? null,
+      packageItemServiceIds: parsed.data.packageItemServiceIds,
       tenantSchema,
     })
 
     return NextResponse.json({ ok: true, service }, { status: 201 })
   } catch (error) {
+    if (error instanceof InvalidServicePackageError) {
+      return jsonError(400, {
+        code: error.message,
+        error: "No se pudo crear el paquete. Verifica los servicios seleccionados.",
+      })
+    }
+
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
       return jsonError(503, {
         code: "DATABASE_NOT_CONFIGURED",

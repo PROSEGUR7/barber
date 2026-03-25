@@ -43,6 +43,19 @@ export type ServiceSummary = {
   price: number
   durationMin: number
   status: string | null
+  serviceType: "individual" | "paquete"
+  category: {
+    id: number | null
+    name: string | null
+  }
+  packageItemServiceIds: number[]
+  packageItems: Array<{
+    serviceId: number
+    name: string
+    durationMin: number
+    price: number
+    quantity: number
+  }>
 }
 
 export type AdminAppointmentSummary = {
@@ -205,6 +218,13 @@ export class ServiceRecordNotFoundError extends Error {
   }
 }
 
+export class InvalidServicePackageError extends Error {
+  constructor(message = "INVALID_SERVICE_PACKAGE") {
+    super(message)
+    this.name = "InvalidServicePackageError"
+  }
+}
+
 export class AdminUserRecordNotFoundError extends Error {
   constructor(message = "ADMIN_USER_RECORD_NOT_FOUND") {
     super(message)
@@ -280,6 +300,19 @@ type ServiceSummaryRow = {
   precio: number | null
   duracion_min: number | null
   estado: string | null
+  tipo_servicio: string | null
+  categoria_id: number | null
+  categoria_nombre: string | null
+  package_item_service_ids: number[] | null
+  package_items:
+    | Array<{
+        serviceId?: number
+        name?: string
+        durationMin?: number
+        price?: number
+        quantity?: number
+      }>
+    | null
 }
 
 type AdminAppointmentRow = {
@@ -485,6 +518,34 @@ function mapClientRow(row: ClientSummaryRow): ClientSummary {
 }
 
 function mapServiceRow(row: ServiceSummaryRow): ServiceSummary {
+  const packageItemServiceIds = Array.isArray(row.package_item_service_ids)
+    ? row.package_item_service_ids.filter((item): item is number => Number.isInteger(item) && item > 0)
+    : []
+
+  const packageItems = Array.isArray(row.package_items)
+    ? row.package_items
+        .map((item) => ({
+          serviceId: Number(item?.serviceId ?? 0),
+          name: String(item?.name ?? "").trim(),
+          durationMin: Number(item?.durationMin ?? 0),
+          price: Number(item?.price ?? 0),
+          quantity: Number(item?.quantity ?? 1),
+        }))
+        .filter(
+          (item) =>
+            Number.isInteger(item.serviceId) &&
+            item.serviceId > 0 &&
+            item.name.length > 0 &&
+            Number.isFinite(item.durationMin) &&
+            item.durationMin > 0 &&
+            Number.isFinite(item.price) &&
+            Number.isFinite(item.quantity) &&
+            item.quantity > 0,
+        )
+    : []
+
+  const serviceType = row.tipo_servicio?.trim().toLowerCase() === "paquete" ? "paquete" : "individual"
+
   return {
     id: row.id,
     name: row.nombre,
@@ -492,16 +553,295 @@ function mapServiceRow(row: ServiceSummaryRow): ServiceSummary {
     price: Number(row.precio ?? 0),
     durationMin: Number(row.duracion_min ?? 0),
     status: row.estado,
+    serviceType,
+    category: {
+      id: row.categoria_id,
+      name: row.categoria_nombre?.trim() || null,
+    },
+    packageItemServiceIds,
+    packageItems,
   }
 }
 
+const ensuredServiceCatalogSchemas = new Set<string>()
+
+function getServiceCatalogSchemaKey(tenantSchema?: string | null): string {
+  return (tenantSchema ?? "tenant_base").trim().toLowerCase() || "tenant_base"
+}
+
+async function ensureServiceCatalogSchema(
+  queryable: { query: (queryText: string, values?: unknown[]) => Promise<unknown> },
+  tenantSchema?: string | null,
+) {
+  const schemaKey = getServiceCatalogSchemaKey(tenantSchema)
+  if (ensuredServiceCatalogSchemas.has(schemaKey)) {
+    return
+  }
+
+  await queryable.query(
+    tenantSql(
+      `CREATE TABLE IF NOT EXISTS tenant_base.servicio_categorias (
+        id SERIAL PRIMARY KEY,
+        nombre VARCHAR(120) NOT NULL UNIQUE,
+        descripcion TEXT,
+        activo BOOLEAN NOT NULL DEFAULT TRUE,
+        creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+      );`,
+      tenantSchema,
+    ),
+  )
+
+  await queryable.query(
+    tenantSql(
+      `ALTER TABLE tenant_base.servicios
+         ADD COLUMN IF NOT EXISTS categoria_id INTEGER,
+         ADD COLUMN IF NOT EXISTS tipo_servicio VARCHAR(20) NOT NULL DEFAULT 'individual';`,
+      tenantSchema,
+    ),
+  )
+
+  await queryable.query(
+    tenantSql(
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_constraint
+           WHERE conname = 'servicios_categoria_id_fk'
+        ) THEN
+          ALTER TABLE tenant_base.servicios
+            ADD CONSTRAINT servicios_categoria_id_fk
+            FOREIGN KEY (categoria_id)
+            REFERENCES tenant_base.servicio_categorias(id)
+            ON DELETE SET NULL;
+        END IF;
+      END
+      $$;`,
+      tenantSchema,
+    ),
+  )
+
+  await queryable.query(
+    tenantSql(
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_constraint
+           WHERE conname = 'servicios_tipo_servicio_chk'
+        ) THEN
+          ALTER TABLE tenant_base.servicios
+            ADD CONSTRAINT servicios_tipo_servicio_chk
+            CHECK (LOWER(tipo_servicio) IN ('individual', 'paquete'));
+        END IF;
+      END
+      $$;`,
+      tenantSchema,
+    ),
+  )
+
+  await queryable.query(
+    tenantSql(
+      `CREATE TABLE IF NOT EXISTS tenant_base.servicio_paquetes_items (
+        id BIGSERIAL PRIMARY KEY,
+        servicio_paquete_id INTEGER NOT NULL REFERENCES tenant_base.servicios(id) ON DELETE CASCADE,
+        servicio_individual_id INTEGER NOT NULL REFERENCES tenant_base.servicios(id) ON DELETE RESTRICT,
+        cantidad INTEGER NOT NULL DEFAULT 1,
+        orden INTEGER NOT NULL DEFAULT 0,
+        creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT servicio_paquetes_items_cantidad_chk CHECK (cantidad > 0),
+        CONSTRAINT servicio_paquetes_items_unq UNIQUE (servicio_paquete_id, servicio_individual_id)
+      );`,
+      tenantSchema,
+    ),
+  )
+
+  await queryable.query(
+    tenantSql(
+      `CREATE INDEX IF NOT EXISTS servicio_paquetes_items_paquete_idx
+         ON tenant_base.servicio_paquetes_items (servicio_paquete_id, orden, id);`,
+      tenantSchema,
+    ),
+  )
+
+  ensuredServiceCatalogSchemas.add(schemaKey)
+}
+
+type QueryResultWithRows<T> = {
+  rowCount: number
+  rows: T[]
+}
+
+async function resolveCategoryId(
+  client: {
+    query: <T>(queryText: string, values?: unknown[]) => Promise<QueryResultWithRows<T>>
+  },
+  categoryName: string | null | undefined,
+  tenantSchema?: string | null,
+): Promise<number | null> {
+  const normalizedName = String(categoryName ?? "").trim()
+  if (!normalizedName) {
+    return null
+  }
+
+  const existing = await client.query<{ id: number }>(
+    tenantSql(
+      `SELECT id
+         FROM tenant_base.servicio_categorias
+        WHERE LOWER(nombre) = LOWER($1)
+        LIMIT 1`,
+      tenantSchema,
+    ),
+    [normalizedName],
+  )
+
+  if (existing.rowCount > 0) {
+    return Number(existing.rows[0].id)
+  }
+
+  const created = await client.query<{ id: number }>(
+    tenantSql(
+      `INSERT INTO tenant_base.servicio_categorias (nombre, activo)
+       VALUES ($1, TRUE)
+       RETURNING id`,
+      tenantSchema,
+    ),
+    [normalizedName],
+  )
+
+  if (created.rowCount === 0) {
+    return null
+  }
+
+  return Number(created.rows[0].id)
+}
+
+async function syncServicePackageItems(
+  client: {
+    query: <T>(queryText: string, values?: unknown[]) => Promise<QueryResultWithRows<T>>
+  },
+  options: {
+    packageServiceId: number
+    packageItemServiceIds: number[]
+    tenantSchema?: string | null
+  },
+) {
+  const uniqueServiceIds = [...new Set(options.packageItemServiceIds)]
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)
+
+  if (uniqueServiceIds.length === 0) {
+    throw new InvalidServicePackageError("PACKAGE_ITEMS_REQUIRED")
+  }
+
+  if (uniqueServiceIds.includes(options.packageServiceId)) {
+    throw new InvalidServicePackageError("PACKAGE_SELF_REFERENCE")
+  }
+
+  const validServices = await client.query<{ id: number }>(
+    tenantSql(
+      `SELECT id
+         FROM tenant_base.servicios
+        WHERE id = ANY($1::int[])
+          AND LOWER(COALESCE(tipo_servicio, 'individual')) = 'individual'`,
+      options.tenantSchema,
+    ),
+    [uniqueServiceIds],
+  )
+
+  if (validServices.rowCount !== uniqueServiceIds.length) {
+    throw new InvalidServicePackageError("PACKAGE_ITEMS_INVALID")
+  }
+
+  await client.query(
+    tenantSql(
+      `DELETE FROM tenant_base.servicio_paquetes_items
+        WHERE servicio_paquete_id = $1`,
+      options.tenantSchema,
+    ),
+    [options.packageServiceId],
+  )
+
+  await client.query(
+    tenantSql(
+      `INSERT INTO tenant_base.servicio_paquetes_items
+        (servicio_paquete_id, servicio_individual_id, cantidad, orden)
+       SELECT $1, t.service_id, 1, t.ord::int
+         FROM unnest($2::int[]) WITH ORDINALITY AS t(service_id, ord)`,
+      options.tenantSchema,
+    ),
+    [options.packageServiceId, uniqueServiceIds],
+  )
+}
+
+async function getServiceById(serviceId: number, tenantSchema?: string | null): Promise<ServiceSummary | null> {
+  const result = await pool.query<ServiceSummaryRow>(
+    tenantSql(
+      `SELECT
+        s.id,
+        s.nombre,
+        s.descripcion,
+        s.precio,
+        s.duracion_min,
+        s.estado::text AS estado,
+        LOWER(COALESCE(s.tipo_servicio, 'individual'))::text AS tipo_servicio,
+        s.categoria_id,
+        sc.nombre AS categoria_nombre,
+        COALESCE(pkg.service_ids, ARRAY[]::int[]) AS package_item_service_ids,
+        COALESCE(pkg.items, '[]'::json) AS package_items
+      FROM tenant_base.servicios s
+      LEFT JOIN tenant_base.servicio_categorias sc ON sc.id = s.categoria_id
+      LEFT JOIN LATERAL (
+        SELECT
+          array_agg(spi.servicio_individual_id ORDER BY spi.orden, spi.id) AS service_ids,
+          json_agg(
+            json_build_object(
+              'serviceId', si.id,
+              'name', si.nombre,
+              'durationMin', si.duracion_min,
+              'price', si.precio,
+              'quantity', spi.cantidad
+            )
+            ORDER BY spi.orden, spi.id
+          ) AS items
+        FROM tenant_base.servicio_paquetes_items spi
+        INNER JOIN tenant_base.servicios si ON si.id = spi.servicio_individual_id
+        WHERE spi.servicio_paquete_id = s.id
+      ) pkg ON TRUE
+      WHERE s.id = $1
+      LIMIT 1`,
+      tenantSchema,
+    ),
+    [serviceId],
+  )
+
+  if (result.rowCount === 0) {
+    return null
+  }
+
+  return mapServiceRow(result.rows[0])
+}
+
 function mapAdminAppointmentRow(row: AdminAppointmentRow): AdminAppointmentSummary {
+  const startAt = row.fecha_cita
+  const serviceDurationRaw = Number(row.servicio_duracion ?? 0)
+  const serviceDuration = Number.isFinite(serviceDurationRaw) && serviceDurationRaw > 0 ? Math.trunc(serviceDurationRaw) : 30
+
+  const hasValidEndAt =
+    row.fecha_cita_fin instanceof Date &&
+    !Number.isNaN(row.fecha_cita_fin.getTime()) &&
+    row.fecha_cita_fin.getTime() > startAt.getTime()
+
+  const endAt = hasValidEndAt
+    ? row.fecha_cita_fin
+    : new Date(startAt.getTime() + serviceDuration * 60 * 1000)
+
   return {
     id: row.id,
     status: row.estado,
     paymentStatus: row.estado_pago,
-    startAt: row.fecha_cita.toISOString(),
-    endAt: row.fecha_cita_fin ? row.fecha_cita_fin.toISOString() : null,
+    startAt: startAt.toISOString(),
+    endAt: endAt.toISOString(),
     createdAt: null,
     updatedAt: null,
     employee: {
@@ -516,7 +856,7 @@ function mapAdminAppointmentRow(row: AdminAppointmentRow): AdminAppointmentSumma
       id: row.servicio_id,
       name: row.servicio_nombre?.trim() || "Sin servicio",
       price: Number(row.servicio_precio ?? 0),
-      durationMin: Number(row.servicio_duracion ?? 0),
+      durationMin: serviceDuration,
     },
     paidAmount: Number(row.paid_amount ?? 0),
   }
@@ -1132,15 +1472,44 @@ export async function deleteClient(clientId: number, tenantSchema?: string | nul
 }
 
 export async function getServicesCatalog(tenantSchema?: string | null): Promise<ServiceSummary[]> {
+  await ensureServiceCatalogSchema(pool, tenantSchema)
+
   const result = await pool.query<ServiceSummaryRow>(
-    tenantSql(`SELECT id,
-            nombre,
-            descripcion,
-            precio,
-            duracion_min,
-            estado::text AS estado
-       FROM tenant_base.servicios
-      ORDER BY nombre ASC`, tenantSchema),
+    tenantSql(
+      `SELECT
+        s.id,
+        s.nombre,
+        s.descripcion,
+        s.precio,
+        s.duracion_min,
+        s.estado::text AS estado,
+        LOWER(COALESCE(s.tipo_servicio, 'individual'))::text AS tipo_servicio,
+        s.categoria_id,
+        sc.nombre AS categoria_nombre,
+        COALESCE(pkg.service_ids, ARRAY[]::int[]) AS package_item_service_ids,
+        COALESCE(pkg.items, '[]'::json) AS package_items
+      FROM tenant_base.servicios s
+      LEFT JOIN tenant_base.servicio_categorias sc ON sc.id = s.categoria_id
+      LEFT JOIN LATERAL (
+        SELECT
+          array_agg(spi.servicio_individual_id ORDER BY spi.orden, spi.id) AS service_ids,
+          json_agg(
+            json_build_object(
+              'serviceId', si.id,
+              'name', si.nombre,
+              'durationMin', si.duracion_min,
+              'price', si.precio,
+              'quantity', spi.cantidad
+            )
+            ORDER BY spi.orden, spi.id
+          ) AS items
+        FROM tenant_base.servicio_paquetes_items spi
+        INNER JOIN tenant_base.servicios si ON si.id = spi.servicio_individual_id
+        WHERE spi.servicio_paquete_id = s.id
+      ) pkg ON TRUE
+      ORDER BY s.nombre ASC`,
+      tenantSchema,
+    ),
   )
 
   return result.rows.map(mapServiceRow)
@@ -1152,20 +1521,71 @@ export async function createService(input: {
   price: number
   durationMin: number
   status?: string
+  serviceType?: "individual" | "paquete"
+  categoryName?: string | null
+  packageItemServiceIds?: number[]
   tenantSchema?: string | null
 }): Promise<ServiceSummary> {
-  const result = await pool.query<ServiceSummaryRow>(
-    tenantSql(`INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min, estado)
-     VALUES ($1, NULLIF($2, ''), $3, $4, $5)
-     RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`, input.tenantSchema),
-    [input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
-  )
+  const client = await pool.connect()
 
-  if (result.rowCount === 0) {
-    throw new Error("SERVICE_CREATE_FAILED")
+  try {
+    await client.query("BEGIN")
+    await ensureServiceCatalogSchema(client, input.tenantSchema)
+
+    const categoryId = await resolveCategoryId(client, input.categoryName, input.tenantSchema)
+    const serviceType = input.serviceType === "paquete" ? "paquete" : "individual"
+
+    const result = await client.query<{ id: number }>(
+      tenantSql(
+        `INSERT INTO tenant_base.servicios (nombre, descripcion, precio, duracion_min, estado, tipo_servicio, categoria_id)
+         VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6, $7)
+         RETURNING id`,
+        input.tenantSchema,
+      ),
+      [
+        input.name,
+        input.description ?? "",
+        input.price,
+        input.durationMin,
+        input.status ?? "activo",
+        serviceType,
+        categoryId,
+      ],
+    )
+
+    if (result.rowCount === 0) {
+      throw new Error("SERVICE_CREATE_FAILED")
+    }
+
+    const createdServiceId = Number(result.rows[0].id)
+
+    if (serviceType === "paquete") {
+      await syncServicePackageItems(client, {
+        packageServiceId: createdServiceId,
+        packageItemServiceIds: input.packageItemServiceIds ?? [],
+        tenantSchema: input.tenantSchema,
+      })
+    }
+
+    await client.query("COMMIT")
+
+    const createdService = await getServiceById(createdServiceId, input.tenantSchema)
+    if (!createdService) {
+      throw new Error("SERVICE_CREATE_FAILED")
+    }
+
+    return createdService
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackError) {
+      console.error("Failed to rollback service create transaction", rollbackError)
+    }
+
+    throw error
+  } finally {
+    client.release()
   }
-
-  return mapServiceRow(result.rows[0])
 }
 
 export async function updateService(
@@ -1176,29 +1596,92 @@ export async function updateService(
     price: number
     durationMin: number
     status?: string
+    serviceType?: "individual" | "paquete"
+    categoryName?: string | null
+    packageItemServiceIds?: number[]
     tenantSchema?: string | null
   },
 ): Promise<ServiceSummary> {
-  const result = await pool.query<ServiceSummaryRow>(
-    tenantSql(`UPDATE tenant_base.servicios
-        SET nombre = $2,
-            descripcion = NULLIF($3, ''),
-            precio = $4,
-            duracion_min = $5,
-            estado = $6
-      WHERE id = $1
-      RETURNING id, nombre, descripcion, precio, duracion_min, estado::text AS estado`, input.tenantSchema),
-    [serviceId, input.name, input.description ?? "", input.price, input.durationMin, input.status ?? "activo"],
-  )
+  const client = await pool.connect()
 
-  if (result.rowCount === 0) {
-    throw new ServiceRecordNotFoundError()
+  try {
+    await client.query("BEGIN")
+    await ensureServiceCatalogSchema(client, input.tenantSchema)
+
+    const categoryId = await resolveCategoryId(client, input.categoryName, input.tenantSchema)
+    const serviceType = input.serviceType === "paquete" ? "paquete" : "individual"
+
+    const result = await client.query<{ id: number }>(
+      tenantSql(
+        `UPDATE tenant_base.servicios
+            SET nombre = $2,
+                descripcion = NULLIF($3, ''),
+                precio = $4,
+                duracion_min = $5,
+                estado = $6,
+                tipo_servicio = $7,
+                categoria_id = $8
+          WHERE id = $1
+          RETURNING id`,
+        input.tenantSchema,
+      ),
+      [
+        serviceId,
+        input.name,
+        input.description ?? "",
+        input.price,
+        input.durationMin,
+        input.status ?? "activo",
+        serviceType,
+        categoryId,
+      ],
+    )
+
+    if (result.rowCount === 0) {
+      throw new ServiceRecordNotFoundError()
+    }
+
+    if (serviceType === "paquete") {
+      await syncServicePackageItems(client, {
+        packageServiceId: serviceId,
+        packageItemServiceIds: input.packageItemServiceIds ?? [],
+        tenantSchema: input.tenantSchema,
+      })
+    } else {
+      await client.query(
+        tenantSql(
+          `DELETE FROM tenant_base.servicio_paquetes_items
+            WHERE servicio_paquete_id = $1`,
+          input.tenantSchema,
+        ),
+        [serviceId],
+      )
+    }
+
+    await client.query("COMMIT")
+
+    const updatedService = await getServiceById(serviceId, input.tenantSchema)
+    if (!updatedService) {
+      throw new ServiceRecordNotFoundError()
+    }
+
+    return updatedService
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackError) {
+      console.error("Failed to rollback service update transaction", rollbackError)
+    }
+
+    throw error
+  } finally {
+    client.release()
   }
-
-  return mapServiceRow(result.rows[0])
 }
 
 export async function deleteService(serviceId: number, tenantSchema?: string | null): Promise<void> {
+  await ensureServiceCatalogSchema(pool, tenantSchema)
+
   const result = await pool.query<{ id: number }>(
     tenantSql(`DELETE FROM tenant_base.servicios
       WHERE id = $1
