@@ -860,12 +860,14 @@ export default function AdminAgendamientosPage() {
                                 const displayEnd = Math.min(endMinutes, DAY_END_HOUR * 60)
                                 const top = dayMinuteToPx(displayStart - DAY_START_HOUR * 60)
                                 const height = Math.max(dayMinuteToPx(displayEnd - displayStart), 34)
+                                const isCompactCard = height < 56
+                                const canShowThirdLine = height >= 70
 
                                 return (
                                   <button
                                     key={appointment.id}
                                     type="button"
-                                    className="absolute left-1.5 right-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-left shadow-sm transition hover:bg-primary/15"
+                                    className="absolute left-1.5 right-1.5 overflow-hidden rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-left shadow-sm transition hover:bg-primary/15"
                                     style={{
                                       top: `${top}px`,
                                       height: `${height}px`,
@@ -875,11 +877,13 @@ export default function AdminAgendamientosPage() {
                                       setSelectedAppointment(appointment)
                                     }}
                                   >
-                                    <p className="text-[11px] font-semibold">
+                                    <p className="truncate text-[11px] font-semibold leading-tight">
                                       {format(appointment.normalizedStart, "HH:mm")} - {format(appointment.normalizedEnd, "HH:mm")}
                                     </p>
-                                    <p className="line-clamp-1 text-[11px]">{appointment.client.name}</p>
-                                    <p className="line-clamp-1 text-[11px] text-muted-foreground">{appointment.service.name}</p>
+                                    <p className="truncate text-[11px] leading-tight">{appointment.client.name}</p>
+                                    {!isCompactCard && canShowThirdLine ? (
+                                      <p className="truncate text-[11px] leading-tight text-muted-foreground">{appointment.service.name}</p>
+                                    ) : null}
                                   </button>
                                 )
                               })}
@@ -948,20 +952,24 @@ export default function AdminAgendamientosPage() {
                                   const displayEnd = Math.min(endMinutes, DAY_END_HOUR * 60)
                                   const top = dayMinuteToPx(displayStart - DAY_START_HOUR * 60)
                                   const height = Math.max(dayMinuteToPx(displayEnd - displayStart), 34)
+                                  const isCompactCard = height < 56
+                                  const canShowThirdLine = height >= 70
 
                                   return (
                                     <button
                                       key={appointment.id}
                                       type="button"
-                                      className="absolute left-1.5 right-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-left shadow-sm transition hover:bg-primary/15"
+                                      className="absolute left-1.5 right-1.5 overflow-hidden rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-left shadow-sm transition hover:bg-primary/15"
                                       style={{ top: `${top}px`, height: `${height}px` }}
                                       onClick={() => setSelectedAppointment(appointment)}
                                     >
-                                      <p className="text-[11px] font-semibold">
+                                      <p className="truncate text-[11px] font-semibold leading-tight">
                                         {format(appointment.normalizedStart, "HH:mm")} - {format(appointment.normalizedEnd, "HH:mm")}
                                       </p>
-                                      <p className="line-clamp-1 text-[11px]">{appointment.client.name}</p>
-                                      <p className="line-clamp-1 text-[11px] text-muted-foreground">{appointment.employee.name}</p>
+                                      <p className="truncate text-[11px] leading-tight">{appointment.client.name}</p>
+                                      {!isCompactCard && canShowThirdLine ? (
+                                        <p className="truncate text-[11px] leading-tight text-muted-foreground">{appointment.employee.name}</p>
+                                      ) : null}
                                     </button>
                                   )
                                 })}
