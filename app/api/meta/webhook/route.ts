@@ -21,6 +21,28 @@ type MetaMessage = {
   audio?: { id?: string; mime_type?: string }
   document?: { id?: string; mime_type?: string; caption?: string; filename?: string }
   video?: { id?: string; mime_type?: string; caption?: string }
+  video_note?: { id?: string; mime_type?: string; caption?: string }
+  ptv?: { id?: string; mime_type?: string; caption?: string }
+  location?: {
+    latitude?: number | string
+    longitude?: number | string
+    name?: string
+    address?: string
+    url?: string
+  }
+  contacts?: Array<{
+    name?: {
+      formatted_name?: string
+      first_name?: string
+      last_name?: string
+    }
+    phones?: Array<{
+      phone?: string
+      wa_id?: string
+      type?: string
+    }>
+  }>
+  unsupported?: { type?: string }
 }
 
 type MetaStatus = {
@@ -96,6 +118,68 @@ function parseUnixTimestampToIso(value: string | undefined): string | null {
   return new Date(parsed * 1000).toISOString()
 }
 
+function toFiniteNumber(value: number | string | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  return null
+}
+
+function buildLocationText(location: MetaMessage["location"]): string | null {
+  if (!location) {
+    return null
+  }
+
+  const latitude = toFiniteNumber(location.latitude)
+  const longitude = toFiniteNumber(location.longitude)
+  const name = location.name?.trim() || ""
+  const address = location.address?.trim() || ""
+  const url = location.url?.trim() || (latitude !== null && longitude !== null ? `https://maps.google.com/?q=${latitude},${longitude}` : "")
+
+  const lines = [
+    name,
+    address,
+    latitude !== null && longitude !== null ? `Coordenadas: ${latitude}, ${longitude}` : "",
+    url,
+  ].filter((line) => line.length > 0)
+
+  if (lines.length === 0) {
+    return "[Ubicación]"
+  }
+
+  return lines.join("\n")
+}
+
+function buildContactText(contacts: MetaMessage["contacts"]): string | null {
+  const firstContact = Array.isArray(contacts) ? contacts[0] : null
+  if (!firstContact) {
+    return null
+  }
+
+  const formattedName = firstContact.name?.formatted_name?.trim() || ""
+  const firstName = firstContact.name?.first_name?.trim() || ""
+  const lastName = firstContact.name?.last_name?.trim() || ""
+  const name = formattedName || [firstName, lastName].filter((part) => part.length > 0).join(" ") || "Contacto"
+
+  const phones = Array.isArray(firstContact.phones) ? firstContact.phones : []
+  const phone = phones[0]?.phone?.trim() || ""
+  const waId = phones[0]?.wa_id?.trim() || ""
+
+  const lines = [
+    `Nombre: ${name}`,
+    phone ? `Teléfono: ${phone}` : "",
+    waId ? `WhatsApp: ${waId}` : "",
+  ].filter((line) => line.length > 0)
+
+  return lines.length > 0 ? lines.join("\n") : "[Contacto compartido]"
+}
+
 function getMessagePayload(message: MetaMessage): {
   text: string | null
   mediaId: string | null
@@ -104,7 +188,43 @@ function getMessagePayload(message: MetaMessage): {
   mediaFilename: string | null
   type: string
 } {
-  const type = message.type?.trim() || "text"
+  const rawType = message.type?.trim().toLowerCase() || ""
+  const unsupportedSubtype = message.unsupported?.type?.trim().toLowerCase() || ""
+  const type = rawType || "text"
+  const videoPayload = message.video ?? message.video_note ?? message.ptv
+
+  if (rawType === "unsupported" && (unsupportedSubtype === "video_note" || unsupportedSubtype === "ptv")) {
+    return {
+      text: "[Nota de video]",
+      mediaId: videoPayload?.id?.trim() || null,
+      mediaMimeType: videoPayload?.mime_type?.trim() || null,
+      mediaCaption: videoPayload?.caption?.trim() || null,
+      mediaFilename: null,
+      type: unsupportedSubtype,
+    }
+  }
+
+  if (rawType === "unsupported" && unsupportedSubtype === "poll_creation") {
+    return {
+      text: "[Encuesta de WhatsApp no compatible en Meta]",
+      mediaId: null,
+      mediaMimeType: null,
+      mediaCaption: null,
+      mediaFilename: null,
+      type: "unsupported",
+    }
+  }
+
+  if ((rawType === "video" || rawType === "video_note" || rawType === "ptv") || videoPayload) {
+    return {
+      text: videoPayload?.caption?.trim() || null,
+      mediaId: videoPayload?.id?.trim() || null,
+      mediaMimeType: videoPayload?.mime_type?.trim() || null,
+      mediaCaption: videoPayload?.caption?.trim() || null,
+      mediaFilename: null,
+      type: "video",
+    }
+  }
 
   if (type === "reaction") {
     return {
@@ -167,6 +287,28 @@ function getMessagePayload(message: MetaMessage): {
       mediaId: message.video?.id?.trim() || null,
       mediaMimeType: message.video?.mime_type?.trim() || null,
       mediaCaption: message.video?.caption?.trim() || null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  if (type === "location") {
+    return {
+      text: buildLocationText(message.location),
+      mediaId: null,
+      mediaMimeType: null,
+      mediaCaption: null,
+      mediaFilename: null,
+      type,
+    }
+  }
+
+  if (type === "contacts") {
+    return {
+      text: buildContactText(message.contacts),
+      mediaId: null,
+      mediaMimeType: null,
+      mediaCaption: null,
       mediaFilename: null,
       type,
     }
@@ -400,19 +542,42 @@ export async function POST(request: Request) {
            const readAt = statusValue === "read" ? parseUnixTimestampToIso(status.timestamp) : null
 
            await pool.query(
-             `UPDATE tenant_base.meta_webhook_messages
-                 SET message_status = COALESCE($2, message_status),
-                     status_error = COALESCE($3, status_error),
-                     read_at = COALESCE($4::timestamptz, read_at),
-                     updated_at = NOW()
-              WHERE wamid = $1
-                AND tenant_schema = $5`,
+             `INSERT INTO tenant_base.meta_webhook_messages (
+                tenant_schema,
+                wamid,
+                phone_number_id,
+                wa_id,
+                direction,
+                message_status,
+                status_error,
+                read_at,
+                updated_at
+              ) VALUES (
+                $1,$2,$3,$4,'outbound',$5,$6,$7::timestamptz,NOW()
+              )
+              ON CONFLICT (wamid) DO UPDATE
+              SET tenant_schema = COALESCE(tenant_base.meta_webhook_messages.tenant_schema, EXCLUDED.tenant_schema),
+                  phone_number_id = COALESCE(tenant_base.meta_webhook_messages.phone_number_id, EXCLUDED.phone_number_id),
+                  wa_id = COALESCE(tenant_base.meta_webhook_messages.wa_id, EXCLUDED.wa_id),
+                  status_error = COALESCE(EXCLUDED.status_error, tenant_base.meta_webhook_messages.status_error),
+                  read_at = COALESCE(EXCLUDED.read_at, tenant_base.meta_webhook_messages.read_at),
+                  message_status = CASE
+                    WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'read' THEN tenant_base.meta_webhook_messages.message_status
+                    WHEN LOWER(COALESCE(EXCLUDED.message_status, '')) = 'read' THEN EXCLUDED.message_status
+                    WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'delivered' AND LOWER(COALESCE(EXCLUDED.message_status, '')) = 'sent' THEN tenant_base.meta_webhook_messages.message_status
+                    WHEN LOWER(COALESCE(EXCLUDED.message_status, '')) = 'delivered' THEN EXCLUDED.message_status
+                    WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'failed' AND LOWER(COALESCE(EXCLUDED.message_status, '')) = 'sent' THEN tenant_base.meta_webhook_messages.message_status
+                    ELSE COALESCE(EXCLUDED.message_status, tenant_base.meta_webhook_messages.message_status)
+                  END,
+                  updated_at = NOW()`,
              [
-              wamid,
+               tenantSchema,
+               wamid,
+               metadata?.phone_number_id?.trim() || null,
+               status.recipient_id?.trim() || null,
                statusValue,
                statusError,
                readAt,
-               tenantSchema,
              ],
            )
 

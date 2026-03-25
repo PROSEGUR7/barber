@@ -358,6 +358,277 @@ function extractStickerMediaMeta(rawPayload: unknown): { mediaId: string | null;
   return { mediaId: null, mediaMimeType: null }
 }
 
+function normalizeStoredMessageType(value: string | null | undefined): string {
+  const normalized = (value ?? "").trim().toLowerCase()
+  if (normalized === "video_note" || normalized === "ptv") {
+    return "video"
+  }
+
+  return normalized || "text"
+}
+
+function extractUnsupportedSubtype(rawPayload: unknown): string | null {
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return null
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const messageUnsupported = asRecord(messageRecord?.unsupported)
+  const subtypeFromMessage = trimOrNull(messageUnsupported?.type)?.toLowerCase() ?? null
+  if (subtypeFromMessage) {
+    return subtypeFromMessage
+  }
+
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const unsupported = asRecord(message.unsupported)
+        const subtype = trimOrNull(unsupported?.type)?.toLowerCase() ?? null
+        if (subtype) {
+          return subtype
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function buildUnsupportedMessageText(rawPayload: unknown): string {
+  const subtype = extractUnsupportedSubtype(rawPayload)
+  if (subtype === "poll_creation") {
+    return "[Encuesta de WhatsApp no compatible en Meta]"
+  }
+
+  return "[Mensaje no compatible en Meta]"
+}
+
+function resolveRuntimeMessageType(storedType: string | null | undefined, rawPayload: unknown): string {
+  const normalized = normalizeStoredMessageType(storedType)
+  if (normalized !== "unsupported") {
+    return normalized
+  }
+
+  const unsupportedSubtype = extractUnsupportedSubtype(rawPayload)
+  if (unsupportedSubtype === "video_note" || unsupportedSubtype === "ptv") {
+    return "video"
+  }
+
+  return normalized
+}
+
+function extractMediaMetaFromRawPayload(
+  rawPayload: unknown,
+  messageType: string,
+): {
+  mediaId: string | null
+  mediaMimeType: string | null
+  mediaCaption: string | null
+  mediaFilename: string | null
+} {
+  const type = normalizeStoredMessageType(messageType)
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return { mediaId: null, mediaMimeType: null, mediaCaption: null, mediaFilename: null }
+  }
+
+  const tryExtract = (value: unknown) => {
+    const record = asRecord(value)
+    if (!record) {
+      return null
+    }
+
+    const mediaId = trimOrNull(record.id)
+    if (!mediaId) {
+      return null
+    }
+
+    return {
+      mediaId,
+      mediaMimeType: trimOrNull(record.mime_type),
+      mediaCaption: trimOrNull(record.caption),
+      mediaFilename: trimOrNull(record.filename),
+    }
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const messageTypeRecord =
+    type === "video"
+      ? tryExtract(messageRecord?.video) ?? tryExtract(messageRecord?.video_note) ?? tryExtract(messageRecord?.ptv)
+      : tryExtract(messageRecord?.[type])
+  if (messageTypeRecord) {
+    return messageTypeRecord
+  }
+
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const incomingType = normalizeStoredMessageType(trimOrNull(message.type))
+        if (incomingType !== type) {
+          continue
+        }
+
+        const extracted =
+          type === "video"
+            ? tryExtract(message.video) ?? tryExtract(message.video_note) ?? tryExtract(message.ptv)
+            : tryExtract(message[type])
+        if (extracted) {
+          return extracted
+        }
+      }
+    }
+  }
+
+  return { mediaId: null, mediaMimeType: null, mediaCaption: null, mediaFilename: null }
+}
+
+function extractLocationTextFromRawPayload(rawPayload: unknown): string | null {
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return null
+  }
+
+  const scalarToString = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? String(value) : null
+    }
+
+    return null
+  }
+
+  const formatLocationRecord = (recordValue: unknown): string | null => {
+    const record = asRecord(recordValue)
+    if (!record) {
+      return null
+    }
+
+    const name = scalarToString(record.name)
+    const address = scalarToString(record.address)
+    const latitude = scalarToString(record.latitude)
+    const longitude = scalarToString(record.longitude)
+    const url =
+      scalarToString(record.url) ??
+      (latitude && longitude ? `https://maps.google.com/?q=${latitude},${longitude}` : null)
+
+    const lines = [
+      name,
+      address,
+      latitude && longitude ? `Coordenadas: ${latitude}, ${longitude}` : null,
+      url,
+    ].filter((line): line is string => Boolean(line && line.trim().length > 0))
+
+    if (lines.length === 0) {
+      return null
+    }
+
+    return lines.join("\n")
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const fromMessage = formatLocationRecord(messageRecord?.location)
+  if (fromMessage) {
+    return fromMessage
+  }
+
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const type = normalizeStoredMessageType(trimOrNull(message.type))
+        if (type !== "location") {
+          continue
+        }
+
+        const extracted = formatLocationRecord(message.location)
+        if (extracted) {
+          return extracted
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function extractContactTextFromRawPayload(rawPayload: unknown): string | null {
+  const payload = asRecord(rawPayload)
+  if (!payload) {
+    return null
+  }
+
+  const formatContactList = (contactsValue: unknown): string | null => {
+    const contacts = asRecordArray(contactsValue)
+    const firstContact = contacts[0]
+    if (!firstContact) {
+      return null
+    }
+
+    const nameRecord = asRecord(firstContact.name)
+    const formattedName = trimOrNull(nameRecord?.formatted_name)
+    const firstName = trimOrNull(nameRecord?.first_name)
+    const lastName = trimOrNull(nameRecord?.last_name)
+    const name = formattedName || [firstName, lastName].filter((part): part is string => Boolean(part)).join(" ") || "Contacto"
+
+    const phones = asRecordArray(firstContact.phones)
+    const firstPhone = phones[0]
+    const phone = trimOrNull(firstPhone?.phone)
+    const waId = trimOrNull(firstPhone?.wa_id)
+
+    const lines = [
+      `Nombre: ${name}`,
+      phone ? `Teléfono: ${phone}` : null,
+      waId ? `WhatsApp: ${waId}` : null,
+    ].filter((line): line is string => Boolean(line && line.trim().length > 0))
+
+    return lines.length > 0 ? lines.join("\n") : null
+  }
+
+  const messageRecord = asRecord(payload.message)
+  const fromMessage = formatContactList(messageRecord?.contacts)
+  if (fromMessage) {
+    return fromMessage
+  }
+
+  const entries = asRecordArray(payload.entry)
+  for (const entry of entries) {
+    const changes = asRecordArray(entry.changes)
+    for (const change of changes) {
+      const value = asRecord(change.value)
+      const messages = asRecordArray(value?.messages)
+      for (const message of messages) {
+        const type = normalizeStoredMessageType(trimOrNull(message.type))
+        if (type !== "contacts") {
+          continue
+        }
+
+        const extracted = formatContactList(message.contacts)
+        if (extracted) {
+          return extracted
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 function messageTypePlaceholder(type: string | null | undefined): string {
   const normalized = (type ?? "").trim().toLowerCase()
 
@@ -372,6 +643,10 @@ function messageTypePlaceholder(type: string | null | undefined): string {
       return "[Documento]"
     case "video":
       return "[Video]"
+    case "location":
+      return "[Ubicación]"
+    case "contacts":
+      return "[Contacto]"
     case "reaction":
       return "[Reacción]"
     default:
@@ -608,6 +883,8 @@ export async function getConversations(
                     WHEN message_type = 'audio' THEN '[Audio]'
                     WHEN message_type = 'document' THEN '[Documento]'
                     WHEN message_type = 'video' THEN '[Video]'
+                    WHEN message_type = 'location' THEN '[Ubicación]'
+                    WHEN message_type = 'contacts' THEN '[Contacto]'
                     WHEN message_type = 'reaction' THEN '[Reacción]'
                     ELSE 'Sin contenido'
                   END) as snippet,
@@ -792,20 +1069,30 @@ export async function getMessagesByConversation(
       ? reactionTargetSnippets.get(reactionMeta.targetWamid) ?? "[Mensaje no disponible]"
       : fallbackPreviousSnippet
 
+    const normalizedType = resolveRuntimeMessageType(row.message_type, row.raw_payload)
+    const locationTextFallback = normalizedType === "location" ? extractLocationTextFromRawPayload(row.raw_payload) : null
+    const contactTextFallback = normalizedType === "contacts" ? extractContactTextFromRawPayload(row.raw_payload) : null
     const messageText =
       row.message_type?.trim() === "reaction"
         ? reactionEmoji
           ? `Reaccionó ${reactionEmoji}`
           : "Reaccionó a un mensaje"
-        : row.message_text
+        : row.message_text ??
+          locationTextFallback ??
+          contactTextFallback ??
+          (normalizedType === "unsupported" ? buildUnsupportedMessageText(row.raw_payload) : null)
 
-    const normalizedType = row.message_type?.trim() || "text"
+    const extractedMediaMeta = !row.media_id
+      ? extractMediaMetaFromRawPayload(row.raw_payload, normalizedType)
+      : { mediaId: null, mediaMimeType: null, mediaCaption: null, mediaFilename: null }
     const stickerMediaMeta =
-      normalizedType === "sticker" && !row.media_id
+      normalizedType === "sticker" && !row.media_id && !extractedMediaMeta.mediaId
         ? extractStickerMediaMeta(row.raw_payload)
         : { mediaId: null, mediaMimeType: null }
-    const mediaId = row.media_id ?? stickerMediaMeta.mediaId
-    const mediaMimeType = row.media_mime_type ?? stickerMediaMeta.mediaMimeType
+    const mediaId = row.media_id ?? extractedMediaMeta.mediaId ?? stickerMediaMeta.mediaId
+    const mediaMimeType = row.media_mime_type ?? extractedMediaMeta.mediaMimeType ?? stickerMediaMeta.mediaMimeType
+    const mediaCaption = row.media_caption ?? extractedMediaMeta.mediaCaption
+    const mediaFilename = row.media_filename ?? extractedMediaMeta.mediaFilename
 
     return {
       id: String(row.id),
@@ -818,8 +1105,8 @@ export async function getMessagesByConversation(
       text: messageText,
       mediaId,
       mediaMimeType,
-      mediaCaption: row.media_caption,
-      mediaFilename: row.media_filename,
+      mediaCaption,
+      mediaFilename,
       status: row.message_status,
       statusError: row.status_error,
       reactionEmoji,
@@ -913,6 +1200,12 @@ export async function sendMessageToMeta(params: {
   text?: string | null
   file?: File | null
   reaction?: { messageId: string; emoji: string } | null
+  location?: {
+    latitude: number
+    longitude: number
+    name?: string | null
+    address?: string | null
+  } | null
   contactName?: string | null
   sentByType?: "bot" | "human"
   sentByName?: string | null
@@ -932,15 +1225,20 @@ export async function sendMessageToMeta(params: {
   const to = params.to.trim()
   const text = params.text?.trim() ?? ""
   const file = params.file ?? null
+  const location = params.location ?? null
   const reactionMessageId = params.reaction?.messageId?.trim() ?? ""
   const reactionEmoji = params.reaction?.emoji?.trim() ?? ""
   const hasReaction = reactionMessageId.length > 0 && reactionEmoji.length > 0
+  const hasLocation =
+    Boolean(location) &&
+    Number.isFinite(location?.latitude) &&
+    Number.isFinite(location?.longitude)
 
   if (!to) {
     throw new Error("RECIPIENT_REQUIRED")
   }
 
-  if (!hasReaction && text.length === 0 && !file) {
+  if (!hasReaction && text.length === 0 && !file && !hasLocation) {
     throw new Error("MESSAGE_EMPTY")
   }
 
@@ -952,6 +1250,8 @@ export async function sendMessageToMeta(params: {
 
   if (hasReaction) {
     messageType = "reaction"
+  } else if (hasLocation) {
+    messageType = "location"
   } else if (file) {
     const formData = new FormData()
     formData.append("messaging_product", "whatsapp")
@@ -984,6 +1284,11 @@ export async function sendMessageToMeta(params: {
     payload.text = {
       body: text,
       preview_url: false,
+    }
+  } else if (messageType === "location") {
+    payload.location = {
+      latitude: location?.latitude,
+      longitude: location?.longitude,
     }
   } else if (messageType === "reaction") {
     payload.reaction = {
@@ -1032,6 +1337,15 @@ export async function sendMessageToMeta(params: {
       name: sentByName,
       at: sentAt,
     },
+    location:
+      messageType === "location"
+        ? {
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            name: location?.name?.trim() || null,
+            address: location?.address?.trim() || null,
+          }
+        : undefined,
     reaction:
       messageType === "reaction"
         ? {
@@ -1062,10 +1376,29 @@ export async function sendMessageToMeta(params: {
        raw_payload,
        updated_at
      ) VALUES (
-       $1,$2,$3,$4,$5,'outbound',$6,$7,$8,$9,$10,$11,'sent',$12,NOW(),$13::jsonb,NOW()
+       $1,$2,$3,$4,$5,'outbound',$6,$7,$8,$9,$10,$11,'sent',$12,NULL,$13::jsonb,NOW()
      )
      ON CONFLICT (wamid) DO UPDATE
-     SET message_status = EXCLUDED.message_status,
+     SET tenant_schema = COALESCE(tenant_base.meta_webhook_messages.tenant_schema, EXCLUDED.tenant_schema),
+         phone_number_id = COALESCE(tenant_base.meta_webhook_messages.phone_number_id, EXCLUDED.phone_number_id),
+         wa_id = COALESCE(tenant_base.meta_webhook_messages.wa_id, EXCLUDED.wa_id),
+         contact_name = COALESCE(tenant_base.meta_webhook_messages.contact_name, EXCLUDED.contact_name),
+         direction = COALESCE(tenant_base.meta_webhook_messages.direction, EXCLUDED.direction),
+         message_type = COALESCE(tenant_base.meta_webhook_messages.message_type, EXCLUDED.message_type),
+         message_text = COALESCE(tenant_base.meta_webhook_messages.message_text, EXCLUDED.message_text),
+         media_id = COALESCE(tenant_base.meta_webhook_messages.media_id, EXCLUDED.media_id),
+         media_mime_type = COALESCE(tenant_base.meta_webhook_messages.media_mime_type, EXCLUDED.media_mime_type),
+         media_caption = COALESCE(tenant_base.meta_webhook_messages.media_caption, EXCLUDED.media_caption),
+         media_filename = COALESCE(tenant_base.meta_webhook_messages.media_filename, EXCLUDED.media_filename),
+         sent_at = COALESCE(tenant_base.meta_webhook_messages.sent_at, EXCLUDED.sent_at),
+         read_at = COALESCE(tenant_base.meta_webhook_messages.read_at, EXCLUDED.read_at),
+         raw_payload = COALESCE(tenant_base.meta_webhook_messages.raw_payload, EXCLUDED.raw_payload),
+         message_status = CASE
+           WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'read' THEN tenant_base.meta_webhook_messages.message_status
+           WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'delivered' AND LOWER(COALESCE(EXCLUDED.message_status, '')) = 'sent' THEN tenant_base.meta_webhook_messages.message_status
+           WHEN LOWER(COALESCE(tenant_base.meta_webhook_messages.message_status, '')) = 'failed' AND LOWER(COALESCE(EXCLUDED.message_status, '')) = 'sent' THEN tenant_base.meta_webhook_messages.message_status
+           ELSE COALESCE(EXCLUDED.message_status, tenant_base.meta_webhook_messages.message_status)
+         END,
          updated_at = NOW()`,
     [
       tenantSchema,
@@ -1074,7 +1407,20 @@ export async function sendMessageToMeta(params: {
       to,
       params.contactName?.trim() || null,
       messageType,
-      messageType === "reaction" ? reactionEmoji : text.length > 0 ? text : null,
+      messageType === "reaction"
+        ? reactionEmoji
+        : messageType === "location"
+          ? [
+              location?.name?.trim() || null,
+              location?.address?.trim() || null,
+              `Coordenadas: ${location?.latitude}, ${location?.longitude}`,
+              `https://maps.google.com/?q=${location?.latitude},${location?.longitude}`,
+            ]
+              .filter((line): line is string => Boolean(line && line.trim().length > 0))
+              .join("\n")
+        : text.length > 0
+          ? text
+          : null,
       mediaId,
       mediaMimeType,
       mediaCaption,
@@ -1087,7 +1433,21 @@ export async function sendMessageToMeta(params: {
   return {
     wamid,
     type: messageType,
-    text: messageType === "reaction" ? reactionEmoji : text.length > 0 ? text : null,
+    text:
+      messageType === "reaction"
+        ? reactionEmoji
+        : messageType === "location"
+          ? [
+              location?.name?.trim() || null,
+              location?.address?.trim() || null,
+              `Coordenadas: ${location?.latitude}, ${location?.longitude}`,
+              `https://maps.google.com/?q=${location?.latitude},${location?.longitude}`,
+            ]
+              .filter((line): line is string => Boolean(line && line.trim().length > 0))
+              .join("\n")
+          : text.length > 0
+            ? text
+            : null,
     mediaId,
     mediaMimeType,
     mediaCaption,

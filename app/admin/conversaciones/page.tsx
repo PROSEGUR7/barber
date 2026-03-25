@@ -12,6 +12,8 @@ import {
   FileText,
   Images,
   Image as ImageIcon,
+  MapPin,
+  Video,
   MessageSquare,
   Mic,
   Pause,
@@ -236,14 +238,19 @@ function getOutboundSenderInitials(message: ChatMessage): string {
   return buildInitials(message.sentByName?.trim() || fallbackName)
 }
 
-function formatStatus(status: string | null): string {
+function formatStatus(message: ChatMessage): string {
+  const status = message.status
   if (!status) {
     return ""
   }
 
   switch (status.toLowerCase()) {
-    case "sent":
-      return "Enviado"
+    case "sent": {
+      const sentAtMs = message.sentAt ? Date.parse(message.sentAt) : Number.NaN
+      const hasValidSentAt = Number.isFinite(sentAtMs)
+      const elapsedMs = hasValidSentAt ? Date.now() - sentAtMs : 0
+      return elapsedMs >= 120000 ? "Pendiente de entrega" : "Enviado"
+    }
     case "delivered":
       return "Entregado"
     case "read":
@@ -359,6 +366,130 @@ function formatAudioTime(seconds: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const remainingSeconds = totalSeconds % 60
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`
+}
+
+function extractLocationUrl(text: string | null | undefined): string | null {
+  if (!text) {
+    return null
+  }
+
+  const match = text.match(/https?:\/\/\S+/i)
+  return match?.[0] ?? null
+}
+
+function extractLocationMeta(text: string | null | undefined): {
+  latitude: number
+  longitude: number
+  mapUrl: string
+  embedMapUrl: string
+} | null {
+  if (!text) {
+    return null
+  }
+
+  const toFinite = (value: string | null | undefined): number | null => {
+    if (!value) return null
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  let latitude: number | null = null
+  let longitude: number | null = null
+
+  const mapUrlFromText = extractLocationUrl(text)
+  if (mapUrlFromText) {
+    try {
+      const parsed = new URL(mapUrlFromText)
+      const q = parsed.searchParams.get("q")?.trim() ?? ""
+      const [latRaw, lonRaw] = q.split(",").map((part) => part.trim())
+      const qLat = toFinite(latRaw)
+      const qLon = toFinite(lonRaw)
+      if (qLat !== null && qLon !== null) {
+        latitude = qLat
+        longitude = qLon
+      }
+    } catch {
+      // Ignore URL parse errors and fallback to regex extraction.
+    }
+  }
+
+  if (latitude === null || longitude === null) {
+    const coordinatesMatch = text.match(/(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/)
+    const regexLat = toFinite(coordinatesMatch?.[1])
+    const regexLon = toFinite(coordinatesMatch?.[2])
+
+    if (regexLat !== null && regexLon !== null) {
+      latitude = regexLat
+      longitude = regexLon
+    }
+  }
+
+  if (latitude === null || longitude === null) {
+    return null
+  }
+
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return null
+  }
+
+  const mapUrl = mapUrlFromText ?? `https://maps.google.com/?q=${latitude},${longitude}`
+  const embedMapUrl = `https://www.google.com/maps?q=${latitude},${longitude}&z=15&output=embed`
+
+  return {
+    latitude,
+    longitude,
+    mapUrl,
+    embedMapUrl,
+  }
+}
+
+function extractContactMeta(text: string | null | undefined): {
+  name: string
+  phone: string | null
+  waId: string | null
+  chatUrl: string | null
+  vcfUrl: string | null
+} {
+  const fallback = {
+    name: "Contacto",
+    phone: null,
+    waId: null,
+    chatUrl: null,
+    vcfUrl: null,
+  }
+
+  if (!text) {
+    return fallback
+  }
+
+  const nameMatch = text.match(/Nombre:\s*([^\n]+)/i)
+  const phoneMatch = text.match(/Teléfono:\s*([^\n]+)/i)
+  const waMatch = text.match(/WhatsApp:\s*([^\n]+)/i)
+
+  const name = nameMatch?.[1]?.trim() || fallback.name
+  const phone = phoneMatch?.[1]?.trim() || null
+  const waId = waMatch?.[1]?.trim() || null
+  const waDigits = (waId ?? phone ?? "").replace(/\D+/g, "")
+  const chatUrl = waDigits ? `https://wa.me/${waDigits}` : null
+
+  const vcardLines = [
+    "BEGIN:VCARD",
+    "VERSION:3.0",
+    `FN:${name}`,
+    phone ? `TEL;TYPE=CELL:${phone}` : waDigits ? `TEL;TYPE=CELL:+${waDigits}` : "",
+    "END:VCARD",
+  ].filter((line) => line.length > 0)
+
+  const vcfPayload = vcardLines.join("\r\n")
+  const vcfUrl = `data:text/vcard;charset=utf-8,${encodeURIComponent(vcfPayload)}`
+
+  return {
+    name,
+    phone,
+    waId,
+    chatUrl,
+    vcfUrl,
+  }
 }
 
 type CompactAudioPlayerProps = {
@@ -641,6 +772,14 @@ export default function AdminConversacionesPage() {
   const [botEnabledByConversation, setBotEnabledByConversation] = useState<Record<string, boolean>>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [selectedFilePreviewUrl, setSelectedFilePreviewUrl] = useState<string | null>(null)
+  const [draftLocation, setDraftLocation] = useState<{
+    latitude: number
+    longitude: number
+    mapUrl: string
+    embedMapUrl: string
+    name: string
+  } | null>(null)
+  const [isResolvingLocation, setIsResolvingLocation] = useState(false)
   const [isCameraDialogOpen, setIsCameraDialogOpen] = useState(false)
   const [isCameraStarting, setIsCameraStarting] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -1071,8 +1210,9 @@ export default function AdminConversacionesPage() {
 
     const textToSend = composerText
     const fileToSend = selectedFile
+    const locationToSend = draftLocation
 
-    if (textToSend.trim().length === 0 && !fileToSend) {
+    if (textToSend.trim().length === 0 && !fileToSend && !locationToSend) {
       return
     }
 
@@ -1080,6 +1220,7 @@ export default function AdminConversacionesPage() {
     setIsSending(true)
     setComposerText("")
     setSelectedFile(null)
+    setDraftLocation(null)
     if (documentInputRef.current) documentInputRef.current.value = ""
     if (galleryInputRef.current) galleryInputRef.current.value = ""
     if (cameraInputRef.current) cameraInputRef.current.value = ""
@@ -1095,6 +1236,12 @@ export default function AdminConversacionesPage() {
 
         if (fileToSend) {
           formData.append("file", fileToSend)
+        }
+
+        if (locationToSend) {
+          formData.append("locationLatitude", String(locationToSend.latitude))
+          formData.append("locationLongitude", String(locationToSend.longitude))
+          formData.append("locationName", locationToSend.name)
         }
 
         const response = await fetch(withTenantQuery(`/api/admin/conversations/${encodeURIComponent(selectedConversation.id)}/send`), {
@@ -1116,13 +1263,14 @@ export default function AdminConversacionesPage() {
         if (shouldRestoreDraft) {
           setComposerText(textToSend)
           setSelectedFile(fileToSend)
+          setDraftLocation(locationToSend)
         }
         setError(sendError instanceof Error ? sendError.message : "No se pudo enviar el mensaje")
       } finally {
         setIsSending(false)
       }
     })()
-  }, [composerText, isBotEnabled, loadConversations, loadMessages, selectedConversation, selectedFile])
+  }, [composerText, draftLocation, isBotEnabled, loadConversations, loadMessages, selectedConversation, selectedFile])
 
   const handleSendReaction = useCallback(
     async (targetMessage: ChatMessage, emoji: string) => {
@@ -1222,6 +1370,7 @@ export default function AdminConversacionesPage() {
   const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] ?? null
     setSelectedFile(nextFile)
+    setDraftLocation(null)
   }, [])
 
   const stopCameraStream = useCallback(() => {
@@ -1306,10 +1455,68 @@ export default function AdminConversacionesPage() {
 
     const file = new File([blob], `captura-${Date.now()}.jpg`, { type: "image/jpeg" })
     setSelectedFile(file)
+    setDraftLocation(null)
     setIsCameraDialogOpen(false)
   }, [])
 
-  const openAttachmentPicker = useCallback((kind: "document" | "gallery" | "camera" | "audio") => {
+  const prepareCurrentLocation = useCallback(async () => {
+    if (!selectedConversation) {
+      setError("Selecciona una conversación para adjuntar ubicación.")
+      return
+    }
+
+    if (isBotEnabled) {
+      setError("El bot IA está activo. Desactívalo para adjuntar ubicación manualmente.")
+      return
+    }
+
+    if (!navigator.geolocation) {
+      setError("Tu navegador no soporta geolocalización.")
+      return
+    }
+
+    setError(null)
+    setIsResolvingLocation(true)
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
+        })
+      })
+
+      const latitude = position.coords.latitude
+      const longitude = position.coords.longitude
+      setSelectedFile(null)
+      setDraftLocation({
+        latitude,
+        longitude,
+        mapUrl: `https://maps.google.com/?q=${latitude},${longitude}`,
+        embedMapUrl: `https://www.google.com/maps?q=${latitude},${longitude}&z=15&output=embed`,
+        name: "Ubicación actual",
+      })
+    } catch (locationError) {
+      console.error("Prepare location error", locationError)
+
+      if (locationError instanceof GeolocationPositionError) {
+        if (locationError.code === locationError.PERMISSION_DENIED) {
+          setError("Permite ubicación en el navegador para enviar tu localización.")
+        } else if (locationError.code === locationError.TIMEOUT) {
+          setError("No se pudo obtener la ubicación a tiempo. Intenta nuevamente.")
+        } else {
+          setError("No se pudo obtener tu ubicación.")
+        }
+      } else {
+        setError(locationError instanceof Error ? locationError.message : "No se pudo obtener la ubicación")
+      }
+    } finally {
+      setIsResolvingLocation(false)
+    }
+  }, [isBotEnabled, selectedConversation])
+
+  const openAttachmentPicker = useCallback((kind: "document" | "gallery" | "camera" | "audio" | "location") => {
     if (kind === "document") {
       documentInputRef.current?.click()
       return
@@ -1325,8 +1532,13 @@ export default function AdminConversacionesPage() {
       return
     }
 
+    if (kind === "location") {
+      void prepareCurrentLocation()
+      return
+    }
+
     audioInputRef.current?.click()
-  }, [startCameraCapture])
+  }, [prepareCurrentLocation, startCameraCapture])
 
   useEffect(() => {
     if (isCameraDialogOpen) {
@@ -1467,6 +1679,7 @@ export default function AdminConversacionesPage() {
             type: "audio/mpeg",
           })
           setSelectedFile(voiceFile)
+          setDraftLocation(null)
         }
       }
     } finally {
@@ -1669,6 +1882,7 @@ export default function AdminConversacionesPage() {
                           setMessages([])
                           setComposerText("")
                           setSelectedFile(null)
+                          setDraftLocation(null)
                         }}
                       >
                         Cerrar chat
@@ -1717,6 +1931,8 @@ export default function AdminConversacionesPage() {
                           const mediaUrl = message.mediaId
                             ? withTenantQuery(`/api/admin/conversations/media/${encodeURIComponent(message.mediaId)}`)
                             : null
+                          const locationMeta = message.type === "location" ? extractLocationMeta(message.text) : null
+                          const contactMeta = message.type === "contacts" ? extractContactMeta(message.text) : null
 
                           return (
                             <div
@@ -1830,7 +2046,32 @@ export default function AdminConversacionesPage() {
                                   />
                                 ) : null}
 
-                                {(message.type === "document" || message.type === "video") && mediaUrl ? (
+                                {message.type === "video" && mediaUrl ? (
+                                  <div className="space-y-2">
+                                    <video
+                                      controls
+                                      playsInline
+                                      preload="metadata"
+                                      className="max-h-80 min-w-[220px] rounded-lg border object-cover"
+                                    >
+                                      <source src={mediaUrl} type={message.mediaMimeType ?? "video/mp4"} />
+                                    </video>
+                                    <a
+                                      href={mediaUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={cn(
+                                        "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
+                                        isOutbound ? "border-primary-foreground/30" : "border-border",
+                                      )}
+                                    >
+                                      <Video className="h-4 w-4" />
+                                      Abrir video en nueva pestaña
+                                    </a>
+                                  </div>
+                                ) : null}
+
+                                {message.type === "document" && mediaUrl ? (
                                   <a
                                     href={mediaUrl}
                                     target="_blank"
@@ -1840,12 +2081,12 @@ export default function AdminConversacionesPage() {
                                       isOutbound ? "border-primary-foreground/30" : "border-border",
                                     )}
                                   >
-                                    {message.type === "video" ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                                    <FileText className="h-4 w-4" />
                                     {message.mediaFilename || "Abrir adjunto"}
                                   </a>
                                 ) : null}
 
-                                {message.text && item.kind !== "orphan-reaction" ? (
+                                {message.text && message.type !== "location" && message.type !== "contacts" && item.kind !== "orphan-reaction" ? (
                                   <p className="whitespace-pre-wrap break-words break-all">{message.text}</p>
                                 ) : null}
 
@@ -1857,9 +2098,88 @@ export default function AdminConversacionesPage() {
                                   <p className="whitespace-pre-wrap break-words break-all">[Sticker]</p>
                                 ) : null}
 
+                                {message.type === "video" && !mediaUrl && item.kind !== "orphan-reaction" ? (
+                                  <p className="whitespace-pre-wrap break-words break-all">[Video no disponible]</p>
+                                ) : null}
+
+                                {message.type === "location" && item.kind !== "orphan-reaction" ? (
+                                  <div className="space-y-2 rounded-lg border border-border/70 px-3 py-2">
+                                    <div className="inline-flex items-center gap-2 text-xs font-semibold">
+                                      <MapPin className="h-4 w-4" />
+                                      Ubicación compartida
+                                    </div>
+                                    {locationMeta ? (
+                                      <a href={locationMeta.mapUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border border-border/60">
+                                        <iframe
+                                          title={`Mapa ubicación ${locationMeta.latitude}, ${locationMeta.longitude}`}
+                                          src={locationMeta.embedMapUrl}
+                                          className="h-40 w-full border-0"
+                                          loading="lazy"
+                                          referrerPolicy="no-referrer-when-downgrade"
+                                        />
+                                      </a>
+                                    ) : (
+                                      <p className="text-xs text-muted-foreground">Sin detalle de ubicación.</p>
+                                    )}
+                                    {locationMeta ? (
+                                      <a
+                                        href={locationMeta.mapUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className={cn(
+                                          "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
+                                          isOutbound ? "border-primary-foreground/30" : "border-border",
+                                        )}
+                                      >
+                                        <MapPin className="h-4 w-4" />
+                                        Abrir en mapas
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+
+                                {message.type === "contacts" && item.kind !== "orphan-reaction" ? (
+                                  contactMeta?.chatUrl ? (
+                                    <a
+                                      href={contactMeta.chatUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="block overflow-hidden rounded-xl border border-border/70 bg-emerald-50/90 text-emerald-950 shadow-sm transition hover:bg-emerald-100/80"
+                                    >
+                                      <div className="flex items-center gap-3 px-3 py-3">
+                                        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-200 text-sm font-semibold text-emerald-900">
+                                          {(contactMeta.name ?? "C").slice(0, 1).toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <p className="truncate text-sm font-semibold">{contactMeta.name ?? "Contacto"}</p>
+                                          <p className="truncate text-xs text-emerald-800/80">
+                                            {contactMeta.phone ?? contactMeta.waId ?? "Sin teléfono"}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </a>
+                                  ) : (
+                                    <div className="overflow-hidden rounded-xl border border-border/70 bg-emerald-50/90 text-emerald-950 shadow-sm">
+                                      <div className="flex items-center gap-3 px-3 py-3">
+                                        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-200 text-sm font-semibold text-emerald-900">
+                                          {(contactMeta?.name ?? "C").slice(0, 1).toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <p className="truncate text-sm font-semibold">{contactMeta?.name ?? "Contacto"}</p>
+                                          <p className="truncate text-xs text-emerald-800/80">
+                                            {contactMeta?.phone ?? contactMeta?.waId ?? "Sin teléfono"}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                ) : null}
+
                                 <div className={cn("flex items-center gap-2 text-[11px]", isOutbound ? "justify-end text-primary-foreground/80" : "text-muted-foreground")}>
                                   <span>{message.timeLabel || message.dateLabel}</span>
-                                  {isOutbound && message.status ? <span>{formatStatus(message.status)}</span> : null}
+                                  {isOutbound && message.status ? (
+                                    <span title={message.statusError?.trim() || undefined}>{formatStatus(message)}</span>
+                                  ) : null}
                                 </div>
 
                               </div>
@@ -2032,6 +2352,7 @@ export default function AdminConversacionesPage() {
                             variant="ghost"
                             onClick={() => {
                               setSelectedFile(null)
+                              setDraftLocation(null)
                               if (documentInputRef.current) documentInputRef.current.value = ""
                               if (galleryInputRef.current) galleryInputRef.current.value = ""
                               if (cameraInputRef.current) cameraInputRef.current.value = ""
@@ -2091,6 +2412,43 @@ export default function AdminConversacionesPage() {
                       </div>
                     ) : null}
 
+                    {!selectedFile && draftLocation ? (
+                      <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
+                        <div className="mb-2 flex items-center justify-end">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDraftLocation(null)}
+                          >
+                            Quitar
+                          </Button>
+                        </div>
+
+                        <div className="space-y-2 rounded-lg border border-border/70 px-3 py-2">
+                          <div className="inline-flex items-center gap-2 text-xs font-semibold">
+                            <MapPin className="h-4 w-4" />
+                            {draftLocation.name}
+                          </div>
+                          <div className="overflow-hidden rounded-md border border-border/60 bg-background">
+                            <iframe
+                              title="Vista previa ubicación"
+                              src={draftLocation.embedMapUrl}
+                              className="h-40 w-full border-0"
+                              loading="lazy"
+                              referrerPolicy="no-referrer-when-downgrade"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isResolvingLocation ? (
+                      <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+                        Obteniendo ubicación actual...
+                      </div>
+                    ) : null}
+
                     {isRecordingAudio ? (
                       <div className="mb-2 flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                         <div className="flex items-center gap-2">
@@ -2142,7 +2500,7 @@ export default function AdminConversacionesPage() {
                             variant="outline"
                             className="h-10 w-10"
                             aria-label="Adjuntar"
-                            disabled={isBotEnabled || isSending || isUpdatingBotState}
+                            disabled={isBotEnabled || isSending || isUpdatingBotState || isResolvingLocation}
                           >
                             <Plus className="h-4 w-4" />
                           </Button>
@@ -2164,6 +2522,10 @@ export default function AdminConversacionesPage() {
                             <FileAudio className="h-4 w-4" />
                             Audio
                           </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => openAttachmentPicker("location")}>
+                            <MapPin className="h-4 w-4" />
+                            Ubicación
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
 
@@ -2178,7 +2540,7 @@ export default function AdminConversacionesPage() {
                             : "Mensaje"
                         }
                         className="min-h-10 max-h-36 resize-none overflow-y-auto"
-                        disabled={isBotEnabled || isSending || isUpdatingBotState}
+                        disabled={isBotEnabled || isSending || isUpdatingBotState || isResolvingLocation}
                       />
 
                       <Button
@@ -2187,7 +2549,7 @@ export default function AdminConversacionesPage() {
                         variant="outline"
                         className="h-10 w-10"
                         title={isRecordingAudio ? "Detener grabación" : "Grabar nota de voz"}
-                        disabled={isBotEnabled || isSending || isUpdatingBotState}
+                        disabled={isBotEnabled || isSending || isUpdatingBotState || isResolvingLocation}
                         onClick={() => {
                           if (isRecordingAudio) {
                             stopVoiceRecording()

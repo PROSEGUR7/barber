@@ -45,6 +45,10 @@ export async function POST(request: Request, context: Params) {
     const contactNameValue = form.get("contactName")
     const reactionEmojiValue = form.get("reactionEmoji")
     const reactionToWamidValue = form.get("reactionToWamid")
+    const locationLatitudeValue = form.get("locationLatitude")
+    const locationLongitudeValue = form.get("locationLongitude")
+    const locationNameValue = form.get("locationName")
+    const locationAddressValue = form.get("locationAddress")
 
     const text = typeof textValue === "string" ? textValue : ""
     const file = fileValue instanceof File ? fileValue : null
@@ -52,26 +56,60 @@ export async function POST(request: Request, context: Params) {
     const reactionEmoji = typeof reactionEmojiValue === "string" ? reactionEmojiValue.trim() : ""
     const reactionToWamid = typeof reactionToWamidValue === "string" ? reactionToWamidValue.trim() : ""
     const reaction = reactionEmoji && reactionToWamid ? { emoji: reactionEmoji, messageId: reactionToWamid } : null
+    const locationLatitude = typeof locationLatitudeValue === "string" ? Number(locationLatitudeValue) : Number.NaN
+    const locationLongitude = typeof locationLongitudeValue === "string" ? Number(locationLongitudeValue) : Number.NaN
+    const location = Number.isFinite(locationLatitude) && Number.isFinite(locationLongitude)
+      ? {
+          latitude: locationLatitude,
+          longitude: locationLongitude,
+          name: typeof locationNameValue === "string" ? locationNameValue : null,
+          address: typeof locationAddressValue === "string" ? locationAddressValue : null,
+        }
+      : null
     const sentByName =
       request.headers.get("x-user-name")?.trim() ||
       request.headers.get("x-user-email")?.trim() ||
       null
 
-    const result = await sendMessageToMeta({
-      tenantSchema,
-      to: decodeURIComponent(conversationId),
-      text,
-      file,
-      reaction,
-      contactName,
-      sentByType: "human",
-      sentByName,
-    })
+    let fallbackWarning: string | null = null
+    let result
+
+    try {
+      result = await sendMessageToMeta({
+        tenantSchema,
+        to: decodeURIComponent(conversationId),
+        text,
+        file,
+        reaction,
+        location,
+        contactName,
+        sentByType: "human",
+        sentByName,
+      })
+    } catch (primaryError) {
+      // Some Meta accounts intermittently fail outbound location with a generic status error.
+      // Fallback to a plain text Maps link so operators can continue the conversation.
+      if (!location) {
+        throw primaryError
+      }
+
+      const locationLink = `https://maps.google.com/?q=${location.latitude},${location.longitude}`
+      result = await sendMessageToMeta({
+        tenantSchema,
+        to: decodeURIComponent(conversationId),
+        text: `${location.name ?? "Ubicación"}\n${locationLink}`,
+        contactName,
+        sentByType: "human",
+        sentByName,
+      })
+      fallbackWarning = "Meta rechazó ubicación directa. Se envió como enlace de mapa."
+    }
 
     return NextResponse.json(
       {
         ok: true,
         message: result,
+        warning: fallbackWarning,
       },
       { status: 200 },
     )
