@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { addMinutes, format, isSameDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
-import { CalendarX, Clock, DollarSign, Scissors, Users } from "lucide-react"
+import { CalendarX, CheckCircle2, ChevronLeft, ChevronRight, Clock, DollarSign, MapPin, Scissors, Ticket, Users } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
@@ -16,13 +16,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 
@@ -32,6 +33,16 @@ type Service = {
   description: string | null
   price: number | null
   durationMin: number
+}
+
+type Sede = {
+  id: number
+  name: string
+  address: string | null
+  city: string | null
+  phone: string | null
+  latitude: number | null
+  longitude: number | null
 }
 
 type Barber = {
@@ -74,6 +85,18 @@ type PromoPricingPreview = {
 type PendingReservationCheckoutDetails = {
   start: string
   end: string | null
+}
+
+type BookingStep = "sede" | "services" | "professional" | "schedule" | "confirm"
+
+type CompletedReservationSummary = {
+  services: string[]
+  sedeName: string | null
+  barberName: string | null
+  scheduleLabel: string
+  paymentMethod: PaymentMethod
+  totalLabel: string
+  status: "confirmed" | "pending-payment"
 }
 
 const PENDING_RESERVATION_CHECKOUT_REFERENCE_KEY = "wompiPendingReservationCheckoutReference"
@@ -122,6 +145,11 @@ export default function BookingPage() {
   const [servicesError, setServicesError] = useState<string | null>(null)
   const [isLoadingServices, setIsLoadingServices] = useState(true)
 
+  const [sedes, setSedes] = useState<Sede[]>([])
+  const [selectedSede, setSelectedSede] = useState<number | null>(null)
+  const [isLoadingSedes, setIsLoadingSedes] = useState(true)
+  const [sedesError, setSedesError] = useState<string | null>(null)
+
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [isLoadingBarbers, setIsLoadingBarbers] = useState(false)
   const [barbersError, setBarbersError] = useState<string | null>(null)
@@ -132,13 +160,16 @@ export default function BookingPage() {
 
   const [selectedServices, setSelectedServices] = useState<number[]>([])
   const [selectedBarber, setSelectedBarber] = useState<number | null>(null)
+  const [isBarberPreferenceFlexible, setIsBarberPreferenceFlexible] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlot | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date | undefined>()
   const [today, setToday] = useState<Date | undefined>()
   const [userId, setUserId] = useState<number | null>(null)
   const [isBooking, setIsBooking] = useState(false)
   const [slotsRefreshKey, setSlotsRefreshKey] = useState(0)
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false)
+  const [activeStep, setActiveStep] = useState<BookingStep>("sede")
+  const [customerComment, setCustomerComment] = useState("")
+  const [completedReservation, setCompletedReservation] = useState<CompletedReservationSummary | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [wompiCheckout, setWompiCheckout] = useState<WompiCheckoutData | null>(null)
   const [isWompiDialogOpen, setIsWompiDialogOpen] = useState(false)
@@ -298,6 +329,17 @@ export default function BookingPage() {
     }
 
     setPaymentSuccessScheduleLabel(scheduleLabel)
+    setCompletedReservation((current) => {
+      if (!current) {
+        return current
+      }
+
+      return {
+        ...current,
+        status: "confirmed",
+        scheduleLabel: scheduleLabel ?? current.scheduleLabel,
+      }
+    })
     setIsPaymentSuccessDialogOpen(true)
   }
 
@@ -365,12 +407,121 @@ export default function BookingPage() {
   useEffect(() => {
     let isActive = true
 
+    const fetchSedes = async () => {
+      setIsLoadingSedes(true)
+      setSedesError(null)
+
+      try {
+        const response = await fetch("/api/sedes", {
+          method: "GET",
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
+
+        const data = await response.json().catch(() => ({}))
+        if (!isActive) {
+          return
+        }
+
+        if (!response.ok) {
+          setSedes([])
+          setSelectedSede(null)
+          setSedesError(data.error ?? "No se pudieron cargar las sedes")
+          return
+        }
+
+        const nextSedes = Array.isArray(data.sedes) ? (data.sedes as Sede[]) : []
+        setSedes(nextSedes)
+
+        if (nextSedes.length === 0) {
+          setSelectedSede(null)
+          return
+        }
+
+        setSelectedSede((current) => {
+          if (current != null && nextSedes.some((sede) => sede.id === current)) {
+            return current
+          }
+
+          return nextSedes[0]?.id ?? null
+        })
+      } catch (error) {
+        if (!isActive) {
+          return
+        }
+
+        console.error("Error loading sedes", error)
+        setSedes([])
+        setSelectedSede(null)
+        setSedesError("Error de conexión al cargar las sedes")
+      } finally {
+        if (isActive) {
+          setIsLoadingSedes(false)
+        }
+      }
+    }
+
+    fetchSedes()
+
+    return () => {
+      isActive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (sedes.length === 0) {
+      return
+    }
+
+    if (selectedSede == null) {
+      return
+    }
+
+    if (!sedes.some((sede) => sede.id === selectedSede)) {
+      setSelectedSede(sedes[0]?.id ?? null)
+    }
+  }, [sedes, selectedSede])
+
+  useEffect(() => {
+    setSelectedServices([])
+    setSelectedBarber(null)
+    setIsBarberPreferenceFlexible(false)
+    setSelectedSlot(null)
+    setBarbers([])
+    setSlots([])
+    setCustomerComment("")
+    setCompletedReservation(null)
+    setPromoCodeInput("")
+    setPromoPreview(null)
+    setPromoError(null)
+  }, [selectedSede])
+
+  useEffect(() => {
+    if (sedes.length === 0 && activeStep === "sede") {
+      setActiveStep("services")
+    }
+  }, [sedes.length, activeStep])
+
+  useEffect(() => {
+    let isActive = true
+
     const fetchServices = async () => {
+      if (sedes.length > 0 && selectedSede == null) {
+        setServices([])
+        setIsLoadingServices(false)
+        return
+      }
+
       setIsLoadingServices(true)
       setServicesError(null)
 
       try {
-        const response = await fetch("/api/services", {
+        const query = new URLSearchParams()
+        if (selectedSede != null) {
+          query.set("sedeId", String(selectedSede))
+        }
+
+        const response = await fetch(`/api/services${query.toString() ? `?${query.toString()}` : ""}`, {
           method: "GET",
           cache: "no-store",
           headers: buildTenantHeaders(),
@@ -408,10 +559,11 @@ export default function BookingPage() {
     return () => {
       isActive = false
     }
-  }, [])
+  }, [selectedSede, sedes.length])
 
   useEffect(() => {
     setSelectedBarber(null)
+    setIsBarberPreferenceFlexible(false)
     setBarbers([])
     setSelectedSlot(null)
     setSlots([])
@@ -429,13 +581,18 @@ export default function BookingPage() {
     const fetchBarbers = async () => {
       try {
         const responses = await Promise.all(
-          selectedServices.map((serviceId) =>
-            fetch(`/api/services/${serviceId}/barbers`, {
+          selectedServices.map((serviceId) => {
+            const query = new URLSearchParams()
+            if (selectedSede != null) {
+              query.set("sedeId", String(selectedSede))
+            }
+
+            return fetch(`/api/services/${serviceId}/barbers${query.toString() ? `?${query.toString()}` : ""}`, {
               method: "GET",
               cache: "no-store",
               headers: buildTenantHeaders(),
-            }),
-          ),
+            })
+          }),
         )
 
         const payloads = await Promise.all(responses.map((response) => response.json().catch(() => ({}))))
@@ -487,11 +644,19 @@ export default function BookingPage() {
     return () => {
       isActive = false
     }
-  }, [selectedServices])
+  }, [selectedServices, selectedSede])
 
   useEffect(() => {
     if (!searchParams) {
       return
+    }
+
+    const rawSedeId = searchParams.get("sedeId")
+    if (rawSedeId && sedes.length > 0) {
+      const parsedSedeId = Number(rawSedeId)
+      if (Number.isFinite(parsedSedeId) && parsedSedeId > 0 && sedes.some((sede) => sede.id === parsedSedeId)) {
+        setSelectedSede(parsedSedeId)
+      }
     }
 
     const rawServiceId = searchParams.get("serviceId")
@@ -519,9 +684,10 @@ export default function BookingPage() {
 
     // Only set if it's in the current list.
     if (barbers.some((barber) => barber.id === parsed)) {
+      setIsBarberPreferenceFlexible(false)
       setSelectedBarber(parsed)
     }
-  }, [searchParams, barbers, services, selectedServices.length])
+  }, [searchParams, barbers, services, sedes, selectedServices.length])
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -634,7 +800,7 @@ export default function BookingPage() {
     setSlots([])
     setSlotsError(null)
 
-    if (selectedServices.length === 0 || !selectedBarber || !selectedDate) {
+    if (selectedServices.length === 0 || (!selectedBarber && !isBarberPreferenceFlexible) || !selectedDate) {
       setIsLoadingSlots(false)
       return
     }
@@ -652,9 +818,16 @@ export default function BookingPage() {
           selectedServices.map((serviceId) => {
             const query = new URLSearchParams({
               serviceId: String(serviceId),
-              barberId: String(selectedBarber),
               date: dateParam,
             })
+
+            if (!isBarberPreferenceFlexible && selectedBarber) {
+              query.set("barberId", String(selectedBarber))
+            }
+
+            if (selectedSede != null) {
+              query.set("sedeId", String(selectedSede))
+            }
 
             return fetch(`/api/availability?${query.toString()}`, {
               method: "GET",
@@ -729,7 +902,7 @@ export default function BookingPage() {
       isActive = false
       controller.abort()
     }
-  }, [selectedServices, selectedBarber, selectedDate, slotsRefreshKey, services])
+  }, [selectedServices, selectedBarber, isBarberPreferenceFlexible, selectedDate, slotsRefreshKey, selectedSede, services])
 
   const selectedServicesMeta = useMemo(() => {
     const selected = services.filter((service) => selectedServices.includes(service.id))
@@ -811,10 +984,81 @@ export default function BookingPage() {
   }, [selectedServicesMeta.selected])
 
   const selectedBarberName = useMemo(() => {
+    if (isBarberPreferenceFlexible) return "Sin preferencia (asignación automática)"
     if (!selectedBarber) return null
     const barber = barbers.find((item) => item.id === selectedBarber)
     return barber?.name ?? null
-  }, [barbers, selectedBarber])
+  }, [barbers, selectedBarber, isBarberPreferenceFlexible])
+
+  const selectedSedeName = useMemo(() => {
+    if (!selectedSede) return null
+    const sede = sedes.find((item) => item.id === selectedSede)
+    return sede?.name ?? null
+  }, [sedes, selectedSede])
+
+  const selectedSedeDetails = useMemo(() => {
+    if (!selectedSede) {
+      return null
+    }
+
+    return sedes.find((item) => item.id === selectedSede) ?? null
+  }, [sedes, selectedSede])
+
+  const selectedSedeAddress = useMemo(() => {
+    if (!selectedSedeDetails) {
+      return ""
+    }
+
+    return [selectedSedeDetails.address, selectedSedeDetails.city]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join(", ")
+  }, [selectedSedeDetails])
+
+  const selectedSedeMapsUrl = useMemo(() => {
+    if (!selectedSedeDetails) {
+      return null
+    }
+
+    if (
+      typeof selectedSedeDetails.latitude === "number" &&
+      Number.isFinite(selectedSedeDetails.latitude) &&
+      typeof selectedSedeDetails.longitude === "number" &&
+      Number.isFinite(selectedSedeDetails.longitude)
+    ) {
+      return `https://www.google.com/maps/search/?api=1&query=${selectedSedeDetails.latitude},${selectedSedeDetails.longitude}`
+    }
+
+    const fallbackQuery = [selectedSedeDetails.name, selectedSedeDetails.address, selectedSedeDetails.city]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join(", ")
+
+    if (!fallbackQuery) {
+      return null
+    }
+
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fallbackQuery)}`
+  }, [selectedSedeDetails])
+
+  const selectedSedeMapEmbedUrl = useMemo(() => {
+    if (!selectedSedeDetails) {
+      return null
+    }
+
+    if (
+      typeof selectedSedeDetails.latitude === "number" &&
+      Number.isFinite(selectedSedeDetails.latitude) &&
+      typeof selectedSedeDetails.longitude === "number" &&
+      Number.isFinite(selectedSedeDetails.longitude)
+    ) {
+      return `https://www.google.com/maps?q=${selectedSedeDetails.latitude},${selectedSedeDetails.longitude}&z=15&output=embed`
+    }
+
+    if (selectedSedeAddress.length > 0) {
+      return `https://www.google.com/maps?q=${encodeURIComponent(selectedSedeAddress)}&z=15&output=embed`
+    }
+
+    return null
+  }, [selectedSedeAddress, selectedSedeDetails])
 
   useEffect(() => {
     // Invalidate promo preview when services change.
@@ -1188,7 +1432,16 @@ export default function BookingPage() {
   }
 
   const handleBooking = async (): Promise<boolean> => {
-    if (selectedServices.length === 0 || !selectedBarber || !selectedSlot) {
+    if (selectedServices.length === 0 || (!selectedBarber && !isBarberPreferenceFlexible) || !selectedSlot) {
+      return false
+    }
+
+    if (sedes.length > 0 && !selectedSede) {
+      toast({
+        title: "Selecciona una sede",
+        description: "Debes elegir una sede para continuar con la reserva.",
+        variant: "destructive",
+      })
       return false
     }
 
@@ -1204,6 +1457,8 @@ export default function BookingPage() {
     setIsBooking(true)
 
     try {
+      const trimmedCustomerComment = customerComment.trim()
+
       const response = await fetch("/api/reservations", {
         method: "POST",
         headers: {
@@ -1212,10 +1467,12 @@ export default function BookingPage() {
         },
         body: JSON.stringify({
           userId,
-          barberId: selectedBarber,
+          sedeId: selectedSede ?? undefined,
+          barberId: isBarberPreferenceFlexible ? undefined : selectedBarber,
           serviceIds: selectedServices,
           paymentMethod,
           promoCode: paymentMethod === "wompi" ? promoCodeInput.trim().toUpperCase() || undefined : undefined,
+          customerComment: trimmedCustomerComment || undefined,
           start: selectedSlot.start,
         }),
       })
@@ -1253,6 +1510,19 @@ export default function BookingPage() {
         selectedServicesMeta.totalDuration > 0
           ? addMinutes(startInstant, selectedServicesMeta.totalDuration)
           : null
+      const scheduleLabel = endInstant
+        ? `${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} de ${formatTime12h(startInstant)} a ${formatTime12h(endInstant)}`
+        : `${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${formatTime12h(startInstant)}`
+      const currentSedeName = selectedSede
+        ? sedes.find((item) => item.id === selectedSede)?.name ?? null
+        : null
+      const currentBarberName = isBarberPreferenceFlexible
+        ? "Sin preferencia (asignación automática)"
+        : barbers.find((item) => item.id === selectedBarber)?.name ?? null
+      const summaryTotalLabel =
+        wompiFinalTotalForSummary == null
+          ? "Consultar"
+          : currencyFormatter.format(wompiFinalTotalForSummary)
 
       const wompiData =
         typeof data === "object" &&
@@ -1285,8 +1555,18 @@ export default function BookingPage() {
         })
         setWompiCheckout(wompiData)
         setIsWompiDialogOpen(true)
-        setIsConfirmOpen(false)
+        setCompletedReservation({
+          services: selectedServicesMeta.selected.map((service) => service.name),
+          sedeName: currentSedeName,
+          barberName: currentBarberName,
+          scheduleLabel,
+          paymentMethod,
+          totalLabel: summaryTotalLabel,
+          status: "pending-payment",
+        })
+        setActiveStep("confirm")
         setSelectedSlot(null)
+        setCustomerComment("")
         setSlotsRefreshKey((value) => value + 1)
         return true
       }
@@ -1298,9 +1578,21 @@ export default function BookingPage() {
           : `Tu cita quedó agendada para ${format(startInstant, "EEEE d 'de' MMMM", { locale: es })} a las ${formatTime12h(startInstant)}. Pago: efectivo.`,
       })
 
-      setIsConfirmOpen(false)
-
+      setCompletedReservation({
+        services: selectedServicesMeta.selected.map((service) => service.name),
+        sedeName: currentSedeName,
+        barberName: currentBarberName,
+        scheduleLabel,
+        paymentMethod,
+        totalLabel: summaryTotalLabel,
+        status: "confirmed",
+      })
+      setActiveStep("confirm")
       setSelectedSlot(null)
+      setCustomerComment("")
+      setPromoCodeInput("")
+      setPromoPreview(null)
+      setPromoError(null)
       setSlotsRefreshKey((value) => value + 1)
       return true
     } catch (error) {
@@ -1317,6 +1609,10 @@ export default function BookingPage() {
   }
 
   const renderServiceContent = () => {
+    if (sedes.length > 0 && selectedSede == null) {
+      return <p className="text-sm text-muted-foreground">Selecciona primero una sede para ver los servicios.</p>
+    }
+
     if (isLoadingServices) {
       return Array.from({ length: 3 }, (_, index) => (
         <Skeleton key={index} className="h-20 w-full rounded-2xl" />
@@ -1411,6 +1707,10 @@ export default function BookingPage() {
   }
 
   const renderBarbersContent = () => {
+    if (sedes.length > 0 && selectedSede == null) {
+      return <p className="text-sm text-muted-foreground">Selecciona primero una sede para ver los profesionales.</p>
+    }
+
     if (selectedServices.length === 0) {
       return <p className="text-sm text-muted-foreground">Selecciona primero un servicio para ver los barberos disponibles.</p>
     }
@@ -1445,7 +1745,35 @@ export default function BookingPage() {
       )
     }
 
-    return barbers.map((barber) => {
+    const preferenceCard = (
+      <button
+        key="no-preference"
+        type="button"
+        onClick={() => {
+          setSelectedBarber(null)
+          setIsBarberPreferenceFlexible(true)
+        }}
+        className={cn(
+          "flex w-full items-center gap-4 rounded-2xl border bg-card/80 p-4 text-left transition-all",
+          "hover:border-foreground/20 hover:shadow-sm",
+          isBarberPreferenceFlexible && "border-foreground bg-foreground text-background shadow-md",
+        )}
+      >
+        <span className={cn("flex size-12 items-center justify-center rounded-full bg-muted text-base font-semibold", isBarberPreferenceFlexible && "bg-background/20 text-background")}>
+          *
+        </span>
+        <div className="flex flex-1 flex-col">
+          <span className="font-semibold leading-tight">Sin preferencia</span>
+          <span className={cn("text-xs text-muted-foreground", isBarberPreferenceFlexible && "text-background/80")}>
+            Te asignamos automáticamente el primer profesional disponible
+          </span>
+        </div>
+      </button>
+    )
+
+    return [
+      preferenceCard,
+      ...barbers.map((barber) => {
       const isSelected = selectedBarber === barber.id
       const initials = barber.name
         .split(" ")
@@ -1458,7 +1786,10 @@ export default function BookingPage() {
         <button
           key={barber.id}
           type="button"
-          onClick={() => setSelectedBarber(barber.id)}
+          onClick={() => {
+            setSelectedBarber(barber.id)
+            setIsBarberPreferenceFlexible(false)
+          }}
           className={cn(
             "flex w-full items-center gap-4 rounded-2xl border bg-card/80 p-4 text-left transition-all",
             "hover:border-foreground/20 hover:shadow-sm",
@@ -1475,12 +1806,16 @@ export default function BookingPage() {
           </div>
         </button>
       )
-    })
+    })]
   }
 
   const renderSlotsContent = () => {
-    if (selectedServices.length === 0 || !selectedBarber) {
-      return <p className="text-sm text-muted-foreground">Selecciona un servicio y barbero para ver los horarios.</p>
+    if (sedes.length > 0 && selectedSede == null) {
+      return <p className="text-sm text-muted-foreground">Selecciona primero una sede para consultar horarios.</p>
+    }
+
+    if (selectedServices.length === 0 || (!selectedBarber && !isBarberPreferenceFlexible)) {
+      return <p className="text-sm text-muted-foreground">Selecciona un servicio y define un profesional o elige sin preferencia para ver horarios.</p>
     }
 
     if (!selectedDate) {
@@ -1530,301 +1865,659 @@ export default function BookingPage() {
     })
   }
 
-  const isContinueDisabled =
-    selectedServices.length === 0 || !selectedBarber || !selectedSlot || !selectedDate || isBooking
+  const renderSedesContent = () => {
+    if (isLoadingSedes) {
+      return Array.from({ length: 2 }, (_, index) => (
+        <Skeleton key={index} className="h-20 w-full rounded-2xl" />
+      ))
+    }
+
+    if (sedesError) {
+      return (
+        <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {sedesError}
+        </p>
+      )
+    }
+
+    if (sedes.length === 0) {
+      return (
+        <p className="text-sm text-muted-foreground">
+          Tu barbería no tiene sedes configuradas aún. Usaremos disponibilidad general.
+        </p>
+      )
+    }
+
+    return sedes.map((sede) => {
+      const isSelected = selectedSede === sede.id
+      const subtitle = [sede.address, sede.city].filter((value) => typeof value === "string" && value.trim().length > 0).join(" · ")
+
+      return (
+        <button
+          key={sede.id}
+          type="button"
+          onClick={() => setSelectedSede(sede.id)}
+          className={cn(
+            "flex w-full items-center gap-4 rounded-2xl border bg-card/80 p-4 text-left transition-all",
+            "hover:border-foreground/20 hover:shadow-sm",
+            isSelected && "border-foreground bg-foreground text-background shadow-md",
+          )}
+        >
+          <span className={cn("flex size-11 items-center justify-center rounded-full border", isSelected ? "border-background/40 bg-background/20" : "border-border bg-background")}>
+            <MapPin className={cn("h-5 w-5", isSelected ? "text-background" : "text-primary")} />
+          </span>
+          <div className="flex-1">
+            <p className="font-semibold leading-tight">{sede.name}</p>
+            <p className={cn("text-xs text-muted-foreground", isSelected && "text-background/80")}>
+              {subtitle || "Sede activa"}
+            </p>
+          </div>
+        </button>
+      )
+    })
+  }
+
+  const hasSedeSelection = sedes.length === 0 || selectedSede != null
+  const hasServiceSelection = selectedServices.length > 0
+  const hasProfessionalSelection = Boolean(selectedBarber) || isBarberPreferenceFlexible
+  const hasScheduleSelection = Boolean(selectedSlot) && Boolean(selectedDate)
+
+  const stepDefinitions = useMemo(
+    () => {
+      const items: Array<{
+        id: BookingStep
+        label: string
+        description: string
+        completed: boolean
+        enabled: boolean
+      }> = [
+        {
+          id: "sede",
+          label: "Sede",
+          description: "Escoge el centro donde te atenderemos.",
+          completed: hasSedeSelection,
+          enabled: true,
+        },
+        {
+          id: "services",
+          label: "Servicios",
+          description: "Selecciona uno o dos servicios para tu cita.",
+          completed: hasServiceSelection,
+          enabled: hasSedeSelection,
+        },
+        {
+          id: "professional",
+          label: "Profesional",
+          description: "Elige un profesional o deja asignación automática.",
+          completed: hasProfessionalSelection,
+          enabled: hasSedeSelection && hasServiceSelection,
+        },
+        {
+          id: "schedule",
+          label: "Fecha y hora",
+          description: "Define día y bloque horario de tu reserva.",
+          completed: hasScheduleSelection,
+          enabled: hasSedeSelection && hasServiceSelection && hasProfessionalSelection,
+        },
+        {
+          id: "confirm",
+          label: "Confirmar",
+          description: "Revisa datos, agrega notas y completa tu reserva.",
+          completed: completedReservation?.status === "confirmed",
+          enabled: hasSedeSelection && hasServiceSelection && hasProfessionalSelection && hasScheduleSelection,
+        },
+      ]
+
+      if (sedes.length === 0) {
+        return items.filter((item) => item.id !== "sede")
+      }
+
+      return items
+    },
+    [
+      completedReservation?.status,
+      hasProfessionalSelection,
+      hasScheduleSelection,
+      hasSedeSelection,
+      hasServiceSelection,
+      sedes.length,
+    ],
+  )
+
+  useEffect(() => {
+    if (stepDefinitions.length === 0) {
+      return
+    }
+
+    const current = stepDefinitions.find((step) => step.id === activeStep)
+    if (!current) {
+      setActiveStep(stepDefinitions[0].id)
+      return
+    }
+
+    if (current.enabled) {
+      return
+    }
+
+    const fallbackStep =
+      [...stepDefinitions].reverse().find((step) => step.enabled)?.id ?? stepDefinitions[0].id
+
+    if (fallbackStep !== activeStep) {
+      setActiveStep(fallbackStep)
+    }
+  }, [activeStep, stepDefinitions])
+
+  const activeStepIndex = stepDefinitions.findIndex((step) => step.id === activeStep)
+  const activeStepMeta = activeStepIndex >= 0 ? stepDefinitions[activeStepIndex] : stepDefinitions[0]
+  const previousStep = activeStepIndex > 0 ? stepDefinitions[activeStepIndex - 1] : null
+  const nextStep = activeStepIndex >= 0 ? stepDefinitions[activeStepIndex + 1] : null
+
+  const canMoveToNextStep = Boolean(nextStep && activeStepMeta?.completed)
+  const isConfirmDisabled = !hasScheduleSelection || !hasServiceSelection || !hasProfessionalSelection || isBooking
+
+  const resetBookingWizard = () => {
+    setCompletedReservation(null)
+    setSelectedServices([])
+    setSelectedBarber(null)
+    setIsBarberPreferenceFlexible(false)
+    setSelectedSlot(null)
+    setCustomerComment("")
+    setPaymentMethod("cash")
+    setPromoCodeInput("")
+    setPromoPreview(null)
+    setPromoError(null)
+    setWompiCheckout(null)
+    setIsWompiDialogOpen(false)
+    setSlotsRefreshKey((value) => value + 1)
+    setActiveStep(sedes.length > 0 ? "sede" : "services")
+  }
 
   return (
     <div className="min-h-screen bg-muted/10">
       <main className="container pb-16 pt-6 sm:pt-10">
         <section className="mx-auto flex max-w-3xl flex-col gap-3 text-center">
-          <span className="mx-auto inline-flex items-center rounded-full bg-foreground text-background px-4 py-1 text-xs font-medium uppercase tracking-wider">
+          <span className="mx-auto inline-flex items-center rounded-full bg-foreground px-4 py-1 text-xs font-medium uppercase tracking-wider text-background">
             Agenda tu estilo
           </span>
+          <h1 className="text-2xl font-semibold sm:text-3xl">Reserva en 5 pasos</h1>
+          <p className="text-sm text-muted-foreground sm:text-base">
+            Centro, servicios, profesional, horario y confirmación final.
+          </p>
         </section>
 
-        <div className="mx-auto mt-10 grid max-w-6xl gap-8 lg:mt-12 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)] xl:gap-12">
-          <div className="space-y-8">
+        {completedReservation ? (
+          <section className="mx-auto mt-10 max-w-3xl">
+            <Card className="border-foreground/20 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                  {completedReservation.status === "confirmed"
+                    ? "Reserva confirmada"
+                    : "Reserva creada, pendiente de pago"}
+                </CardTitle>
+                <CardDescription>
+                  {completedReservation.status === "confirmed"
+                    ? "Tu cita quedó registrada correctamente."
+                    : "Tu cita está creada. Completa el pago para finalizar la confirmación."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Horario</p>
+                    <p className="mt-1 text-sm font-medium">{completedReservation.scheduleLabel}</p>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Total</p>
+                    <p className="mt-1 text-sm font-medium">{completedReservation.totalLabel}</p>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Sede</p>
+                    <p className="mt-1 text-sm font-medium">{completedReservation.sedeName ?? "General"}</p>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Profesional</p>
+                    <p className="mt-1 text-sm font-medium">{completedReservation.barberName ?? "Sin asignar"}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border/60 bg-background p-4">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Servicios reservados</p>
+                  <p className="mt-2 text-sm font-medium">{completedReservation.services.join(", ") || "-"}</p>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  {completedReservation.status === "pending-payment" && wompiCheckout && (
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        void openWompiWidget()
+                      }}
+                      disabled={isLoadingWompiSdk}
+                    >
+                      {isLoadingWompiSdk ? "Cargando checkout..." : "Completar pago con Wompi"}
+                    </Button>
+                  )}
+                  <Button type="button" variant="outline" asChild>
+                    <a href="/dashboard/appointments">Ver mis citas</a>
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={resetBookingWizard}>
+                    Agendar otra cita
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </section>
+        ) : (
+          <div className="mx-auto mt-10 grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:gap-10">
             <Card className="shadow-sm">
               <CardHeader>
-                <CardTitle>1. Selecciona un Servicio</CardTitle>
-                <CardDescription>Elige el servicio que deseas recibir</CardDescription>
+                <CardTitle>Asistente de reserva</CardTitle>
+                <CardDescription>{activeStepMeta?.description}</CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="max-h-[270px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable] sm:max-h-[330px] lg:max-h-[300px]">
-                  <div className="space-y-3">{renderServiceContent()}</div>
+              <CardContent className="space-y-4">
+                <Tabs value={activeStep} onValueChange={(value) => setActiveStep(value as BookingStep)}>
+                  <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-muted/40 p-2">
+                    {stepDefinitions.map((step, index) => (
+                      <TabsTrigger
+                        key={step.id}
+                        value={step.id}
+                        disabled={!step.enabled && step.id !== activeStep}
+                        className="h-auto min-w-[120px] flex-none gap-2 rounded-lg px-3 py-2 data-[state=active]:shadow"
+                      >
+                        <span
+                          className={cn(
+                            "flex size-5 items-center justify-center rounded-full text-[11px]",
+                            step.completed
+                              ? "bg-emerald-500 text-white"
+                              : "bg-background text-muted-foreground",
+                          )}
+                        >
+                          {step.completed ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}
+                        </span>
+                        <span>{step.label}</span>
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+
+                  {sedes.length > 0 && (
+                    <TabsContent value="sede" className="mt-4">
+                      <div className="max-h-[340px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable]">
+                        <div className="space-y-3">{renderSedesContent()}</div>
+                      </div>
+
+                      {selectedSedeDetails && (
+                        <div className="mt-4 space-y-3 rounded-xl border border-border/60 bg-background p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">Ubicación de la sede</p>
+                              <p className="text-xs text-muted-foreground">
+                                {selectedSedeAddress || "Sin dirección configurada"}
+                              </p>
+                            </div>
+                            {selectedSedeMapsUrl && (
+                              <a
+                                href={selectedSedeMapsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-medium text-primary hover:underline"
+                              >
+                                Abrir en Google Maps
+                              </a>
+                            )}
+                          </div>
+
+                          {selectedSedeMapEmbedUrl ? (
+                            <iframe
+                              title={`Mapa de ${selectedSedeDetails.name}`}
+                              src={selectedSedeMapEmbedUrl}
+                              className="h-56 w-full rounded-lg border border-border/60"
+                              loading="lazy"
+                              referrerPolicy="no-referrer-when-downgrade"
+                            />
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                              Esta sede no tiene coordenadas o dirección suficiente para mostrar mapa.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </TabsContent>
+                  )}
+
+                  <TabsContent value="services" className="mt-4">
+                    <div className="max-h-[380px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable]">
+                      <div className="space-y-3">{renderServiceContent()}</div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="professional" className="mt-4">
+                    <div className="max-h-[380px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable]">
+                      <div className="space-y-3">{renderBarbersContent()}</div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="schedule" className="mt-4">
+                    <div className="overflow-hidden rounded-2xl border border-border/70 bg-background">
+                      <div className="grid gap-0 lg:min-h-[420px] lg:grid-cols-[minmax(0,1fr)_minmax(0,170px)] lg:gap-6">
+                        <div className="p-3 sm:p-6">
+                          <div className="mx-auto w-full max-w-[390px]">
+                            <Calendar
+                              mode="single"
+                              selected={selectedDate}
+                              onSelect={(date) => {
+                                setSelectedDate(date ?? undefined)
+                              }}
+                              disabled={(date) => !!today && !!date && date < today}
+                              showOutsideDays={false}
+                              className="mx-auto w-full bg-transparent p-0 [--cell-size:1.9rem] sm:[--cell-size:2.1rem] md:[--cell-size:2.25rem] lg:[--cell-size:2.4rem]"
+                              formatters={{
+                                formatWeekdayName: (date) =>
+                                  date.toLocaleString("es-ES", { weekday: "short" }),
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div className="border-t lg:border-l lg:border-t-0">
+                          <div className="max-h-[320px] overflow-y-auto p-4 [scrollbar-gutter:stable] sm:max-h-[380px] sm:p-6 lg:max-h-[420px] lg:pr-3">
+                            <div className="grid justify-items-end gap-1.5">{renderSlotsContent()}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="border-t px-4 py-4 text-sm text-muted-foreground sm:px-6 sm:py-5">
+                        {selectedDate && formattedSummaryTime ? (
+                          <>
+                            Tu cita quedó seleccionada para <span className="font-medium">{formattedSummaryDate}</span> a las <span className="font-medium">{formattedSummaryTime}</span>.
+                          </>
+                        ) : (
+                          <>Selecciona una fecha y hora para tu cita.</>
+                        )}
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="confirm" className="mt-4 space-y-6">
+                    <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/15 p-4 text-sm sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Servicios</p>
+                        <p className="mt-1 font-medium">{selectedServicesMeta.selected.map((svc) => svc.name).join(", ") || "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Sede</p>
+                        <p className="mt-1 font-medium">{selectedSedeName ?? "General"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Profesional</p>
+                        <p className="mt-1 font-medium">{selectedBarberName ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Horario</p>
+                        <p className="mt-1 font-medium">
+                          {formattedSummaryDate && formattedSummaryTime
+                            ? `${formattedSummaryDate} · ${formattedSummaryTime}`
+                            : "-"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/60 bg-background p-4">
+                      <p className="text-sm font-medium">Metodo de pago</p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => setPaymentMethod("cash")}
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                            paymentMethod === "cash"
+                              ? "border-foreground bg-foreground text-background"
+                              : "border-border bg-background",
+                          )}
+                        >
+                          Efectivo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentMethod("wompi")}
+                          className={cn(
+                            "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                            paymentMethod === "wompi"
+                              ? "border-foreground bg-foreground text-background"
+                              : "border-border bg-background",
+                          )}
+                        >
+                          Wompi
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Wompi habilita tarjeta, PSE, Nequi y otros medios disponibles.
+                      </p>
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/60 bg-background p-4">
+                      <p className="flex items-center gap-2 text-sm font-medium">
+                        <Ticket className="h-4 w-4" />
+                        Cupon o codigo promocional
+                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input
+                          value={promoCodeInput}
+                          onChange={(event) => {
+                            setPromoCodeInput(event.target.value)
+                            setPromoError(null)
+                          }}
+                          placeholder="Ej. CORTE10"
+                          autoCapitalize="characters"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            void handleApplyPromo()
+                          }}
+                          disabled={isApplyingPromo || selectedServices.length === 0}
+                        >
+                          {isApplyingPromo ? "Validando..." : "Aplicar"}
+                        </Button>
+                      </div>
+                      {promoError && <p className="text-xs text-destructive">{promoError}</p>}
+                      {promoPreview?.promo && (
+                        <p className="text-xs text-emerald-500">
+                          Codigo {promoPreview.promo.code} aplicado ({promoPreview.promo.discountPercent}%).
+                          {paymentMethod === "cash"
+                            ? " El descuento solo se aplica al pagar con Wompi."
+                            : ""}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 rounded-xl border border-border/60 bg-background p-4">
+                      <p className="text-sm font-medium">Comentarios</p>
+                      <Textarea
+                        value={customerComment}
+                        onChange={(event) => setCustomerComment(event.target.value)}
+                        placeholder="Ej. Llego 10 minutos antes"
+                        maxLength={240}
+                      />
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/60 bg-muted/15 p-4 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Subtotal</span>
+                        <span className="font-medium">
+                          {originalTotalForSummary == null
+                            ? "Consultar"
+                            : currencyFormatter.format(originalTotalForSummary)}
+                        </span>
+                      </div>
+                      {paymentMethod === "wompi" && promoPreview?.promo && wompiDiscountForSummary > 0 && (
+                        <div className="flex items-center justify-between gap-3 text-emerald-500">
+                          <span>Descuento ({promoPreview.promo.discountPercent}%)</span>
+                          <span className="font-medium">- {currencyFormatter.format(wompiDiscountForSummary)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-3 border-t pt-3">
+                        <span className="font-semibold">Total</span>
+                        <span className="text-base font-semibold">
+                          {wompiFinalTotalForSummary == null
+                            ? "Consultar"
+                            : currencyFormatter.format(wompiFinalTotalForSummary)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <Button
+                      type="button"
+                      className="w-full"
+                      disabled={isConfirmDisabled}
+                      onClick={() => {
+                        void handleBooking()
+                      }}
+                    >
+                      {isBooking
+                        ? "Reservando..."
+                        : paymentMethod === "wompi"
+                          ? "Reservar y continuar a Wompi"
+                          : "Confirmar reserva"}
+                    </Button>
+                  </TabsContent>
+                </Tabs>
+
+                <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!previousStep}
+                    onClick={() => {
+                      if (previousStep) {
+                        setActiveStep(previousStep.id)
+                      }
+                    }}
+                  >
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    Anterior
+                  </Button>
+
+                  <p className="text-center text-xs text-muted-foreground sm:text-sm">
+                    Paso {Math.max(activeStepIndex + 1, 1)} de {stepDefinitions.length}
+                  </p>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!canMoveToNextStep}
+                    onClick={() => {
+                      if (nextStep) {
+                        setActiveStep(nextStep.id)
+                      }
+                    }}
+                  >
+                    Siguiente
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
                 </div>
               </CardContent>
             </Card>
 
-            <Card className="shadow-sm">
+            <Card className="h-fit shadow-sm lg:sticky lg:top-6">
               <CardHeader>
-                <CardTitle>2. Elige tu Peluquero</CardTitle>
-                <CardDescription>Selecciona a quien prefieras para tu sesión</CardDescription>
+                <CardTitle>Resumen</CardTitle>
+                <CardDescription>Revisa tu selección actual.</CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="max-h-[260px] overflow-y-auto rounded-xl border border-border/60 bg-muted/5 p-2 pr-1 [scrollbar-gutter:stable] sm:max-h-[340px] lg:max-h-[320px]">
-                  <div className="space-y-3">{renderBarbersContent()}</div>
+              <CardContent className="space-y-4 text-sm">
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Sede</p>
+                  <p className="font-medium">{selectedSedeName ?? (sedes.length === 0 ? "General" : "Sin elegir")}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Servicios</p>
+                  <p className="font-medium">{selectedServicesMeta.selected.map((svc) => svc.name).join(", ") || "Sin elegir"}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Profesional</p>
+                  <p className="font-medium">{selectedBarberName ?? "Sin elegir"}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Fecha y hora</p>
+                  <p className="font-medium">
+                    {formattedSummaryDate && formattedSummaryTime
+                      ? `${formattedSummaryDate} · ${formattedSummaryTime}`
+                      : "Sin elegir"}
+                  </p>
+                </div>
+                <div className="space-y-1 border-t pt-3">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Total estimado</p>
+                  <p className="text-base font-semibold">
+                    {wompiFinalTotalForSummary == null
+                      ? "Consultar"
+                      : currencyFormatter.format(wompiFinalTotalForSummary)}
+                  </p>
                 </div>
               </CardContent>
             </Card>
           </div>
+        )}
 
-          <Card className="shadow-lg">
-            <CardHeader>
-              <CardTitle>3. Fecha y Hora</CardTitle>
-              <CardDescription>Selecciona cuándo quieres tu cita</CardDescription>
-            </CardHeader>
-            <CardContent className="p-4 sm:p-6">
-              <div className="overflow-hidden rounded-3xl border border-border/70 bg-background">
-                <div className="overflow-hidden rounded-2xl">
-                  <div className="grid gap-0 lg:min-h-[420px] lg:grid-cols-[minmax(0,1fr)_minmax(0,170px)] lg:gap-6">
-                    <div className="p-3 sm:p-6">
-                      <div className="mx-auto w-full max-w-[390px]">
-                        <Calendar
-                          mode="single"
-                          selected={selectedDate}
-                          onSelect={(date) => {
-                            setSelectedDate(date ?? undefined)
-                          }}
-                          disabled={(date) => !!today && !!date && date < today}
-                          showOutsideDays={false}
-                          className="mx-auto w-full bg-transparent p-0 [--cell-size:1.9rem] sm:[--cell-size:2.1rem] md:[--cell-size:2.25rem] lg:[--cell-size:2.4rem]"
-                          formatters={{
-                            formatWeekdayName: (date) =>
-                              date.toLocaleString("es-ES", { weekday: "short" }),
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="border-t lg:border-l lg:border-t-0">
-                      <div className="max-h-[300px] overflow-y-auto p-4 [scrollbar-gutter:stable] sm:max-h-[360px] sm:p-6 lg:max-h-[420px] lg:pr-3">
-                        <div className="grid justify-items-end gap-1.5">{renderSlotsContent()}</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-4 border-t px-4 py-4 sm:px-6 sm:py-5 md:flex-row">
-                    <div className="text-sm text-muted-foreground">
-                      {selectedDate && formattedSummaryTime ? (
-                        <>
-                          Tu cita está reservada para {" "}
-                          <span className="font-medium">{formattedSummaryDate}</span>{" "}
-                          a las <span className="font-medium">{formattedSummaryTime}</span>.
-                        </>
-                      ) : (
-                        <>Selecciona una fecha y hora para tu cita.</>
-                      )}
-                    </div>
-                    <AlertDialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          type="button"
-                          disabled={isContinueDisabled}
-                          className="w-full md:ml-auto md:w-auto"
-                          variant="outline"
-                        >
-                          {isBooking ? "Reservando..." : "Continuar"}
-                        </Button>
-                      </AlertDialogTrigger>
+        <AlertDialog open={isWompiDialogOpen} onOpenChange={setIsWompiDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Pagar con Wompi</AlertDialogTitle>
+              <AlertDialogDescription>
+                Completa el pago para confirmar tu reserva. Wompi te mostrará los medios disponibles como tarjeta, PSE y billeteras.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
 
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Confirmar reserva</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            Verifica los datos antes de confirmar tu cita.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
+            <div className="space-y-3 text-sm">
+              <p>
+                Total a pagar:{" "}
+                <span className="font-semibold">
+                  {wompiCheckout
+                    ? currencyFormatter.format(wompiCheckout.amountInCents / 100)
+                    : "-"}
+                </span>
+              </p>
 
-                        <div className="space-y-2 text-sm">
-                          <div>
-                            <span className="text-muted-foreground">Servicios:</span>{" "}
-                            <span className="font-medium">
-                              {selectedServicesMeta.selected.map((svc) => svc.name).join(", ")}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Subtotal:</span>{" "}
-                            <span className="font-medium">
-                              {originalTotalForSummary == null
-                                ? "Consultar"
-                                : currencyFormatter.format(originalTotalForSummary)}
-                            </span>
-                          </div>
-                          {paymentMethod === "wompi" && promoPreview?.promo && wompiDiscountForSummary > 0 && (
-                            <div>
-                              <span className="text-muted-foreground">Descuento ({promoPreview.promo.discountPercent}%):</span>{" "}
-                              <span className="font-medium text-emerald-500">- {currencyFormatter.format(wompiDiscountForSummary)}</span>
-                            </div>
-                          )}
-                          <div>
-                            <span className="text-muted-foreground">Total a pagar:</span>{" "}
-                            <span className="font-semibold">
-                              {wompiFinalTotalForSummary == null
-                                ? "Consultar"
-                                : currencyFormatter.format(wompiFinalTotalForSummary)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Peluquero:</span>{" "}
-                            <span className="font-medium">{selectedBarberName ?? "-"}</span>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Fecha:</span>{" "}
-                            <span className="font-medium">{formattedSummaryDate ?? "-"}</span>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Hora:</span>{" "}
-                            <span className="font-medium">{formattedSummaryTime ?? "-"}</span>
-                          </div>
-                          <div className="pt-2">
-                            <span className="text-muted-foreground">Método de pago:</span>
-                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                              <button
-                                type="button"
-                                onClick={() => setPaymentMethod("cash")}
-                                className={cn(
-                                  "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                                  paymentMethod === "cash"
-                                    ? "border-foreground bg-foreground text-background"
-                                    : "border-border bg-background",
-                                )}
-                              >
-                                Efectivo
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setPaymentMethod("wompi")}
-                                className={cn(
-                                  "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                                  paymentMethod === "wompi"
-                                    ? "border-foreground bg-foreground text-background"
-                                    : "border-border bg-background",
-                                )}
-                              >
-                                Wompi (tarjeta, PSE, Nequi y más)
-                              </button>
-                            </div>
-                          </div>
-                          <div className="pt-1">
-                            <span className="text-muted-foreground">Código promocional:</span>
-                            <div className="mt-2 flex gap-2">
-                              <Input
-                                value={promoCodeInput}
-                                onChange={(event) => {
-                                  setPromoCodeInput(event.target.value)
-                                  setPromoError(null)
-                                }}
-                                placeholder="Ej. CORTE10"
-                                autoCapitalize="characters"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => {
-                                  void handleApplyPromo()
-                                }}
-                                disabled={isApplyingPromo || selectedServices.length === 0}
-                              >
-                                {isApplyingPromo ? "Validando..." : "Aplicar"}
-                              </Button>
-                            </div>
-                            {promoError && <p className="mt-2 text-xs text-destructive">{promoError}</p>}
-                            {promoPreview?.promo && (
-                              <p className="mt-2 text-xs text-emerald-500">
-                                Código {promoPreview.promo.code} aplicado ({promoPreview.promo.discountPercent}%).
-                                {paymentMethod === "cash"
-                                  ? " El descuento se aplica automáticamente solo en pagos con Wompi."
-                                  : ""}
-                              </p>
-                            )}
-                          </div>
-                        </div>
+              <Button
+                type="button"
+                onClick={() => {
+                  void openWompiWidget()
+                }}
+                disabled={!wompiCheckout || isLoadingWompiSdk}
+                className="w-full"
+              >
+                {isLoadingWompiSdk
+                  ? "Cargando checkout..."
+                  : isWompiSdkReady
+                    ? "Pagar con Wompi"
+                    : "Reintentar carga de Wompi"}
+              </Button>
+            </div>
 
-                        <AlertDialogFooter>
-                          <AlertDialogCancel disabled={isBooking}>Cancelar</AlertDialogCancel>
-                          <AlertDialogAction asChild>
-                            <Button
-                              type="button"
-                              disabled={isContinueDisabled}
-                              onClick={async (event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                await handleBooking()
-                              }}
-                            >
-                              Confirmar
-                            </Button>
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cerrar</AlertDialogCancel>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
-                    <AlertDialog open={isWompiDialogOpen} onOpenChange={setIsWompiDialogOpen}>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Pagar con Wompi</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            Completa el pago para confirmar tu reserva. Wompi te mostrará los medios disponibles como tarjeta, PSE y billeteras.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-
-                        <div className="space-y-3 text-sm">
-                          <p>
-                            Total a pagar:{" "}
-                            <span className="font-semibold">
-                              {wompiCheckout
-                                ? currencyFormatter.format(wompiCheckout.amountInCents / 100)
-                                : "-"}
-                            </span>
-                          </p>
-
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              void openWompiWidget()
-                            }}
-                            disabled={!wompiCheckout || isLoadingWompiSdk}
-                            className="w-full"
-                          >
-                            {isLoadingWompiSdk
-                              ? "Cargando checkout..."
-                              : isWompiSdkReady
-                                ? "Pagar con Wompi"
-                                : "Reintentar carga de Wompi"}
-                          </Button>
-                        </div>
-
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cerrar</AlertDialogCancel>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-
-                    <AlertDialog open={isPaymentSuccessDialogOpen} onOpenChange={setIsPaymentSuccessDialogOpen}>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Reserva y pago confirmados</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            Tu cita fue reservada y pagada exitosamente.
-                            {paymentSuccessScheduleLabel
-                              ? ` Te esperamos el ${paymentSuccessScheduleLabel}.`
-                              : " Te esperamos en la fecha y hora seleccionadas."}
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogAction asChild>
-                            <Button type="button" onClick={() => setIsPaymentSuccessDialogOpen(false)}>
-                              Entendido
-                            </Button>
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <AlertDialog open={isPaymentSuccessDialogOpen} onOpenChange={setIsPaymentSuccessDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reserva y pago confirmados</AlertDialogTitle>
+              <AlertDialogDescription>
+                Tu cita fue reservada y pagada exitosamente.
+                {paymentSuccessScheduleLabel
+                  ? ` Te esperamos el ${paymentSuccessScheduleLabel}.`
+                  : " Te esperamos en la fecha y hora seleccionadas."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogAction asChild>
+                <Button type="button" onClick={() => setIsPaymentSuccessDialogOpen(false)}>
+                  Entendido
+                </Button>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
     </div>
   )

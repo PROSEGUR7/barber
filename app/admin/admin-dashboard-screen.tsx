@@ -1,132 +1,186 @@
-﻿"use client"
+"use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  Activity,
+  ArrowDownRight,
+  ArrowUpRight,
+  Building2,
   CalendarCheck2,
   CalendarClock,
   DollarSign,
+  LineChart as LineChartIcon,
   Scissors,
   TrendingUp,
-  UserCircle,
-  Users,
 } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, Cell, Label, Pie, PieChart, Sector, XAxis, YAxis } from "recharts"
-import { type PieSectorDataItem } from "recharts/types/polar/Pie"
+import { Bar, BarChart, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from "recharts"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartContainer, ChartStyle, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useIsMobile } from "@/hooks/use-mobile"
-import type { ClientSummary, EmployeeSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
-type EmployeesResponse = {
-  employees?: EmployeeSummary[]
+type Granularity = "day" | "month" | "year"
+type SedeInsightsScope = "month" | "quarter" | "year"
+type RankingMetric = "revenue" | "totalAppointments" | "paidAppointments"
+
+type RevenueSeriesPoint = {
+  bucketStart: string
+  revenue: number
+  paymentsCount: number
+  appointmentsCount: number
+}
+
+type TopServicePoint = {
+  serviceId: number | null
+  serviceName: string
+  revenue: number
+  paidAppointments: number
+}
+
+type PaymentMethodBreakdown = {
+  method: string
+  paymentsCount: number
+  revenue: number
+}
+
+type RevenueReport = {
+  granularity: Granularity
+  series: RevenueSeriesPoint[]
+  totals: {
+    revenue: number
+    paymentsCount: number
+    appointmentsCount: number
+  }
+  topServices: TopServicePoint[]
+  income: {
+    paymentMethods: PaymentMethodBreakdown[]
+    averageTicketPerClient: number
+  }
+  efficiency: {
+    noShowRatePct: number
+    noShowAppointments: number
+    totalAppointments: number
+    occupancyRatePct: number | null
+    productiveMinutes: number
+    availableMinutes: number
+  }
+  clientsAndStaff: {
+    retention: {
+      firstTimeClients: number
+      retainedClients: number
+      retentionRatePct: number
+    }
+  }
+}
+
+type SedeTopServiceInsight = {
+  serviceId: number | null
+  serviceName: string
+  appointments: number
+  revenue: number
+}
+
+type SedeBusinessInsight = {
+  sedeId: number
+  sedeName: string
+  revenue: number
+  previousRevenue: number
+  growthPct: number | null
+  paidAppointments: number
+  totalAppointments: number
+  upcomingAppointments: number
+  topService: SedeTopServiceInsight | null
+}
+
+type SedeInsightsReport = {
+  scope: SedeInsightsScope
+  scopeLabel: string
+  currentMonthRevenue: number
+  previousMonthRevenue: number
+  monthlyGrowthPct: number | null
+  bestSedeByRevenue: SedeBusinessInsight | null
+  bestSedeByAppointments: SedeBusinessInsight | null
+  sedes: SedeBusinessInsight[]
+}
+
+type ReportsResponse = {
+  ok?: boolean
+  report?: RevenueReport
   error?: string
 }
 
-type ClientsResponse = {
-  clients?: ClientSummary[]
+type SedeInsightsResponse = {
+  ok?: boolean
+  sedeInsights?: SedeInsightsReport | null
+  focusedSeries?: RevenueSeriesPoint[]
+  warning?: string
   error?: string
 }
 
-type DashboardSection = "general" | "operaciones" | "clientes"
-
-type ActivityWindow = "30" | "90" | "all"
-
-type ClientDbSegment = "nuevo" | "frecuente"
-
-const revenueChartConfig = {
+const trendChartConfig = {
   revenue: {
     label: "Ingresos",
     color: "var(--chart-1)",
   },
-} satisfies ChartConfig
-
-const clientSegmentChartConfig = {
-  count: {
-    label: "Clientes",
-  },
-  nuevo: {
-    label: "Nuevo",
-    color: "var(--chart-1)",
-  },
-  frecuente: {
-    label: "Frecuente",
+  appointmentsCount: {
+    label: "Citas pagadas",
     color: "var(--chart-2)",
   },
 } satisfies ChartConfig
 
-function sortEmployees(list: EmployeeSummary[]): EmployeeSummary[] {
-  return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
-}
+const sedeRankingChartConfig = {
+  revenue: {
+    label: "Ingresos",
+    color: "var(--chart-1)",
+  },
+  totalAppointments: {
+    label: "Citas",
+    color: "var(--chart-2)",
+  },
+  paidAppointments: {
+    label: "Citas pagadas",
+    color: "var(--chart-3)",
+  },
+} satisfies ChartConfig
 
-function sortClients(list: ClientSummary[]): ClientSummary[] {
-  return [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }))
-}
+const operationsMixChartConfig = {
+  paidAppointments: {
+    label: "Pagadas",
+    color: "var(--chart-1)",
+  },
+  upcomingAppointments: {
+    label: "Proximas",
+    color: "var(--chart-4)",
+  },
+} satisfies ChartConfig
 
-function getNormalizedValue(value: string | null | undefined, fallback: string): string {
-  const sanitized = value?.trim()
-  return sanitized && sanitized.length > 0 ? sanitized : fallback
-}
+const periodComparisonChartConfig = {
+  revenue: {
+    label: "Periodo actual",
+    color: "var(--chart-1)",
+  },
+  previousRevenue: {
+    label: "Periodo anterior",
+    color: "var(--chart-2)",
+  },
+} satisfies ChartConfig
 
-function getClientDbSegment(type: string | null | undefined): ClientDbSegment | null {
-  const normalized = (type ?? "").trim().toLowerCase()
-  if (normalized === "nuevo" || normalized === "frecuente") {
-    return normalized
-  }
+const paymentMethodsChartConfig = {
+  revenue: {
+    label: "Ingresos",
+    color: "var(--chart-5)",
+  },
+} satisfies ChartConfig
 
-  return null
-}
-
-function getCutoffDate(window: ActivityWindow): Date | null {
-  if (window === "all") {
-    return null
-  }
-
-  const days = Number(window)
-  const date = new Date()
-  date.setDate(date.getDate() - days)
-  return date
-}
-
-function isOnOrAfter(value: string | null, cutoffDate: Date | null): boolean {
-  if (!cutoffDate) {
-    return true
-  }
-
-  if (!value) {
-    return false
-  }
-
-  const parsedDate = new Date(value)
-  if (Number.isNaN(parsedDate.getTime())) {
-    return false
-  }
-
-  return parsedDate >= cutoffDate
-}
-
-function formatCompactNumber(value: number): string {
-  return new Intl.NumberFormat("es-ES", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value)
-}
-
-function getSafeRate(numerator: number, denominator: number): number {
-  if (denominator <= 0) {
-    return 0
-  }
-
-  return Math.round((numerator / denominator) * 100)
+const RANKING_LABELS: Record<RankingMetric, string> = {
+  revenue: "Ingresos",
+  totalAppointments: "Citas totales",
+  paidAppointments: "Citas pagadas",
 }
 
 function buildTenantHeaders(): HeadersInit {
@@ -149,314 +203,277 @@ function buildTenantHeaders(): HeadersInit {
   return headers
 }
 
+function formatAxisDate(value: string, granularity: Granularity): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ""
+  }
+
+  if (granularity === "day") {
+    return date.toLocaleDateString("es-ES", { month: "short", day: "2-digit" })
+  }
+
+  if (granularity === "month") {
+    return date.toLocaleDateString("es-ES", { month: "short" })
+  }
+
+  return date.toLocaleDateString("es-ES", { year: "numeric" })
+}
+
+function formatCompactNumber(value: number): string {
+  return new Intl.NumberFormat("es-ES", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value)
+}
+
+function getSafeRate(numerator: number, denominator: number): number {
+  if (denominator <= 0) {
+    return 0
+  }
+
+  return Number(((numerator / denominator) * 100).toFixed(1))
+}
+
 export default function AdminDashboard() {
-  const clientSegmentChartId = "admin-client-segment-chart"
-  const isMobile = useIsMobile()
-  const [employees, setEmployees] = useState<EmployeeSummary[]>([])
-  const [clients, setClients] = useState<ClientSummary[]>([])
-  const [areEmployeesLoading, setAreEmployeesLoading] = useState(true)
-  const [areClientsLoading, setAreClientsLoading] = useState(true)
-  const [employeesError, setEmployeesError] = useState<string | null>(null)
-  const [clientsError, setClientsError] = useState<string | null>(null)
-  const [section, setSection] = useState<DashboardSection>("general")
-  const [employeeStatusFilter, setEmployeeStatusFilter] = useState("all")
-  const [clientTypeFilter, setClientTypeFilter] = useState("all")
-  const [clientSegmentFilter, setClientSegmentFilter] = useState("all")
-  const [activeClientSegment, setActiveClientSegment] = useState<ClientDbSegment>("nuevo")
-  const [activityWindow, setActivityWindow] = useState<ActivityWindow>("90")
+  const [granularity, setGranularity] = useState<Granularity>("month")
+  const [scope, setScope] = useState<SedeInsightsScope>("month")
+  const [selectedSede, setSelectedSede] = useState("all")
+  const [rankingMetric, setRankingMetric] = useState<RankingMetric>("revenue")
 
-  const loadEmployees = useCallback(
+  const [report, setReport] = useState<RevenueReport | null>(null)
+  const [sedeInsights, setSedeInsights] = useState<SedeInsightsReport | null>(null)
+  const [focusedSeries, setFocusedSeries] = useState<RevenueSeriesPoint[]>([])
+
+  const [isLoading, setIsLoading] = useState(true)
+  const [reportError, setReportError] = useState<string | null>(null)
+  const [sedeInsightsError, setSedeInsightsError] = useState<string | null>(null)
+  const [sedeInsightsWarning, setSedeInsightsWarning] = useState<string | null>(null)
+
+  const loadDashboard = useCallback(
     async (signal?: AbortSignal) => {
-      setAreEmployeesLoading(true)
-      setEmployeesError(null)
+      setIsLoading(true)
+      setReportError(null)
+      setSedeInsightsError(null)
+      setSedeInsightsWarning(null)
+
+      const tenantHeaders = buildTenantHeaders()
+      const reportsUrl = `/api/admin/reports?granularity=${granularity}`
+
+      const insightsParams = new URLSearchParams({
+        granularity,
+        scope,
+      })
+
+      if (selectedSede !== "all") {
+        insightsParams.set("sedeId", selectedSede)
+      }
+
+      const insightsUrl = `/api/admin/dashboard/sede-insights?${insightsParams.toString()}`
 
       try {
-        const response = await fetch("/api/admin/employees", {
-          signal,
-          cache: "no-store",
-          headers: buildTenantHeaders(),
-        })
-        const data: EmployeesResponse = await response.json().catch(() => ({}))
+        try {
+          const response = await fetch(reportsUrl, {
+            signal,
+            cache: "no-store",
+            headers: tenantHeaders,
+          })
 
-        if (!response.ok) {
-          throw new Error(data.error ?? "No se pudieron cargar los empleados")
+          const payload: ReportsResponse = await response.json().catch(() => ({}))
+          if (!response.ok || !payload.report) {
+            throw new Error(payload.error ?? "No se pudo cargar el reporte ejecutivo")
+          }
+
+          if (!signal?.aborted) {
+            setReport(payload.report)
+          }
+        } catch (error) {
+          if (!signal?.aborted) {
+            console.error("Error loading admin reports", error)
+            setReportError(error instanceof Error ? error.message : "No se pudo cargar el reporte ejecutivo")
+          }
         }
 
-        if (!signal?.aborted) {
-          const list = Array.isArray(data.employees) ? data.employees : []
-          setEmployees(sortEmployees(list))
-        }
-      } catch (error) {
-        if (signal?.aborted) {
-          return
-        }
+        try {
+          const response = await fetch(insightsUrl, {
+            signal,
+            cache: "no-store",
+            headers: tenantHeaders,
+          })
 
-        console.error("Error fetching employees", error)
-        setEmployeesError(
-          error instanceof Error ? error.message : "No se pudieron cargar los empleados.",
-        )
+          const payload: SedeInsightsResponse = await response.json().catch(() => ({}))
+          if (!response.ok) {
+            throw new Error(payload.error ?? "No se pudieron cargar los insights por sede")
+          }
+
+          if (!signal?.aborted) {
+            setSedeInsights(payload.sedeInsights ?? null)
+            setFocusedSeries(Array.isArray(payload.focusedSeries) ? payload.focusedSeries : [])
+            setSedeInsightsWarning(payload.warning ?? null)
+          }
+        } catch (error) {
+          if (!signal?.aborted) {
+            console.error("Error loading sede insights", error)
+            setSedeInsightsError(error instanceof Error ? error.message : "No se pudieron cargar los insights por sede")
+          }
+        }
       } finally {
         if (!signal?.aborted) {
-          setAreEmployeesLoading(false)
+          setIsLoading(false)
         }
       }
     },
-    [],
-  )
-
-  const loadClients = useCallback(
-    async (signal?: AbortSignal) => {
-      setAreClientsLoading(true)
-      setClientsError(null)
-
-      try {
-        const response = await fetch("/api/admin/clients", {
-          signal,
-          cache: "no-store",
-          headers: buildTenantHeaders(),
-        })
-        const data: ClientsResponse = await response.json().catch(() => ({}))
-
-        if (!response.ok) {
-          throw new Error(data.error ?? "No se pudieron cargar los clientes")
-        }
-
-        if (!signal?.aborted) {
-          const list = Array.isArray(data.clients) ? data.clients : []
-          setClients(sortClients(list))
-        }
-      } catch (error) {
-        if (signal?.aborted) {
-          return
-        }
-
-        console.error("Error fetching clients", error)
-        setClientsError(
-          error instanceof Error ? error.message : "No se pudieron cargar los clientes.",
-        )
-      } finally {
-        if (!signal?.aborted) {
-          setAreClientsLoading(false)
-        }
-      }
-    },
-    [],
+    [granularity, scope, selectedSede],
   )
 
   useEffect(() => {
     const controller = new AbortController()
-    void loadEmployees(controller.signal)
+    void loadDashboard(controller.signal)
 
     return () => controller.abort()
-  }, [loadEmployees])
+  }, [loadDashboard])
 
   useEffect(() => {
-    const controller = new AbortController()
-    void loadClients(controller.signal)
-
-    return () => controller.abort()
-  }, [loadClients])
-
-  const handleReload = useCallback(() => {
-    void loadEmployees()
-    void loadClients()
-  }, [loadClients, loadEmployees])
-
-  const isLoading = areEmployeesLoading || areClientsLoading
-  const hasErrors = Boolean(employeesError || clientsError)
-
-  const employeeStatusOptions = useMemo(() => {
-    const values = new Set<string>()
-
-    for (const employee of employees) {
-      values.add(getNormalizedValue(employee.status, "Sin estado"))
-    }
-
-    return [...values].sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }))
-  }, [employees])
-
-  const clientTypeOptions = useMemo(() => {
-    const values = new Set<string>()
-
-    for (const client of clients) {
-      values.add(getNormalizedValue(client.type, "Sin categoría"))
-    }
-
-    return [...values].sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }))
-  }, [clients])
-
-  const filteredEmployees = useMemo(() => {
-    if (employeeStatusFilter === "all") {
-      return employees
-    }
-
-    return employees.filter((employee) => getNormalizedValue(employee.status, "Sin estado") === employeeStatusFilter)
-  }, [employeeStatusFilter, employees])
-
-  const filteredClients = useMemo(() => {
-    return clients.filter((client) => {
-      const typeValue = getNormalizedValue(client.type, "Sin categoría")
-      const segmentValue = getClientDbSegment(client.type)
-
-      const typeMatches = clientTypeFilter === "all" || typeValue === clientTypeFilter
-      const segmentMatches = clientSegmentFilter === "all" || segmentValue === clientSegmentFilter
-
-      return typeMatches && segmentMatches
-    })
-  }, [clientSegmentFilter, clientTypeFilter, clients])
-
-  const metrics = useMemo(() => {
-    const totals = {
-      totalEmployees: filteredEmployees.length,
-      totalClients: filteredClients.length,
-      totalRevenue: 0,
-      totalAppointments: 0,
-      upcomingAppointments: 0,
-      completedAppointments: 0,
-      paidAppointments: 0,
-      clientsWithUpcomingAppointments: 0,
-      activeClientsByWindow: 0,
-      newClientsByWindow: 0,
-    }
-
-    const cutoffDate = getCutoffDate(activityWindow)
-
-    for (const employee of filteredEmployees) {
-      totals.totalRevenue += employee.totalRevenue
-      totals.totalAppointments += employee.totalAppointments
-      totals.upcomingAppointments += employee.upcomingAppointments
-      totals.completedAppointments += employee.completedAppointments
-      totals.paidAppointments += employee.paidAppointments
-    }
-
-    for (const client of filteredClients) {
-      if (client.upcomingAppointments > 0) {
-        totals.clientsWithUpcomingAppointments += 1
-      }
-
-      if (isOnOrAfter(client.lastAppointmentAt, cutoffDate)) {
-        totals.activeClientsByWindow += 1
-      }
-
-      if (isOnOrAfter(client.registeredAt, cutoffDate)) {
-        totals.newClientsByWindow += 1
-      }
-    }
-
-    return totals
-  }, [activityWindow, filteredClients, filteredEmployees])
-
-  const derivedMetrics = useMemo(() => {
-    const ticketDenominator = metrics.paidAppointments > 0 ? metrics.paidAppointments : metrics.completedAppointments
-    const averageTicket = ticketDenominator > 0 ? metrics.totalRevenue / ticketDenominator : 0
-    const revenuePerEmployee = metrics.totalEmployees > 0 ? metrics.totalRevenue / metrics.totalEmployees : 0
-    const effectiveCompletedAppointments = Math.max(metrics.completedAppointments, metrics.paidAppointments)
-    const completionRate = getSafeRate(effectiveCompletedAppointments, metrics.totalAppointments)
-    const occupancyRate = getSafeRate(metrics.upcomingAppointments, metrics.totalAppointments)
-
-    return {
-      averageTicket,
-      revenuePerEmployee,
-      completionRate,
-      occupancyRate,
-    }
-  }, [metrics])
-
-  const revenueByEmployee = useMemo(() => {
-    return [...filteredEmployees]
-      .sort((a, b) => b.totalRevenue - a.totalRevenue)
-      .slice(0, 8)
-      .map((employee) => ({
-        name: employee.name,
-        revenue: employee.totalRevenue,
-        appointments: employee.totalAppointments,
-      }))
-  }, [filteredEmployees])
-
-  const revenueByEmployeeChartData = useMemo(
-    () => (isMobile ? revenueByEmployee.slice(0, 5) : revenueByEmployee),
-    [isMobile, revenueByEmployee],
-  )
-
-  const clientsBySegment = useMemo(() => {
-    const grouped = new Map<ClientDbSegment, number>([
-      ["nuevo", 0],
-      ["frecuente", 0],
-    ])
-
-    for (const client of filteredClients) {
-      const segment = getClientDbSegment(client.type)
-      if (segment) {
-        grouped.set(segment, (grouped.get(segment) ?? 0) + 1)
-      }
-    }
-
-    return (["nuevo", "frecuente"] as const).map((segment) => ({
-      segment,
-      label: segment === "nuevo" ? "Nuevo" : "Frecuente",
-      count: grouped.get(segment) ?? 0,
-    }))
-  }, [filteredClients])
-
-  const clientSegmentOptions = useMemo(
-    () => clientsBySegment.map((segment) => segment.segment),
-    [clientsBySegment],
-  )
-
-  const clientSegmentTotal = useMemo(
-    () => clientsBySegment.reduce((sum, segment) => sum + segment.count, 0),
-    [clientsBySegment],
-  )
-
-  const activeClientSegmentIndex = useMemo(
-    () => clientsBySegment.findIndex((segment) => segment.segment === activeClientSegment),
-    [activeClientSegment, clientsBySegment],
-  )
-
-  useEffect(() => {
-    if (clientSegmentOptions.length === 0) {
+    if (selectedSede === "all") {
       return
     }
 
-    if (!clientSegmentOptions.includes(activeClientSegment)) {
-      setActiveClientSegment(clientSegmentOptions[0])
+    const exists = (sedeInsights?.sedes ?? []).some((sede) => String(sede.sedeId) === selectedSede)
+    if (!exists) {
+      setSelectedSede("all")
     }
-  }, [activeClientSegment, clientSegmentOptions])
+  }, [selectedSede, sedeInsights?.sedes])
 
-  const businessInsights = useMemo(() => {
-    const topEmployee = [...filteredEmployees].sort((a, b) => b.totalRevenue - a.totalRevenue)[0] ?? null
-    const topClient = [...filteredClients].sort((a, b) => b.totalSpent - a.totalSpent)[0] ?? null
+  const handleReload = useCallback(() => {
+    void loadDashboard()
+  }, [loadDashboard])
 
-    const uniqueServices = new Set<string>()
-    for (const employee of filteredEmployees) {
-      for (const service of employee.services) {
-        uniqueServices.add(service)
+  const hasErrors = Boolean(reportError || sedeInsightsError)
+
+  const selectedSedeInsight = useMemo(() => {
+    if (selectedSede === "all") {
+      return null
+    }
+
+    return (sedeInsights?.sedes ?? []).find((sede) => String(sede.sedeId) === selectedSede) ?? null
+  }, [selectedSede, sedeInsights?.sedes])
+
+  const effectiveSeries = useMemo(() => {
+    if (selectedSede !== "all") {
+      return focusedSeries
+    }
+
+    return report?.series ?? []
+  }, [focusedSeries, report?.series, selectedSede])
+
+  const trendChartData = useMemo(
+    () =>
+      effectiveSeries.map((point) => ({
+        ...point,
+        dateLabel: formatAxisDate(point.bucketStart, granularity),
+      })),
+    [effectiveSeries, granularity],
+  )
+
+  const sedesRanking = useMemo(() => {
+    const sedes = [...(sedeInsights?.sedes ?? [])]
+
+    return sedes.sort((a, b) => {
+      if (rankingMetric === "revenue") {
+        if (b.revenue !== a.revenue) {
+          return b.revenue - a.revenue
+        }
+      }
+
+      if (rankingMetric === "paidAppointments") {
+        if (b.paidAppointments !== a.paidAppointments) {
+          return b.paidAppointments - a.paidAppointments
+        }
+      }
+
+      if (b.totalAppointments !== a.totalAppointments) {
+        return b.totalAppointments - a.totalAppointments
+      }
+
+      return b.revenue - a.revenue
+    })
+  }, [rankingMetric, sedeInsights?.sedes])
+
+  const sedesForCharts = useMemo(() => sedesRanking.slice(0, 8), [sedesRanking])
+
+  const periodComparisonData = useMemo(
+    () =>
+      sedesForCharts.map((sede) => ({
+        ...sede,
+        growthLabel:
+          sede.growthPct == null ? "Sin base" : `${sede.growthPct > 0 ? "+" : ""}${sede.growthPct.toFixed(2)}%`,
+      })),
+    [sedesForCharts],
+  )
+
+  const paymentMethodsData = useMemo(
+    () =>
+      (report?.income.paymentMethods ?? [])
+        .slice()
+        .sort((a, b) => b.revenue - a.revenue)
+        .map((item) => ({
+          ...item,
+          methodLabel: item.method.replaceAll("_", " "),
+        })),
+    [report?.income.paymentMethods],
+  )
+
+  const scopeRevenue = useMemo(() => {
+    if (selectedSedeInsight) {
+      return selectedSedeInsight.revenue
+    }
+
+    if (sedeInsights) {
+      return sedeInsights.sedes.reduce((sum, sede) => sum + sede.revenue, 0)
+    }
+
+    return report?.totals.revenue ?? 0
+  }, [report?.totals.revenue, selectedSedeInsight, sedeInsights])
+
+  const topService = useMemo(() => {
+    if (selectedSedeInsight?.topService) {
+      return {
+        serviceName: selectedSedeInsight.topService.serviceName,
+        revenue: selectedSedeInsight.topService.revenue,
+        paidAppointments: selectedSedeInsight.topService.appointments,
       }
     }
 
-    const serviceCoverage = metrics.totalEmployees > 0 ? uniqueServices.size / metrics.totalEmployees : 0
+    return report?.topServices[0] ?? null
+  }, [report?.topServices, selectedSedeInsight?.topService])
 
-    return {
-      topEmployee,
-      topClient,
-      uniqueServiceCount: uniqueServices.size,
-      serviceCoverage,
+  const conversionRate = useMemo(() => {
+    const paid = selectedSedeInsight?.paidAppointments ?? report?.totals.paymentsCount ?? 0
+    const appointments = selectedSedeInsight?.totalAppointments ?? report?.totals.appointmentsCount ?? 0
+
+    return getSafeRate(paid, appointments)
+  }, [report?.totals.appointmentsCount, report?.totals.paymentsCount, selectedSedeInsight])
+
+  const occupancyRate = useMemo(() => {
+    if (selectedSedeInsight) {
+      return getSafeRate(selectedSedeInsight.upcomingAppointments, selectedSedeInsight.totalAppointments)
     }
-  }, [filteredClients, filteredEmployees, metrics.totalEmployees])
 
-  const hasData = filteredEmployees.length > 0 || filteredClients.length > 0
+    return Number(report?.efficiency.occupancyRatePct ?? 0)
+  }, [report?.efficiency.occupancyRatePct, selectedSedeInsight])
+
+  const hasData = Boolean(report || sedeInsights)
 
   return (
     <div className="space-y-4">
       <main className="space-y-4 pb-4 sm:space-y-5 sm:pb-6">
-
         {hasErrors && (
           <Alert variant="destructive">
-            <AlertTitle>Tuvimos problemas al cargar algunos datos</AlertTitle>
+            <AlertTitle>Tuvimos problemas al cargar algunos datos del dashboard</AlertTitle>
             <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1 text-sm">
-                {employeesError && <p>Empleados: {employeesError}</p>}
-                {clientsError && <p>Clientes: {clientsError}</p>}
+                {reportError && <p>Reporte general: {reportError}</p>}
+                {sedeInsightsError && <p>Insights por sede: {sedeInsightsError}</p>}
               </div>
               <Button variant="outline" onClick={handleReload}>
                 Reintentar
@@ -465,22 +482,65 @@ export default function AdminDashboard() {
           </Alert>
         )}
 
-        <Card>
+        {sedeInsightsWarning && (
+          <Alert>
+            <AlertTitle>Insights por sede</AlertTitle>
+            <AlertDescription>{sedeInsightsWarning}</AlertDescription>
+          </Alert>
+        )}
+
+        <Card className="border-border/70 bg-gradient-to-br from-background to-muted/40">
           <CardHeader className="pb-2">
-            <CardTitle className="text-lg">Segmentación</CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-lg">Panel ejecutivo multi-sede</CardTitle>
+                <CardDescription>
+                  Control de ingresos, conversion, ocupacion y desempeno comercial por sede.
+                </CardDescription>
+              </div>
+              <Badge variant="secondary">Business Intelligence</Badge>
+            </div>
           </CardHeader>
           <CardContent className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Estado de empleados</p>
-              <Select value={employeeStatusFilter} onValueChange={setEmployeeStatusFilter}>
+              <p className="text-xs font-medium text-muted-foreground">Granularidad de tendencia</p>
+              <Select value={granularity} onValueChange={(value) => setGranularity(value as Granularity)}>
                 <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Todos los estados" />
+                  <SelectValue placeholder="Mensual" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Todos los estados</SelectItem>
-                  {employeeStatusOptions.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {status}
+                  <SelectItem value="day">Diaria</SelectItem>
+                  <SelectItem value="month">Mensual</SelectItem>
+                  <SelectItem value="year">Anual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Horizonte de comparacion</p>
+              <Select value={scope} onValueChange={(value) => setScope(value as SedeInsightsScope)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Mes actual" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="month">Mes actual</SelectItem>
+                  <SelectItem value="quarter">Ultimos 3 meses</SelectItem>
+                  <SelectItem value="year">Ano actual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Sede foco</p>
+              <Select value={selectedSede} onValueChange={setSelectedSede}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Todas las sedes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas las sedes</SelectItem>
+                  {(sedeInsights?.sedes ?? []).map((sede) => (
+                    <SelectItem key={sede.sedeId} value={String(sede.sedeId)}>
+                      {sede.sedeName}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -488,46 +548,15 @@ export default function AdminDashboard() {
             </div>
 
             <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Tipo de cliente</p>
-              <Select value={clientTypeFilter} onValueChange={setClientTypeFilter}>
+              <p className="text-xs font-medium text-muted-foreground">Metrica de ranking</p>
+              <Select value={rankingMetric} onValueChange={(value) => setRankingMetric(value as RankingMetric)}>
                 <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Todos los tipos" />
+                  <SelectValue placeholder="Ingresos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Todos los tipos</SelectItem>
-                  {clientTypeOptions.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Segmento de clientes</p>
-              <Select value={clientSegmentFilter} onValueChange={setClientSegmentFilter}>
-                <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Todos los segmentos BD" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="nuevo">Nuevo</SelectItem>
-                  <SelectItem value="frecuente">Frecuente</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Ventana de actividad</p>
-              <Select value={activityWindow} onValueChange={(value) => setActivityWindow(value as ActivityWindow)}>
-                <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Últimos 90 días" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="30">Últimos 30 días</SelectItem>
-                  <SelectItem value="90">Últimos 90 días</SelectItem>
-                  <SelectItem value="all">Todo el histórico</SelectItem>
+                  <SelectItem value="revenue">Ingresos</SelectItem>
+                  <SelectItem value="totalAppointments">Citas totales</SelectItem>
+                  <SelectItem value="paidAppointments">Citas pagadas</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -536,280 +565,346 @@ export default function AdminDashboard() {
 
         {isLoading ? (
           <DashboardSkeleton />
+        ) : !hasData ? (
+          <EmptyChartState message="No hay informacion disponible para construir el dashboard." />
         ) : (
-          <Tabs value={section} onValueChange={(value) => setSection(value as DashboardSection)}>
-            <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
-              <TabsTrigger value="general" className="shrink-0">Vista general</TabsTrigger>
-              <TabsTrigger value="operaciones" className="shrink-0">Operaciones</TabsTrigger>
-              <TabsTrigger value="clientes" className="shrink-0">Clientes</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="general" className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-                <MetricCard
-                  title="Ingresos"
-                  value={formatCurrency(metrics.totalRevenue)}
-                  description="Total acumulado con filtros aplicados"
-                  icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Ticket promedio"
-                  value={formatCurrency(derivedMetrics.averageTicket)}
-                  description="Valor promedio por cita pagada"
-                  icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Citas totales"
-                  value={formatNumber(metrics.totalAppointments)}
-                  description={`Completadas: ${formatNumber(metrics.completedAppointments)}`}
-                  icon={<CalendarCheck2 className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Citas próximas"
-                  value={formatNumber(metrics.upcomingAppointments)}
-                  description="Reservas activas en agenda"
-                  icon={<CalendarClock className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Equipo"
-                  value={formatNumber(metrics.totalEmployees)}
-                  description="Empleados considerados en el análisis"
-                  icon={<Users className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Clientes"
-                  value={formatNumber(metrics.totalClients)}
-                  description="Clientes filtrados en esta vista"
-                  icon={<UserCircle className="h-4 w-4 text-muted-foreground" />}
-                />
-              </div>
-
-              <div>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Ingresos por empleado</CardTitle>
-                    <CardDescription>Top de rendimiento por facturación acumulada</CardDescription>
-                  </CardHeader>
-                  <CardContent className="min-w-0 overflow-hidden">
-                    {revenueByEmployeeChartData.length > 0 ? (
-                      <ChartContainer config={revenueChartConfig} className="aspect-auto h-[180px] w-full min-w-0 max-w-full overflow-hidden sm:h-[250px] md:h-[290px]">
-                        <BarChart
-                          data={revenueByEmployeeChartData}
-                          margin={isMobile ? { top: 8, right: 4, left: 0, bottom: 0 } : { top: 12, right: 8, left: 8, bottom: 0 }}
-                        >
-                          <CartesianGrid vertical={false} />
-                          <XAxis
-                            dataKey="name"
-                            tickLine={false}
-                            axisLine={false}
-                            tickMargin={isMobile ? 6 : 8}
-                            minTickGap={isMobile ? 38 : 24}
-                            tick={{ fontSize: isMobile ? 10 : 12 }}
-                            interval="preserveStartEnd"
-                          />
-                          <YAxis
-                            tickLine={false}
-                            axisLine={false}
-                            tickFormatter={(value) => formatCompactNumber(Number(value))}
-                            tick={{ fontSize: isMobile ? 10 : 12 }}
-                            width={isMobile ? 26 : 40}
-                          />
-                          <ChartTooltip
-                            cursor={false}
-                            content={<ChartTooltipContent formatter={(value) => formatCurrency(Number(value))} />}
-                          />
-                          <Bar dataKey="revenue" fill="var(--color-revenue)" radius={10} />
-                        </BarChart>
-                      </ChartContainer>
-                    ) : (
-                      <EmptyChartState message="No hay empleados para mostrar en esta selección." />
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-
-              <BusinessInsights
-                completionRate={derivedMetrics.completionRate}
-                occupancyRate={derivedMetrics.occupancyRate}
-                revenuePerEmployee={derivedMetrics.revenuePerEmployee}
-                activeClients={metrics.activeClientsByWindow}
-                newClients={metrics.newClientsByWindow}
-                clientsWithUpcomingAppointments={metrics.clientsWithUpcomingAppointments}
-                insights={businessInsights}
-                hasData={hasData}
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+              <MetricCard
+                title={selectedSedeInsight ? "Ingresos sede" : "Ingresos por horizonte"}
+                value={formatCurrency(scopeRevenue)}
+                description={
+                  selectedSedeInsight
+                    ? `${selectedSedeInsight.sedeName} en ${sedeInsights?.scopeLabel.toLowerCase() ?? "periodo"}`
+                    : `Total consolidado en ${sedeInsights?.scopeLabel.toLowerCase() ?? "periodo"}`
+                }
+                icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
               />
-            </TabsContent>
 
-            <TabsContent value="operaciones" className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard
-                  title="Productividad"
-                  value={`${derivedMetrics.completionRate}%`}
-                  description="Citas completadas o pagadas sobre total"
-                  icon={<Activity className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Carga de agenda"
-                  value={`${derivedMetrics.occupancyRate}%`}
-                  description="Proporción de citas próximas"
-                  icon={<CalendarClock className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Ingreso por empleado"
-                  value={formatCurrency(derivedMetrics.revenuePerEmployee)}
-                  description="Promedio de facturación por miembro del equipo"
-                  icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Servicios distintos"
-                  value={formatNumber(businessInsights.uniqueServiceCount)}
-                  description="Cobertura de portafolio en la plantilla"
-                  icon={<Scissors className="h-4 w-4 text-muted-foreground" />}
-                />
-              </div>
+              <MetricCard
+                title="Crecimiento mensual"
+                value={
+                  sedeInsights?.monthlyGrowthPct == null
+                    ? "Sin base"
+                    : `${sedeInsights.monthlyGrowthPct > 0 ? "+" : ""}${sedeInsights.monthlyGrowthPct}%`
+                }
+                description={`Mes actual: ${formatCurrency(sedeInsights?.currentMonthRevenue ?? 0)}`}
+                icon={
+                  (sedeInsights?.monthlyGrowthPct ?? 0) >= 0 ? (
+                    <ArrowUpRight className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <ArrowDownRight className="h-4 w-4 text-rose-600" />
+                  )
+                }
+              />
+
+              <MetricCard
+                title="Conversion de pago"
+                value={`${conversionRate}%`}
+                description="Citas pagadas sobre citas registradas"
+                icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
+              />
+
+              <MetricCard
+                title="Carga de agenda"
+                value={`${occupancyRate}%`}
+                description="Relacion entre agenda futura y volumen operativo"
+                icon={<CalendarClock className="h-4 w-4 text-muted-foreground" />}
+              />
+
+              <MetricCard
+                title="Sede lider"
+                value={selectedSedeInsight?.sedeName ?? sedeInsights?.bestSedeByRevenue?.sedeName ?? "Sin datos"}
+                description={formatCurrency(selectedSedeInsight?.revenue ?? sedeInsights?.bestSedeByRevenue?.revenue ?? 0)}
+                icon={<Building2 className="h-4 w-4 text-muted-foreground" />}
+              />
+
+              <MetricCard
+                title="Servicio estrella"
+                value={topService?.serviceName ?? "Sin datos"}
+                description={
+                  topService
+                    ? `${formatCurrency(topService.revenue)} · ${formatNumber(topService.paidAppointments)} citas`
+                    : "No hay consumo de servicios registrado"
+                }
+                icon={<Scissors className="h-4 w-4 text-muted-foreground" />}
+              />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <LineChartIcon className="h-4 w-4" />
+                    Tendencia de ingresos
+                  </CardTitle>
+                  <CardDescription>
+                    {selectedSedeInsight
+                      ? `Serie de ${selectedSedeInsight.sedeName} con granularidad ${granularity}.`
+                      : `Serie consolidada de negocio con granularidad ${granularity}.`}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0 overflow-hidden">
+                  {trendChartData.length > 0 ? (
+                    <ChartContainer config={trendChartConfig} className="h-[280px] w-full min-w-0 max-w-full overflow-hidden">
+                      <ComposedChart data={trendChartData} margin={{ top: 10, right: 12, left: 2, bottom: 0 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="dateLabel" tickLine={false} axisLine={false} minTickGap={22} />
+                        <YAxis
+                          yAxisId="left"
+                          tickLine={false}
+                          axisLine={false}
+                          tickFormatter={(value) => formatCompactNumber(Number(value))}
+                          width={40}
+                        />
+                        <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} width={36} />
+                        <ChartTooltip
+                          cursor={false}
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, key) =>
+                                key === "revenue" ? formatCurrency(Number(value)) : formatNumber(Number(value))
+                              }
+                            />
+                          }
+                        />
+                        <Bar yAxisId="left" dataKey="revenue" fill="var(--color-revenue)" radius={[8, 8, 0, 0]} />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="appointmentsCount"
+                          stroke="var(--color-appointmentsCount)"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      </ComposedChart>
+                    </ChartContainer>
+                  ) : (
+                    <EmptyChartState message="No hay puntos suficientes para trazar esta tendencia." />
+                  )}
+                </CardContent>
+              </Card>
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Rendimiento por equipo</CardTitle>
-                  <CardDescription>Comparativa de ingresos y volumen de citas por empleado</CardDescription>
+                  <CardTitle>Ranking corporativo por sede</CardTitle>
+                  <CardDescription>{RANKING_LABELS[rankingMetric]} en el horizonte seleccionado.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  {revenueByEmployee.length > 0 ? (
-                    <div className="space-y-4">
-                      {revenueByEmployee.map((item) => (
-                        <div key={item.name} className="space-y-1">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="font-medium">{item.name}</span>
-                            <span className="text-muted-foreground">
-                              {formatCurrency(item.revenue)} · {formatNumber(item.appointments)} citas
-                            </span>
-                          </div>
-                          <Progress
-                            value={metrics.totalRevenue > 0 ? Math.min((item.revenue / metrics.totalRevenue) * 100, 100) : 0}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyChartState message="Sin datos operativos para esta combinación de filtros." />
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="clientes" className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard
-                  title="Clientes activos"
-                  value={formatNumber(metrics.activeClientsByWindow)}
-                  description="Con actividad dentro de la ventana elegida"
-                  icon={<Users className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Clientes nuevos"
-                  value={formatNumber(metrics.newClientsByWindow)}
-                  description="Registros recientes en la ventana actual"
-                  icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Con citas próximas"
-                  value={formatNumber(metrics.clientsWithUpcomingAppointments)}
-                  description="Clientes listos para ser atendidos"
-                  icon={<CalendarCheck2 className="h-4 w-4 text-muted-foreground" />}
-                />
-                <MetricCard
-                  title="Ticket por cliente"
-                  value={formatCurrency(metrics.totalClients > 0 ? metrics.totalRevenue / metrics.totalClients : 0)}
-                  description="Ingreso promedio por cliente filtrado"
-                  icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
-                />
-              </div>
-
-              <Card data-chart={clientSegmentChartId} className="flex flex-col">
-                <ChartStyle id={clientSegmentChartId} config={clientSegmentChartConfig} />
-                <CardHeader className="flex-row items-start space-y-0 pb-0">
-                  <div className="grid gap-1">
-                    <CardTitle>Segmentación de clientes</CardTitle>
-                    <CardDescription>Distribución según tipo de cliente guardado en BD</CardDescription>
-                  </div>
-                  <Select value={activeClientSegment} onValueChange={(value) => setActiveClientSegment(value as ClientDbSegment)}>
-                    <SelectTrigger className="ml-auto h-8 w-[150px] rounded-lg pl-2.5" aria-label="Seleccionar segmento">
-                      <SelectValue placeholder="Selecciona segmento" />
-                    </SelectTrigger>
-                    <SelectContent align="end" className="rounded-xl">
-                      {clientSegmentOptions.map((segmentKey) => (
-                        <SelectItem key={segmentKey} value={segmentKey} className="rounded-lg [&_span]:flex">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="flex h-3 w-3 shrink-0 rounded-xs" style={{ backgroundColor: `var(--color-${segmentKey})` }} />
-                            {segmentKey === "nuevo" ? "Nuevo" : "Frecuente"}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </CardHeader>
-                <CardContent className="flex flex-1 items-center justify-center pb-2 pt-4 sm:pb-4">
-                  {clientSegmentTotal > 0 ? (
-                    <ChartContainer
-                      id={clientSegmentChartId}
-                      config={clientSegmentChartConfig}
-                      className="mx-auto aspect-square w-full max-w-[360px]"
-                    >
-                      <PieChart>
+                <CardContent className="min-w-0 overflow-hidden">
+                  {sedesForCharts.length > 0 ? (
+                    <ChartContainer config={sedeRankingChartConfig} className="h-[280px] w-full min-w-0 max-w-full overflow-hidden">
+                      <BarChart layout="vertical" data={sedesForCharts} margin={{ top: 6, right: 10, left: 30, bottom: 0 }}>
+                        <CartesianGrid horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tickLine={false}
+                          axisLine={false}
+                          tickFormatter={(value) =>
+                            rankingMetric === "revenue" ? formatCompactNumber(Number(value)) : formatNumber(Number(value))
+                          }
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="sedeName"
+                          tickLine={false}
+                          axisLine={false}
+                          width={120}
+                        />
                         <ChartTooltip
                           cursor={false}
-                          content={<ChartTooltipContent formatter={(value) => formatNumber(Number(value))} hideLabel />}
-                        />
-                        <Pie
-                          data={clientsBySegment}
-                          dataKey="count"
-                          nameKey="segment"
-                          innerRadius={isMobile ? 56 : 74}
-                          strokeWidth={5}
-                          activeIndex={Math.max(activeClientSegmentIndex, 0)}
-                          activeShape={({ outerRadius = 0, ...props }: PieSectorDataItem) => (
-                            <g>
-                              <Sector {...props} outerRadius={outerRadius + 8} />
-                              <Sector {...props} outerRadius={outerRadius + 20} innerRadius={outerRadius + 10} />
-                            </g>
-                          )}
-                        >
-                          {clientsBySegment.map((segment) => (
-                            <Cell key={segment.segment} fill={`var(--color-${segment.segment})`} />
-                          ))}
-                          <Label
-                            content={({ viewBox }) => {
-                              if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) {
-                                return null
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value) =>
+                                rankingMetric === "revenue"
+                                  ? formatCurrency(Number(value))
+                                  : `${formatNumber(Number(value))} citas`
                               }
-
-                              const safeIndex = Math.max(activeClientSegmentIndex, 0)
-                              const activeSegment = clientsBySegment[safeIndex]
-                              const activeCount = activeSegment?.count ?? 0
-                              const activeLabel = activeSegment?.label ?? "Clientes"
-
-                              return (
-                                <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
-                                  <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-3xl font-bold">
-                                    {formatNumber(activeCount)}
-                                  </tspan>
-                                  <tspan x={viewBox.cx} y={(viewBox.cy || 0) + 20} className="fill-muted-foreground text-xs">
-                                    {activeLabel}
-                                  </tspan>
-                                </text>
-                              )
-                            }}
-                          />
-                        </Pie>
-                      </PieChart>
+                            />
+                          }
+                        />
+                        <Bar dataKey={rankingMetric} fill="var(--color-revenue)" radius={8} />
+                      </BarChart>
                     </ChartContainer>
                   ) : (
-                    <EmptyChartState message="No hay clientes para segmentar con los filtros actuales." />
+                    <EmptyChartState message="No hay sedes con actividad para generar ranking." />
                   )}
                 </CardContent>
               </Card>
-            </TabsContent>
-          </Tabs>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Mix operativo por sede</CardTitle>
+                  <CardDescription>Comparativo de citas pagadas vs agenda proxima.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0 overflow-hidden">
+                  {sedesForCharts.length > 0 ? (
+                    <ChartContainer config={operationsMixChartConfig} className="h-[280px] w-full min-w-0 max-w-full overflow-hidden">
+                      <BarChart data={sedesForCharts} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="sedeName" tickLine={false} axisLine={false} minTickGap={20} />
+                        <YAxis tickLine={false} axisLine={false} />
+                        <ChartTooltip
+                          cursor={false}
+                          content={<ChartTooltipContent formatter={(value) => `${formatNumber(Number(value))} citas`} />}
+                        />
+                        <Bar dataKey="paidAppointments" stackId="ops" fill="var(--color-paidAppointments)" radius={[8, 8, 0, 0]} />
+                        <Bar dataKey="upcomingAppointments" stackId="ops" fill="var(--color-upcomingAppointments)" radius={[8, 8, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
+                  ) : (
+                    <EmptyChartState message="No hay datos operativos por sede para esta vista." />
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Participacion por metodo de pago</CardTitle>
+                  <CardDescription>Facturacion distribuida por canal de cobro.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0 overflow-hidden">
+                  {paymentMethodsData.length > 0 ? (
+                    <ChartContainer config={paymentMethodsChartConfig} className="h-[280px] w-full min-w-0 max-w-full overflow-hidden">
+                      <BarChart data={paymentMethodsData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="methodLabel" tickLine={false} axisLine={false} minTickGap={20} />
+                        <YAxis tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(Number(value))} />
+                        <ChartTooltip
+                          cursor={false}
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, key, item) => {
+                                const payload = item?.payload as { paymentsCount?: number } | undefined
+                                const paymentsCount = payload?.paymentsCount ?? 0
+                                return `${formatCurrency(Number(value))} · ${formatNumber(paymentsCount)} pagos`
+                              }}
+                            />
+                          }
+                        />
+                        <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[8, 8, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
+                  ) : (
+                    <EmptyChartState message="No se registran metodos de pago para el periodo cargado." />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Comparativo periodo vs periodo por sede</CardTitle>
+                  <CardDescription>Comparacion de ingresos del horizonte actual frente al anterior en cada sede.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0 overflow-hidden">
+                  {periodComparisonData.length > 0 ? (
+                    <ChartContainer config={periodComparisonChartConfig} className="h-[280px] w-full min-w-0 max-w-full overflow-hidden">
+                      <BarChart data={periodComparisonData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="sedeName" tickLine={false} axisLine={false} minTickGap={20} />
+                        <YAxis tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(Number(value))} />
+                        <ChartTooltip
+                          cursor={false}
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, key, item) => {
+                                const payload = item?.payload as { growthLabel?: string } | undefined
+                                if (key === "revenue") {
+                                  return `${formatCurrency(Number(value))} · ${payload?.growthLabel ?? "Sin base"}`
+                                }
+
+                                return formatCurrency(Number(value))
+                              }}
+                            />
+                          }
+                        />
+                        <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[8, 8, 0, 0]} />
+                        <Bar dataKey="previousRevenue" fill="var(--color-previousRevenue)" radius={[8, 8, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
+                  ) : (
+                    <EmptyChartState message="No hay datos suficientes para comparar periodos entre sedes." />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Servicio top por sede</CardTitle>
+                  <CardDescription>Mejor desempeño comercial individual en cada sede.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {sedesRanking.length > 0 ? (
+                    <div className="space-y-4">
+                      {sedesRanking.map((sede) => {
+                        const progressValue = scopeRevenue > 0 ? Math.min((sede.revenue / scopeRevenue) * 100, 100) : 0
+
+                        return (
+                          <div key={sede.sedeId} className="space-y-2 rounded-lg border p-3">
+                            <div className="flex items-center justify-between gap-2 text-sm">
+                              <p className="font-medium">{sede.sedeName}</p>
+                              <span className="text-muted-foreground">{formatCurrency(sede.revenue)}</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {sede.topService
+                                ? `${sede.topService.serviceName} · ${formatNumber(sede.topService.appointments)} citas`
+                                : "Sin servicio destacado en este horizonte"}
+                            </p>
+                            <Progress value={progressValue} />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <EmptyChartState message="No hay ranking de servicios por sede en este momento." />
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Insights de direccion</CardTitle>
+                  <CardDescription>Lectura rapida para decisiones ejecutivas del negocio.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm text-muted-foreground">
+                  <div className="rounded-lg border p-3">
+                    <p>
+                      Sede lider por ingresos: <span className="font-medium text-foreground">{sedeInsights?.bestSedeByRevenue?.sedeName ?? "Sin datos"}</span>
+                    </p>
+                    <p>
+                      Valor capturado: {formatCurrency(sedeInsights?.bestSedeByRevenue?.revenue ?? 0)} en {formatNumber(sedeInsights?.bestSedeByRevenue?.paidAppointments ?? 0)} citas pagadas.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <p>
+                      Sede lider por volumen: <span className="font-medium text-foreground">{sedeInsights?.bestSedeByAppointments?.sedeName ?? "Sin datos"}</span>
+                    </p>
+                    <p>
+                      {formatNumber(sedeInsights?.bestSedeByAppointments?.totalAppointments ?? 0)} citas registradas con {formatNumber(sedeInsights?.bestSedeByAppointments?.upcomingAppointments ?? 0)} proximas.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border p-3">
+                    <p>
+                      No-show global: <span className="font-medium text-foreground">{formatNumber(report?.efficiency.noShowRatePct ?? 0)}%</span>
+                    </p>
+                    <p>
+                      Retencion clientes: <span className="font-medium text-foreground">{formatNumber(report?.clientsAndStaff.retention.retentionRatePct ?? 0)}%</span>
+                    </p>
+                    <p>
+                      Ticket promedio por cliente: <span className="font-medium text-foreground">{formatCurrency(report?.income.averageTicketPerClient ?? 0)}</span>
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </>
         )}
       </main>
     </div>
@@ -834,87 +929,10 @@ function MetricCard({
         {icon}
       </CardHeader>
       <CardContent className="px-3 pb-2 pt-0 sm:px-6 sm:pb-4 sm:pt-2">
-        <div className="text-[2rem] font-bold leading-none tracking-tight sm:text-3xl">{value}</div>
-        <p className="mt-1 hidden line-clamp-2 text-[11px] text-muted-foreground sm:mt-2 sm:block sm:text-xs">{description}</p>
-      </CardContent>
-    </Card>
-  )
-}
-
-function BusinessInsights({
-  completionRate,
-  occupancyRate,
-  revenuePerEmployee,
-  activeClients,
-  newClients,
-  clientsWithUpcomingAppointments,
-  insights,
-  hasData,
-}: {
-  completionRate: number
-  occupancyRate: number
-  revenuePerEmployee: number
-  activeClients: number
-  newClients: number
-  clientsWithUpcomingAppointments: number
-  insights: {
-    topEmployee: EmployeeSummary | null
-    topClient: ClientSummary | null
-    uniqueServiceCount: number
-    serviceCoverage: number
-  }
-  hasData: boolean
-}) {
-  if (!hasData) {
-    return <EmptyChartState message="No hay información suficiente para generar insights del negocio." />
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Insights del negocio</CardTitle>
-        <CardDescription>Lectura rápida de salud operativa y desempeño comercial.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-3 rounded-lg border p-4">
-          <p className="text-sm font-medium">Rendimiento operativo</p>
-          <div className="grid gap-2 text-sm text-muted-foreground">
-            <div className="flex items-center justify-between">
-              <span>Tasa de finalización</span>
-              <Badge variant="secondary">{completionRate}%</Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>Carga de agenda</span>
-              <Badge variant="secondary">{occupancyRate}%</Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>Ingreso promedio por empleado</span>
-              <Badge variant="secondary">{formatCurrency(revenuePerEmployee)}</Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>Cobertura de servicios</span>
-              <Badge variant="secondary">{Math.round(insights.serviceCoverage * 100)}%</Badge>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3 rounded-lg border p-4">
-          <p className="text-sm font-medium">Hallazgos comerciales</p>
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              Top empleado: <span className="font-medium text-foreground">{insights.topEmployee?.name ?? "Sin datos"}</span>
-              {insights.topEmployee ? ` (${formatCurrency(insights.topEmployee.totalRevenue)})` : ""}
-            </p>
-            <p>
-              Top cliente: <span className="font-medium text-foreground">{insights.topClient?.name ?? "Sin datos"}</span>
-              {insights.topClient ? ` (${formatCurrency(insights.topClient.totalSpent)})` : ""}
-            </p>
-            <p>Servicios únicos cubiertos: {formatNumber(insights.uniqueServiceCount)}</p>
-            <p>Clientes activos (ventana): {formatNumber(activeClients)}</p>
-            <p>Nuevos clientes (ventana): {formatNumber(newClients)}</p>
-            <p>Clientes con próximas citas: {formatNumber(clientsWithUpcomingAppointments)}</p>
-          </div>
-        </div>
+        <div className="line-clamp-1 text-[1.15rem] font-bold leading-none tracking-tight sm:text-2xl">{value}</div>
+        <p className="mt-1 hidden line-clamp-2 text-[11px] text-muted-foreground sm:mt-2 sm:block sm:text-xs">
+          {description}
+        </p>
       </CardContent>
     </Card>
   )
@@ -927,8 +945,8 @@ function EmptyChartState({ message }: { message: string }) {
 function DashboardSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, index) => (
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, index) => (
           <Card key={`metric-${index}`}>
             <CardHeader className="space-y-2">
               <Skeleton className="h-4 w-32" />
@@ -948,7 +966,7 @@ function DashboardSkeleton() {
             <Skeleton className="h-4 w-64" />
           </CardHeader>
           <CardContent>
-            <Skeleton className="h-[240px] w-full" />
+            <Skeleton className="h-[280px] w-full" />
           </CardContent>
         </Card>
         <Card>
@@ -957,7 +975,28 @@ function DashboardSkeleton() {
             <Skeleton className="h-4 w-64" />
           </CardHeader>
           <CardContent>
-            <Skeleton className="h-[240px] w-full" />
+            <Skeleton className="h-[280px] w-full" />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="space-y-2">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-[280px] w-full" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="space-y-2">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-[280px] w-full" />
           </CardContent>
         </Card>
       </div>

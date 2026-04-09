@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { getAvailabilitySlots } from "@/lib/bookings"
+import { getAvailabilitySlots, getAvailabilitySlotsWithoutPreference } from "@/lib/bookings"
 import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 
 const querySchema = z.object({
   serviceId: z.coerce.number().int().positive(),
-  barberId: z.coerce.number().int().positive(),
+  barberId: z.coerce.number().int().positive().optional(),
+  sedeId: z.coerce.number().int().positive().optional(),
   excludeAppointmentId: z.coerce.number().int().positive().optional(),
   date: z
     .string()
@@ -20,20 +21,31 @@ export async function GET(request: Request) {
     const url = new URL(request.url)
     const rawParams = {
       serviceId: url.searchParams.get("serviceId"),
-      barberId: url.searchParams.get("barberId"),
+      barberId: url.searchParams.get("barberId") ?? undefined,
+      sedeId: url.searchParams.get("sedeId") ?? undefined,
       excludeAppointmentId: url.searchParams.get("excludeAppointmentId") ?? undefined,
       date: url.searchParams.get("date"),
     }
 
     const params = querySchema.parse(rawParams)
 
-    const slots = await getAvailabilitySlots({
-      serviceId: params.serviceId,
-      employeeId: params.barberId,
-      date: params.date,
-      excludeAppointmentId: params.excludeAppointmentId,
-      tenantSchema,
-    })
+    const slots =
+      typeof params.barberId === "number"
+        ? await getAvailabilitySlots({
+            serviceId: params.serviceId,
+            employeeId: params.barberId,
+            sedeId: params.sedeId,
+            date: params.date,
+            excludeAppointmentId: params.excludeAppointmentId,
+            tenantSchema,
+          })
+        : await getAvailabilitySlotsWithoutPreference({
+            serviceId: params.serviceId,
+            sedeId: params.sedeId,
+            date: params.date,
+            excludeAppointmentId: params.excludeAppointmentId,
+            tenantSchema,
+          })
 
     return NextResponse.json({ slots })
   } catch (error) {

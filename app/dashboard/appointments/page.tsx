@@ -1,17 +1,21 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { format, isSameDay, startOfDay, startOfToday } from "date-fns"
 import { es } from "date-fns/locale"
 import {
+  CalendarPlus,
   CheckCircle2,
   CalendarX,
   Clock,
-  DollarSign,
+  FileText,
+  MapPin,
+  Navigation,
   RefreshCcw,
-  Scissors,
+  Route,
   Star,
-  User as UserIcon,
+  Store,
   XCircle,
 } from "lucide-react"
 
@@ -144,6 +148,78 @@ function getPaymentStatusClass(status: string | null | undefined, isPaid: boolea
   return "bg-amber-100 text-amber-900 border-transparent"
 }
 
+function toGoogleCalendarDate(value: Date): string {
+  return value.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")
+}
+
+function buildGoogleCalendarLink(appointment: Appointment): string {
+  const startInstant = new Date(appointment.start)
+  const endInstant = appointment.end
+    ? new Date(appointment.end)
+    : new Date(startInstant.getTime() + 60 * 60 * 1000)
+
+  const title = `Cita: ${appointment.service.name}`
+  const location = [
+    appointment.sede?.name,
+    appointment.sede?.address,
+    appointment.sede?.city,
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join(", ")
+
+  const details = [
+    `Profesional: ${appointment.barber.name}`,
+    `Estado: ${statusLabels[appointment.status] ?? appointment.status}`,
+    appointment.sede?.phone ? `Teléfono sede: ${appointment.sede.phone}` : null,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n")
+
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: `${toGoogleCalendarDate(startInstant)}/${toGoogleCalendarDate(endInstant)}`,
+  })
+
+  if (details.length > 0) {
+    params.set("details", details)
+  }
+
+  if (location.length > 0) {
+    params.set("location", location)
+  }
+
+  return `https://calendar.google.com/calendar/render?${params.toString()}`
+}
+
+function buildGoogleMapsLink(appointment: Appointment): string | null {
+  const latitude = appointment.sede?.latitude
+  const longitude = appointment.sede?.longitude
+
+  if (
+    typeof latitude === "number" &&
+    Number.isFinite(latitude) &&
+    typeof longitude === "number" &&
+    Number.isFinite(longitude)
+  ) {
+    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`
+  }
+
+  const addressQuery = [
+    appointment.sede?.name,
+    appointment.sede?.address,
+    appointment.sede?.city,
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join(", ")
+
+  if (!addressQuery) {
+    return null
+  }
+
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressQuery)}`
+}
+
 export default function AppointmentsPage() {
   const { toast } = useToast()
   const [now, setNow] = useState(() => Date.now())
@@ -158,6 +234,10 @@ export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState<Record<Scope, Appointment[]>>({
     upcoming: [],
     history: [],
+  })
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState<Record<Scope, number | null>>({
+    upcoming: null,
+    history: null,
   })
   const [isLoading, setIsLoading] = useState<Record<Scope, boolean>>({
     upcoming: true,
@@ -298,6 +378,35 @@ export default function AppointmentsPage() {
     }
     fetchAppointments("history", statusFilter.history)
   }, [userId, statusFilter.history, fetchAppointments])
+
+  useEffect(() => {
+    setSelectedAppointmentId((current) => {
+      let changed = false
+      const next = { ...current }
+
+      ;(["upcoming", "history"] as const).forEach((scope) => {
+        const items = appointments[scope]
+
+        if (items.length === 0) {
+          if (next[scope] !== null) {
+            next[scope] = null
+            changed = true
+          }
+          return
+        }
+
+        const hasCurrentSelection =
+          typeof next[scope] === "number" && items.some((item) => item.id === next[scope])
+
+        if (!hasCurrentSelection) {
+          next[scope] = items[0]?.id ?? null
+          changed = true
+        }
+      })
+
+      return changed ? next : current
+    })
+  }, [appointments])
 
   const refreshAll = useCallback(() => {
     if (!userId) {
@@ -770,9 +879,14 @@ export default function AppointmentsPage() {
   const renderAppointments = (scope: Scope) => {
     if (isLoading[scope]) {
       return (
-        <div className="grid gap-3">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <Skeleton key={index} className="h-24 w-full rounded-2xl" />
+            ))}
+          </div>
           {Array.from({ length: 3 }).map((_, index) => (
-            <Skeleton key={index} className="h-28 w-full rounded-2xl" />
+            <Skeleton key={index} className="h-[480px] w-full rounded-2xl" />
           ))}
         </div>
       )
@@ -831,127 +945,291 @@ export default function AppointmentsPage() {
       )
     }
 
+    const items = appointments[scope]
+    const selected =
+      items.find((item) => item.id === selectedAppointmentId[scope]) ??
+      items[0] ??
+      null
+
+    if (!selected) {
+      return null
+    }
+
+    const selectedStartDate = new Date(selected.start)
+    const selectedEndDate = selected.end ? new Date(selected.end) : null
+    const selectedDateLabel = format(selectedStartDate, "EEEE d 'de' MMMM", { locale: es })
+    const selectedTimeLabel = format(selectedStartDate, "HH:mm")
+    const selectedDurationMinutes = selectedEndDate
+      ? Math.max(5, Math.round((selectedEndDate.getTime() - selectedStartDate.getTime()) / 60000))
+      : null
+    const selectedDurationLabel = selectedDurationMinutes
+      ? `${selectedDurationMinutes} min`
+      : "Duración no disponible"
+    const selectedStatusLabel = statusLabels[selected.status] ?? selected.status
+    const selectedStatusClass = statusClassNameMap[selected.status] ?? "bg-muted text-foreground"
+    const selectedPriceLabel =
+      selected.service.price != null
+        ? currencyFormatter.format(Number(selected.service.price))
+        : "A convenir"
+    const selectedPaidAmountLabel =
+      selected.payment?.amount != null && Number.isFinite(selected.payment.amount)
+        ? currencyFormatter.format(Number(selected.payment.amount))
+        : null
+    const selectedAmountLabel = selectedPaidAmountLabel ?? selectedPriceLabel
+    const selectedPaymentStatusLabel = getPaymentStatusLabel(selected.payment?.status, Boolean(selected.payment?.isPaid))
+    const selectedPaymentStatusClass = getPaymentStatusClass(selected.payment?.status, Boolean(selected.payment?.isPaid))
+
+    const canManageSelected = MANAGEABLE_STATUSES.includes(
+      selected.status as AppointmentStatus,
+    )
+    const canFinalizeSelected = canFinalizeAppointment(selected)
+    const selectedAddressLabel = [selected.sede?.address, selected.sede?.city]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join(", ")
+    const googleCalendarUrl = buildGoogleCalendarLink(selected)
+    const googleMapsUrl = buildGoogleMapsLink(selected)
+    const establishmentInfoUrl =
+      typeof selected.sede?.id === "number"
+        ? `/dashboard/appointments/sede/${selected.sede.id}`
+        : null
+
     return (
-      <div className="space-y-3">
-        {appointments[scope].map((appointment) => {
-          const startDate = new Date(appointment.start)
-          const endDate = appointment.end ? new Date(appointment.end) : null
-          const dateLabel = format(startDate, "EEEE d 'de' MMMM", { locale: es })
-          const timeLabel = format(startDate, "HH:mm")
-          const durationMinutes = endDate
-            ? Math.max(5, Math.round((endDate.getTime() - startDate.getTime()) / 60000))
-            : null
-          const durationLabel = durationMinutes ? `${durationMinutes} min` : "Duración no disponible"
-          const statusLabel = statusLabels[appointment.status] ?? appointment.status
-          const statusClass = statusClassNameMap[appointment.status] ?? "bg-muted text-foreground"
-          const priceLabel =
-            appointment.service.price != null
-              ? currencyFormatter.format(Number(appointment.service.price))
-              : "A convenir"
-          const paidAmountLabel =
-            appointment.payment?.amount != null && Number.isFinite(appointment.payment.amount)
-              ? currencyFormatter.format(Number(appointment.payment.amount))
-              : null
-          const amountLabel = paidAmountLabel ?? priceLabel
-          const paymentStatusLabel = getPaymentStatusLabel(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
-          const paymentStatusClass = getPaymentStatusClass(appointment.payment?.status, Boolean(appointment.payment?.isPaid))
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-muted-foreground">
+            {scope === "upcoming" ? "Próximas" : "Historial"} ({items.length})
+          </p>
+          {items.map((appointment) => {
+            const startDate = new Date(appointment.start)
+            const dateLabel = format(startDate, "EEE d 'de' MMM", { locale: es })
+            const timeLabel = format(startDate, "HH:mm")
+            const isSelected = appointment.id === selected.id
+            const statusLabel = statusLabels[appointment.status] ?? appointment.status
+            const statusClass = statusClassNameMap[appointment.status] ?? "bg-muted text-foreground"
+            const compactAmount =
+              appointment.payment?.amount != null && Number.isFinite(appointment.payment.amount)
+                ? currencyFormatter.format(Number(appointment.payment.amount))
+                : appointment.service.price != null
+                  ? currencyFormatter.format(Number(appointment.service.price))
+                  : "A convenir"
 
-          const canManage = MANAGEABLE_STATUSES.includes(
-            appointment.status as AppointmentStatus,
-          )
-          const canFinalize = canFinalizeAppointment(appointment)
+            return (
+              <button
+                key={appointment.id}
+                type="button"
+                onClick={() => {
+                  setSelectedAppointmentId((current) => ({ ...current, [scope]: appointment.id }))
+                }}
+                className={cn(
+                  "w-full rounded-2xl border px-4 py-3 text-left transition-all",
+                  "hover:border-foreground/30 hover:bg-muted/20",
+                  isSelected && "border-foreground bg-muted/20 shadow-sm",
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="line-clamp-1 text-sm font-semibold sm:text-base">{appointment.service.name}</p>
+                  <Badge className={cn("uppercase", statusClass)}>{statusLabel}</Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">{dateLabel} · {timeLabel}</p>
+                <p className="mt-2 text-xs text-muted-foreground">{compactAmount} · {appointment.barber.name}</p>
+              </button>
+            )
+          })}
+        </div>
 
-          return (
-            <Card key={appointment.id} className="border border-border/60 shadow-sm">
-              <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="space-y-1">
-                  <Badge className={cn("w-fit uppercase", statusClass)}>{statusLabel}</Badge>
-                  <CardTitle className="text-xl">{appointment.service.name}</CardTitle>
-                  <CardDescription>
-                    {dateLabel} · {timeLabel}
-                  </CardDescription>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="secondary" className="flex items-center gap-1">
-                    <Scissors className="size-4" /> {appointment.barber.name}
-                  </Badge>
-                  <Badge variant="outline" className="flex items-center gap-1">
-                    <Clock className="size-4" /> {durationLabel}
-                  </Badge>
-                  <Badge variant="outline" className="flex items-center gap-1">
-                    <DollarSign className="size-4" /> {amountLabel}
-                  </Badge>
-                  <Badge className={cn("flex items-center gap-1", paymentStatusClass)}>
-                    Pago: {paymentStatusLabel}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
-                  <span className="flex items-center gap-2">
-                    <UserIcon className="size-4" />
-                    <span>{appointment.barber.name}</span>
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <Scissors className="size-4" />
-                    <span>{appointment.service.name}</span>
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <Clock className="size-4" />
-                    <span>
-                      {format(startDate, "HH:mm", { locale: es })}
-                      {endDate ? ` - ${format(endDate, "HH:mm", { locale: es })}` : ""}
+        <Card className="overflow-hidden border border-border/60 shadow-sm">
+          <CardContent className="p-0">
+            <div className="relative overflow-hidden border-b border-border/60 bg-gradient-to-r from-zinc-900 via-zinc-800 to-zinc-900 px-5 py-6 text-zinc-50">
+              <div className="pointer-events-none absolute -right-12 -top-10 h-40 w-40 rounded-full bg-amber-300/20 blur-3xl" />
+              <div className="pointer-events-none absolute -bottom-16 -left-16 h-44 w-44 rounded-full bg-emerald-300/10 blur-3xl" />
+              <div className="relative space-y-2">
+                <Badge className={cn("w-fit uppercase", selectedStatusClass)}>{selectedStatusLabel}</Badge>
+                <h3 className="text-2xl font-semibold">{selected.service.name}</h3>
+                <p className="text-sm text-zinc-200">
+                  {selectedDateLabel} · {selectedTimeLabel}
+                  {selectedEndDate ? ` - ${format(selectedEndDate, "HH:mm")}` : ""}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="space-y-6 p-5">
+                <section className="space-y-3">
+                  <h4 className="text-base font-semibold">Resumen</h4>
+                  <div className="space-y-2 rounded-xl border border-border/60 bg-muted/15 p-4 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Profesional</span>
+                      <span className="font-medium">{selected.barber.name}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Duración</span>
+                      <span className="font-medium">{selectedDurationLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Pago</span>
+                      <Badge className={cn(selectedPaymentStatusClass)}>Pago: {selectedPaymentStatusLabel}</Badge>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-2">
+                      <span className="font-semibold">Total</span>
+                      <span className="text-base font-semibold">{selectedAmountLabel}</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <h4 className="flex items-center gap-2 text-base font-semibold">
+                    <FileText className="size-4" />
+                    Información importante
+                  </h4>
+                  <div className="space-y-2 rounded-xl border border-border/60 bg-background p-4 text-sm text-muted-foreground">
+                    <p>Te recomendamos llegar 10 minutos antes para iniciar tu atención puntualmente.</p>
+                    <p>Si necesitas cambios de último minuto puedes reprogramar o cancelar desde esta misma vista.</p>
+                    <p>Referencia de reserva: <span className="font-medium text-foreground">B0{String(selected.id).padStart(6, "0")}</span></p>
+                  </div>
+                </section>
+              </div>
+
+              <aside className="space-y-5 border-t border-border/60 bg-muted/10 p-5 lg:border-l lg:border-t-0">
+                <section className="space-y-2 rounded-xl border border-border/60 bg-background p-3">
+                  <a
+                    href={googleCalendarUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition hover:bg-muted/40"
+                  >
+                    <span className="flex size-9 items-center justify-center rounded-full bg-violet-100 text-violet-700">
+                      <CalendarPlus className="size-4" />
                     </span>
-                  </span>
-                </div>
-                {canManage && (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openRescheduleDialog(appointment)}
+                    <span>Añadir al calendario</span>
+                  </a>
+
+                  {googleMapsUrl ? (
+                    <a
+                      href={googleMapsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition hover:bg-muted/40"
                     >
-                      <RefreshCcw className="mr-1 size-4" /> Reprogramar
-                    </Button>
-                    {canFinalize && (
+                      <span className="flex size-9 items-center justify-center rounded-full bg-indigo-100 text-indigo-700">
+                        <Navigation className="size-4" />
+                      </span>
+                      <span>Cómo llegar</span>
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm font-medium text-muted-foreground"
+                    >
+                      <span className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <Navigation className="size-4" />
+                      </span>
+                      <span>Cómo llegar</span>
+                    </button>
+                  )}
+
+                  {establishmentInfoUrl ? (
+                    <Link
+                      href={establishmentInfoUrl}
+                      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition hover:bg-muted/40"
+                    >
+                      <span className="flex size-9 items-center justify-center rounded-full bg-indigo-100 text-indigo-700">
+                        <Store className="size-4" />
+                      </span>
+                      <span>Información del establecimiento</span>
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm font-medium text-muted-foreground"
+                    >
+                      <span className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <Store className="size-4" />
+                      </span>
+                      <span>Información del establecimiento</span>
+                    </button>
+                  )}
+                </section>
+
+                <section className="space-y-2">
+                  {canManageSelected ? (
+                    <div className="space-y-2">
                       <Button
                         size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          void handleCompleteAppointment(appointment)
-                        }}
-                        disabled={completeLoadingId === appointment.id}
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => openRescheduleDialog(selected)}
                       >
-                        {completeLoadingId === appointment.id ? (
-                          "Finalizando..."
+                        <RefreshCcw className="mr-2 size-4" /> Reprogramar cita
+                      </Button>
+                      {canFinalizeSelected && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="w-full justify-start"
+                          onClick={() => {
+                            void handleCompleteAppointment(selected)
+                          }}
+                          disabled={completeLoadingId === selected.id}
+                        >
+                          {completeLoadingId === selected.id ? (
+                            "Finalizando..."
+                          ) : (
+                            <>
+                              <CheckCircle2 className="mr-2 size-4" /> Finalizar cita
+                            </>
+                          )}
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="w-full justify-start text-destructive hover:text-destructive"
+                        onClick={() => openCancelDialog(selected)}
+                        disabled={cancelLoadingId === selected.id}
+                      >
+                        {cancelLoadingId === selected.id ? (
+                          "Cancelando..."
                         ) : (
                           <>
-                            <CheckCircle2 className="mr-1 size-4" /> Finalizar cita
+                            <XCircle className="mr-2 size-4" /> Cancelar cita
                           </>
                         )}
                       </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => openCancelDialog(appointment)}
-                      disabled={cancelLoadingId === appointment.id}
-                    >
-                      {cancelLoadingId === appointment.id ? (
-                        "Cancelando..."
-                      ) : (
-                        <>
-                          <XCircle className="mr-1 size-4" /> Cancelar
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )
-        })}
+                    </div>
+                  ) : (
+                    <p className="rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-muted-foreground">
+                      Esta cita ya no admite cambios.
+                    </p>
+                  )}
+                </section>
+
+                <section className="rounded-xl border border-border/60 bg-background p-4 text-xs text-muted-foreground">
+                  <p className="flex items-center gap-2 font-medium text-foreground">
+                    <MapPin className="size-4" />
+                    Sede de tu reserva
+                  </p>
+                  <p className="mt-2 text-sm text-foreground">{selected.sede?.name ?? "Sede no disponible"}</p>
+                  <p className="mt-1">{selectedAddressLabel || "Sin dirección registrada"}</p>
+                  {selected.sede?.phone && <p className="mt-1">Tel: {selected.sede.phone}</p>}
+                </section>
+
+                <section className="rounded-xl border border-border/60 bg-background p-4 text-xs text-muted-foreground">
+                  <p className="flex items-center gap-2 font-medium text-foreground">
+                    <Route className="size-4" />
+                    Estado del servicio
+                  </p>
+                  <p className="mt-2">
+                    {scope === "upcoming"
+                      ? "Tu cita está activa. Puedes gestionarla desde este panel."
+                      : "Esta cita pertenece a tu historial de servicios."}
+                  </p>
+                </section>
+              </aside>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }

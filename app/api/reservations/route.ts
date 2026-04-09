@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { cancelAppointment, reserveAppointments } from "@/lib/bookings"
+import { cancelAppointment, reserveAppointments, reserveAppointmentsWithoutPreference } from "@/lib/bookings"
 import { resolveTenantSchemaForRequest } from "@/lib/tenant"
 import { createWompiCheckoutDataForReservation } from "@/lib/wompi"
 
 const reservationSchema = z
   .object({
   userId: z.coerce.number().int().positive(),
+  sedeId: z.coerce.number().int().positive().optional(),
   serviceId: z.coerce.number().int().positive().optional(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(2).optional(),
-  barberId: z.coerce.number().int().positive(),
+  barberId: z.coerce.number().int().positive().optional(),
+  customerComment: z.string().trim().max(1000).optional(),
   paymentMethod: z.enum(["cash", "wompi"]).optional(),
   promoCode: z.string().trim().min(3).max(64).optional(),
   start: z
@@ -40,7 +42,17 @@ export async function POST(request: Request) {
   try {
     const tenantSchema = await resolveTenantSchemaForRequest(request)
     const json = await request.json()
-    const { userId, serviceId, serviceIds, barberId, paymentMethod, promoCode, start } = reservationSchema.parse(json)
+    const {
+      userId,
+      sedeId,
+      serviceId,
+      serviceIds,
+      barberId,
+      customerComment,
+      paymentMethod,
+      promoCode,
+      start,
+    } = reservationSchema.parse(json)
 
     const resolvedServiceIds = Array.isArray(serviceIds)
       ? serviceIds
@@ -50,13 +62,25 @@ export async function POST(request: Request) {
 
     const resolvedPaymentMethod = paymentMethod ?? "cash"
 
-    const appointment = await reserveAppointments({
-      userId,
-      employeeId: barberId,
-      serviceIds: resolvedServiceIds,
-      start,
-      tenantSchema,
-    })
+    const appointment =
+      typeof barberId === "number"
+        ? await reserveAppointments({
+            userId,
+            employeeId: barberId,
+            serviceIds: resolvedServiceIds,
+            start,
+            sedeId,
+            customerComment,
+            tenantSchema,
+          })
+        : await reserveAppointmentsWithoutPreference({
+            userId,
+            serviceIds: resolvedServiceIds,
+            start,
+            sedeId,
+            customerComment,
+            tenantSchema,
+          })
 
     if (resolvedPaymentMethod === "wompi") {
       const firstAppointmentId = appointment.appointmentIds[0]
@@ -150,6 +174,27 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "El servicio seleccionado no existe o no está activo" },
         { status: 404 },
+      )
+    }
+
+    if (code === "SEDE_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "La sede seleccionada no existe o no está activa" },
+        { status: 404 },
+      )
+    }
+
+    if (code === "BARBER_NOT_IN_SEDE") {
+      return NextResponse.json(
+        { error: "El profesional seleccionado no atiende en esta sede" },
+        { status: 409 },
+      )
+    }
+
+    if (code === "SERVICE_NOT_IN_SEDE") {
+      return NextResponse.json(
+        { error: "Uno o más servicios no están disponibles en la sede seleccionada" },
+        { status: 409 },
       )
     }
 

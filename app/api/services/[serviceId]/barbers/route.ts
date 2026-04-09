@@ -30,8 +30,22 @@ export async function GET(
   }
 
   try {
+    const url = new URL(request.url)
+    const rawSedeId = url.searchParams.get("sedeId")
+    const parsedSedeId =
+      rawSedeId != null && rawSedeId.trim().length > 0
+        ? Number.parseInt(rawSedeId, 10)
+        : null
+
+    if (rawSedeId != null && rawSedeId.trim().length > 0 && (!Number.isInteger(parsedSedeId) || parsedSedeId <= 0)) {
+      return jsonError(400, {
+        code: "SEDE_ID_INVALID",
+        error: "Sede inválida.",
+      })
+    }
+
     const tenantSchema = await resolveTenantSchemaForRequest(request)
-    const barbers = await getBarbersForService(parsedServiceId, tenantSchema)
+    const barbers = await getBarbersForService(parsedServiceId, tenantSchema, parsedSedeId)
     return NextResponse.json({ ok: true, barbers }, { status: 200 })
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {

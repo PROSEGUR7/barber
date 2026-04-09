@@ -24,6 +24,7 @@ const ADMIN_SECTION_LABELS: Record<string, string> = {
   empleados: "Empleados",
   clientes: "Clientes",
   servicios: "Servicios",
+  sedes: "Sedes",
   planes: "Planes",
   pagos: "Pagos y Facturación",
   ajustes: "Ajustes / Configuración",

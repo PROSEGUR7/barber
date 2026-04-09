@@ -1,6 +1,6 @@
 import { pool } from "@/lib/db"
-import { createUser, type AuthUser, UserAlreadyExistsError } from "@/lib/auth"
-import { tenantSql } from "@/lib/tenant"
+import { BASE_TENANT_SCHEMA, createUser, type AuthUser, UserAlreadyExistsError } from "@/lib/auth"
+import { normalizeTenantSchema, tenantSql } from "@/lib/tenant"
 
 export type EmployeeSummary = {
   id: number
@@ -195,6 +195,45 @@ export type AdminRevenueReport = {
   income: AdminIncomeMetrics
   efficiency: AdminEfficiencyMetrics
   clientsAndStaff: AdminClientStaffMetrics
+}
+
+export type AdminSedeInsightsScope = "month" | "quarter" | "year"
+
+export type AdminSedeTopServiceInsight = {
+  serviceId: number | null
+  serviceName: string
+  appointments: number
+  revenue: number
+}
+
+export type AdminSedeBusinessInsight = {
+  sedeId: number
+  sedeName: string
+  revenue: number
+  previousRevenue: number
+  growthPct: number | null
+  paidAppointments: number
+  totalAppointments: number
+  upcomingAppointments: number
+  topService: AdminSedeTopServiceInsight | null
+}
+
+export type AdminSedeInsightsReport = {
+  scope: AdminSedeInsightsScope
+  scopeLabel: string
+  currentMonthRevenue: number
+  previousMonthRevenue: number
+  monthlyGrowthPct: number | null
+  bestSedeByRevenue: AdminSedeBusinessInsight | null
+  bestSedeByAppointments: AdminSedeBusinessInsight | null
+  sedes: AdminSedeBusinessInsight[]
+}
+
+export type AdminSedeRevenueSeriesPoint = {
+  bucketStart: string
+  revenue: number
+  paymentsCount: number
+  appointmentsCount: number
 }
 
 export class EmployeeRecordNotFoundError extends Error {
@@ -422,6 +461,29 @@ type TopClientRow = {
   revenue: string | null
 }
 
+type SedeBusinessMetricsRow = {
+  sede_id: number | null
+  sede_nombre: string | null
+  current_revenue: string | null
+  previous_revenue: string | null
+  paid_appointments: string | null
+  total_appointments: string | null
+  upcoming_appointments: string | null
+}
+
+type SedeTopServiceRow = {
+  sede_id: number | null
+  service_id: number | null
+  service_name: string | null
+  appointments: string | null
+  revenue: string | null
+}
+
+type SedeMonthlyRevenueRow = {
+  current_month_revenue: string | null
+  previous_month_revenue: string | null
+}
+
 const PAID_PAYMENT_STATES = [
   "completo",
   "pagado",
@@ -457,6 +519,44 @@ const COMPLETED_APPOINTMENT_STATES = [
 
 const ACTIVE_APPOINTMENT_STATES_SQL = ACTIVE_APPOINTMENT_STATES.map((state) => `'${state}'`).join(", ")
 const COMPLETED_APPOINTMENT_STATES_SQL = COMPLETED_APPOINTMENT_STATES.map((state) => `'${state}'`).join(", ")
+
+const SEDE_INSIGHTS_SCOPE_CONFIG: Record<
+  AdminSedeInsightsScope,
+  {
+    scopeLabel: string
+    revenueCurrentPeriodClause: string
+    revenuePreviousPeriodClause: string
+    appointmentPeriodClause: string
+  }
+> = {
+  month: {
+    scopeLabel: "Mes actual",
+    revenueCurrentPeriodClause:
+      "p.fecha_pago >= date_trunc('month', now()) AND p.fecha_pago < date_trunc('month', now()) + interval '1 month'",
+    revenuePreviousPeriodClause:
+      "p.fecha_pago >= date_trunc('month', now()) - interval '1 month' AND p.fecha_pago < date_trunc('month', now())",
+    appointmentPeriodClause:
+      "a.fecha_cita >= date_trunc('month', now()) AND a.fecha_cita < date_trunc('month', now()) + interval '1 month'",
+  },
+  quarter: {
+    scopeLabel: "Ultimos 3 meses",
+    revenueCurrentPeriodClause:
+      "p.fecha_pago >= date_trunc('month', now()) - interval '2 months' AND p.fecha_pago < date_trunc('month', now()) + interval '1 month'",
+    revenuePreviousPeriodClause:
+      "p.fecha_pago >= date_trunc('month', now()) - interval '5 months' AND p.fecha_pago < date_trunc('month', now()) - interval '2 months'",
+    appointmentPeriodClause:
+      "a.fecha_cita >= date_trunc('month', now()) - interval '2 months' AND a.fecha_cita < date_trunc('month', now()) + interval '1 month'",
+  },
+  year: {
+    scopeLabel: "Ano actual",
+    revenueCurrentPeriodClause:
+      "p.fecha_pago >= date_trunc('year', now()) AND p.fecha_pago < date_trunc('year', now()) + interval '1 year'",
+    revenuePreviousPeriodClause:
+      "p.fecha_pago >= date_trunc('year', now()) - interval '1 year' AND p.fecha_pago < date_trunc('year', now())",
+    appointmentPeriodClause:
+      "a.fecha_cita >= date_trunc('year', now()) AND a.fecha_cita < date_trunc('year', now()) + interval '1 year'",
+  },
+}
 
 function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
   const serviceIds = Array.isArray(row.service_ids)
@@ -2482,5 +2582,772 @@ export async function getAdminRevenueReport(options?: {
       barberPerformance,
       topClients,
     },
+  }
+}
+
+export async function getAdminSedeInsightsReport(options?: {
+  tenantSchema?: string | null
+  scope?: AdminSedeInsightsScope
+}): Promise<AdminSedeInsightsReport> {
+  const scope = options?.scope ?? "month"
+  const scopeConfig = SEDE_INSIGHTS_SCOPE_CONFIG[scope]
+
+  await assertSedesModuleAvailable(options?.tenantSchema)
+
+  const sedeMetricsResult = await pool.query<SedeBusinessMetricsRow>(
+    tenantSql(
+      `WITH revenue_by_sede AS (
+         SELECT
+           a.sede_id,
+           COALESCE(
+             SUM(
+               CASE
+                 WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+                 ELSE COALESCE(s.precio, 0)
+               END
+             ) FILTER (WHERE ${scopeConfig.revenueCurrentPeriodClause}),
+             0
+           )::text AS current_revenue,
+           COALESCE(
+             SUM(
+               CASE
+                 WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+                 ELSE COALESCE(s.precio, 0)
+               END
+             ) FILTER (WHERE ${scopeConfig.revenuePreviousPeriodClause}),
+             0
+           )::text AS previous_revenue,
+           COUNT(DISTINCT p.agendamiento_id) FILTER (WHERE ${scopeConfig.revenueCurrentPeriodClause})::text AS paid_appointments
+         FROM tenant_base.pagos p
+         LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+         LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+         WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+           AND p.fecha_pago IS NOT NULL
+         GROUP BY a.sede_id
+       ),
+       appointments_by_sede AS (
+         SELECT
+           a.sede_id,
+           COUNT(*) FILTER (WHERE ${scopeConfig.appointmentPeriodClause})::text AS total_appointments,
+           COUNT(*) FILTER (
+             WHERE a.fecha_cita >= NOW()
+               AND LOWER(COALESCE(a.estado::text, '')) NOT IN ('cancelada', 'cancelado', 'cancel')
+           )::text AS upcoming_appointments
+         FROM tenant_base.agendamientos a
+         GROUP BY a.sede_id
+       )
+       SELECT
+         sd.id AS sede_id,
+         sd.nombre AS sede_nombre,
+         COALESCE(rb.current_revenue, '0') AS current_revenue,
+         COALESCE(rb.previous_revenue, '0') AS previous_revenue,
+         COALESCE(rb.paid_appointments, '0') AS paid_appointments,
+         COALESCE(ab.total_appointments, '0') AS total_appointments,
+         COALESCE(ab.upcoming_appointments, '0') AS upcoming_appointments
+       FROM tenant_base.sedes sd
+       LEFT JOIN revenue_by_sede rb ON rb.sede_id = sd.id
+       LEFT JOIN appointments_by_sede ab ON ab.sede_id = sd.id
+       ORDER BY
+         COALESCE(rb.current_revenue, '0')::numeric DESC,
+         COALESCE(ab.total_appointments, '0')::numeric DESC,
+         sd.nombre ASC`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const topServiceResult = await pool.query<SedeTopServiceRow>(
+    tenantSql(
+      `WITH service_performance AS (
+         SELECT
+           a.sede_id,
+           sv.id AS service_id,
+           sv.nombre AS service_name,
+           COUNT(DISTINCT a.id) FILTER (
+             WHERE ${scopeConfig.appointmentPeriodClause}
+               AND (
+                 LOWER(COALESCE(a.estado::text, '')) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                 OR LOWER(COALESCE(lp.estado_pago, '')) IN (${PAID_PAYMENT_STATES_SQL})
+               )
+           )::text AS appointments,
+           COALESCE(
+             SUM(
+               CASE
+                 WHEN COALESCE(lp.monto, 0) > 0 THEN lp.monto
+                 ELSE COALESCE(sv.precio, 0)
+               END
+             ) FILTER (
+               WHERE ${scopeConfig.appointmentPeriodClause}
+                 AND (
+                   LOWER(COALESCE(a.estado::text, '')) IN (${COMPLETED_APPOINTMENT_STATES_SQL})
+                   OR LOWER(COALESCE(lp.estado_pago, '')) IN (${PAID_PAYMENT_STATES_SQL})
+                 )
+             ),
+             0
+           )::text AS revenue
+         FROM tenant_base.agendamientos a
+         LEFT JOIN tenant_base.servicios sv ON sv.id = a.servicio_id
+         LEFT JOIN LATERAL (
+           SELECT
+             p.estado::text AS estado_pago,
+             p.monto
+           FROM tenant_base.pagos p
+           WHERE p.agendamiento_id = a.id
+           ORDER BY p.fecha_pago DESC NULLS LAST, p.id DESC
+           LIMIT 1
+         ) lp ON TRUE
+         WHERE a.sede_id IS NOT NULL
+         GROUP BY a.sede_id, sv.id, sv.nombre
+       ),
+       ranked AS (
+         SELECT
+           sp.sede_id,
+           sp.service_id,
+           sp.service_name,
+           sp.appointments,
+           sp.revenue,
+           ROW_NUMBER() OVER (
+             PARTITION BY sp.sede_id
+             ORDER BY
+               COALESCE(sp.revenue, '0')::numeric DESC,
+               COALESCE(sp.appointments, '0')::numeric DESC,
+               sp.service_name ASC NULLS LAST
+           ) AS ranking
+         FROM service_performance sp
+         WHERE COALESCE(sp.revenue, '0')::numeric > 0
+            OR COALESCE(sp.appointments, '0')::numeric > 0
+       )
+       SELECT
+         sede_id,
+         service_id,
+         service_name,
+         appointments,
+         revenue
+       FROM ranked
+       WHERE ranking = 1`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const monthlyRevenueResult = await pool.query<SedeMonthlyRevenueRow>(
+    tenantSql(
+      `SELECT
+         COALESCE(
+           SUM(
+             CASE
+               WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+               ELSE COALESCE(s.precio, 0)
+             END
+           ) FILTER (
+             WHERE p.fecha_pago >= date_trunc('month', now())
+               AND p.fecha_pago < date_trunc('month', now()) + interval '1 month'
+           ),
+           0
+         )::text AS current_month_revenue,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+               ELSE COALESCE(s.precio, 0)
+             END
+           ) FILTER (
+             WHERE p.fecha_pago >= date_trunc('month', now()) - interval '1 month'
+               AND p.fecha_pago < date_trunc('month', now())
+           ),
+           0
+         )::text AS previous_month_revenue
+       FROM tenant_base.pagos p
+       LEFT JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+       WHERE LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+         AND p.fecha_pago IS NOT NULL`,
+      options?.tenantSchema,
+    ),
+  )
+
+  const topServiceBySede = new Map<number, AdminSedeTopServiceInsight>()
+  for (const row of topServiceResult.rows) {
+    if (!Number.isInteger(row.sede_id)) {
+      continue
+    }
+
+    topServiceBySede.set(Number(row.sede_id), {
+      serviceId: row.service_id,
+      serviceName: row.service_name?.trim() || "Servicio sin nombre",
+      appointments: Number(row.appointments ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    })
+  }
+
+  const sedes = sedeMetricsResult.rows
+    .filter((row) => Number.isInteger(row.sede_id))
+    .map((row) => {
+      const sedeId = Number(row.sede_id)
+      const revenue = Number(row.current_revenue ?? 0)
+      const previousRevenue = Number(row.previous_revenue ?? 0)
+      const growthPct =
+        previousRevenue > 0
+          ? Number((((revenue - previousRevenue) / previousRevenue) * 100).toFixed(2))
+          : revenue > 0
+            ? 100
+            : null
+
+      return {
+        sedeId,
+        sedeName: row.sede_nombre?.trim() || `Sede ${sedeId}`,
+        revenue,
+        previousRevenue,
+        growthPct,
+        paidAppointments: Number(row.paid_appointments ?? 0),
+        totalAppointments: Number(row.total_appointments ?? 0),
+        upcomingAppointments: Number(row.upcoming_appointments ?? 0),
+        topService: topServiceBySede.get(sedeId) ?? null,
+      }
+    })
+
+  const bestSedeByRevenue =
+    [...sedes].sort((a, b) => {
+      if (b.revenue !== a.revenue) {
+        return b.revenue - a.revenue
+      }
+
+      if (b.paidAppointments !== a.paidAppointments) {
+        return b.paidAppointments - a.paidAppointments
+      }
+
+      return b.totalAppointments - a.totalAppointments
+    })[0] ?? null
+
+  const bestSedeByAppointments =
+    [...sedes].sort((a, b) => {
+      if (b.totalAppointments !== a.totalAppointments) {
+        return b.totalAppointments - a.totalAppointments
+      }
+
+      if (b.paidAppointments !== a.paidAppointments) {
+        return b.paidAppointments - a.paidAppointments
+      }
+
+      return b.revenue - a.revenue
+    })[0] ?? null
+
+  const currentMonthRevenue = Number(monthlyRevenueResult.rows[0]?.current_month_revenue ?? 0)
+  const previousMonthRevenue = Number(monthlyRevenueResult.rows[0]?.previous_month_revenue ?? 0)
+  const monthlyGrowthPct =
+    previousMonthRevenue > 0
+      ? Number((((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100).toFixed(2))
+      : currentMonthRevenue > 0
+        ? 100
+        : null
+
+  return {
+    scope,
+    scopeLabel: scopeConfig.scopeLabel,
+    currentMonthRevenue,
+    previousMonthRevenue,
+    monthlyGrowthPct,
+    bestSedeByRevenue,
+    bestSedeByAppointments,
+    sedes,
+  }
+}
+
+export async function getAdminSedeRevenueSeries(options: {
+  tenantSchema?: string | null
+  sedeId: number
+  granularity?: AdminReportsGranularity
+}): Promise<AdminSedeRevenueSeriesPoint[]> {
+  const granularity = options.granularity ?? "day"
+
+  const granularitySql: Record<AdminReportsGranularity, string> = {
+    day: "day",
+    month: "month",
+    year: "year",
+  }
+
+  const periodClauseSql: Record<AdminReportsGranularity, string> = {
+    day: "p.fecha_pago >= date_trunc('day', now()) - interval '29 days'",
+    month: "p.fecha_pago >= date_trunc('month', now()) - interval '11 months'",
+    year: "p.fecha_pago >= date_trunc('year', now()) - interval '4 years'",
+  }
+
+  const result = await pool.query<AdminRevenueSeriesRow>(
+    tenantSql(
+      `SELECT
+         date_trunc('${granularitySql[granularity]}', p.fecha_pago) AS bucket_start,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN COALESCE(p.monto, 0) > 0 THEN p.monto
+               ELSE COALESCE(s.precio, 0)
+             END
+           ),
+           0
+         )::text AS revenue,
+         COUNT(p.id)::text AS payments_count,
+         COUNT(DISTINCT p.agendamiento_id)::text AS appointments_count
+       FROM tenant_base.pagos p
+       JOIN tenant_base.agendamientos a ON a.id = p.agendamiento_id
+       LEFT JOIN tenant_base.servicios s ON s.id = a.servicio_id
+       WHERE a.sede_id = $1
+         AND LOWER(p.estado::text) IN (${PAID_PAYMENT_STATES_SQL})
+         AND p.fecha_pago IS NOT NULL
+         AND ${periodClauseSql[granularity]}
+       GROUP BY 1
+       ORDER BY 1 ASC`,
+      options.tenantSchema,
+    ),
+    [options.sedeId],
+  )
+
+  return result.rows
+    .filter((row) => row.bucket_start)
+    .map((row) => ({
+      bucketStart: row.bucket_start!.toISOString(),
+      revenue: Number(row.revenue ?? 0),
+      paymentsCount: Number(row.payments_count ?? 0),
+      appointmentsCount: Number(row.appointments_count ?? 0),
+    }))
+}
+
+export type AdminSedeSummary = {
+  id: number
+  name: string
+  address: string | null
+  city: string | null
+  latitude: number | null
+  longitude: number | null
+  phone: string | null
+  reference: string | null
+  photoUrls: string[]
+  active: boolean
+  totalEmployees: number
+  totalServices: number
+  upcomingAppointments: number
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+type AdminSedeRow = {
+  id: number
+  nombre: string
+  direccion: string | null
+  ciudad: string | null
+  latitud: string | null
+  longitud: string | null
+  telefono: string | null
+  referencia: string | null
+  activo: boolean
+  created_at: Date | null
+  updated_at: Date | null
+  total_empleados: string | null
+  total_servicios: string | null
+  proximas_citas: string | null
+}
+
+export class SedeRecordNotFoundError extends Error {
+  constructor(message = "SEDE_RECORD_NOT_FOUND") {
+    super(message)
+    this.name = "SedeRecordNotFoundError"
+  }
+}
+
+export class SedesModuleNotAvailableError extends Error {
+  constructor(message = "SEDES_MODULE_NOT_AVAILABLE") {
+    super(message)
+    this.name = "SedesModuleNotAvailableError"
+  }
+}
+
+function resolveTenantSchemaForAdmin(tenantSchema?: string | null): string {
+  return normalizeTenantSchema(tenantSchema) ?? BASE_TENANT_SCHEMA
+}
+
+const SEDE_MEDIA_MARKER = "[[SOFTDATAI_SEDE_MEDIA]]"
+const MAX_SEDE_PHOTOS = 5
+
+function normalizeSedePhotoUrl(raw: string): string | null {
+  const normalizedRaw = raw.trim()
+  if (!normalizedRaw) {
+    return null
+  }
+
+  const pathOnly = normalizedRaw.split("?")[0]?.split("#")[0] ?? normalizedRaw
+  const isLocalUploadPath =
+    pathOnly.startsWith("/uploads/sedes/") &&
+    !pathOnly.includes("..") &&
+    /\.(jpg|jpeg|png|webp|gif)$/i.test(pathOnly)
+
+  if (isLocalUploadPath) {
+    return normalizedRaw
+  }
+
+  try {
+    const parsed = new URL(normalizedRaw)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null
+    }
+
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+function normalizeSedePhotoUrls(photoUrls: Array<string | null | undefined> | null | undefined): string[] {
+  const normalized: string[] = []
+  const unique = new Set<string>()
+
+  for (const candidate of photoUrls ?? []) {
+    const normalizedUrl = normalizeSedePhotoUrl(candidate ?? "")
+    if (!normalizedUrl) {
+      continue
+    }
+
+    if (unique.has(normalizedUrl)) {
+      continue
+    }
+
+    unique.add(normalizedUrl)
+    normalized.push(normalizedUrl)
+
+    if (normalized.length >= MAX_SEDE_PHOTOS) {
+      break
+    }
+  }
+
+  return normalized
+}
+
+function splitSedeReference(reference: string | null | undefined): {
+  plainReference: string | null
+  photoUrls: string[]
+} {
+  const raw = (reference ?? "").trim()
+  if (!raw) {
+    return {
+      plainReference: null,
+      photoUrls: [],
+    }
+  }
+
+  const markerIndex = raw.indexOf(SEDE_MEDIA_MARKER)
+  if (markerIndex < 0) {
+    return {
+      plainReference: raw,
+      photoUrls: [],
+    }
+  }
+
+  const plainReference = raw.slice(0, markerIndex).trim()
+  const metadataRaw = raw.slice(markerIndex + SEDE_MEDIA_MARKER.length).trim()
+
+  if (!metadataRaw) {
+    return {
+      plainReference: plainReference || null,
+      photoUrls: [],
+    }
+  }
+
+  try {
+    const parsed = JSON.parse(metadataRaw) as { photoUrls?: unknown }
+    const photoUrls = Array.isArray(parsed?.photoUrls)
+      ? normalizeSedePhotoUrls(parsed.photoUrls as Array<string | null | undefined>)
+      : []
+
+    return {
+      plainReference: plainReference || null,
+      photoUrls,
+    }
+  } catch {
+    return {
+      plainReference: raw,
+      photoUrls: [],
+    }
+  }
+}
+
+function composeSedeReference(input: { reference?: string | null; photoUrls?: string[] | null }): string | null {
+  const plainReference = (input.reference ?? "").trim()
+  const photoUrls = normalizeSedePhotoUrls(input.photoUrls)
+
+  if (photoUrls.length === 0) {
+    return plainReference || null
+  }
+
+  const metadata = JSON.stringify({ photoUrls })
+  if (!plainReference) {
+    return `${SEDE_MEDIA_MARKER}\n${metadata}`
+  }
+
+  return `${plainReference}\n\n${SEDE_MEDIA_MARKER}\n${metadata}`
+}
+
+async function assertSedesModuleAvailable(tenantSchema?: string | null): Promise<void> {
+  const resolvedSchema = resolveTenantSchemaForAdmin(tenantSchema)
+  const result = await pool.query<{ sedes_available: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM information_schema.tables
+        WHERE table_schema = $1
+          AND table_name = 'sedes'
+     ) AS sedes_available`,
+    [resolvedSchema],
+  )
+
+  if (!result.rows[0]?.sedes_available) {
+    throw new SedesModuleNotAvailableError()
+  }
+}
+
+function mapAdminSedeRow(row: AdminSedeRow): AdminSedeSummary {
+  const latitude = row.latitud == null ? null : Number(row.latitud)
+  const longitude = row.longitud == null ? null : Number(row.longitud)
+  const { plainReference, photoUrls } = splitSedeReference(row.referencia)
+
+  return {
+    id: row.id,
+    name: row.nombre,
+    address: row.direccion,
+    city: row.ciudad,
+    latitude: Number.isFinite(latitude) ? latitude : null,
+    longitude: Number.isFinite(longitude) ? longitude : null,
+    phone: row.telefono,
+    reference: plainReference,
+    photoUrls,
+    active: Boolean(row.activo),
+    totalEmployees: Number(row.total_empleados ?? 0),
+    totalServices: Number(row.total_servicios ?? 0),
+    upcomingAppointments: Number(row.proximas_citas ?? 0),
+    createdAt: row.created_at ? row.created_at.toISOString() : null,
+    updatedAt: row.updated_at ? row.updated_at.toISOString() : null,
+  }
+}
+
+async function getAdminSedeById(sedeId: number, tenantSchema?: string | null): Promise<AdminSedeSummary | null> {
+  await assertSedesModuleAvailable(tenantSchema)
+
+  const result = await pool.query<AdminSedeRow>(
+    tenantSql(
+      `SELECT
+         s.id,
+         s.nombre,
+         s.direccion,
+         s.ciudad,
+         s.latitud::text AS latitud,
+         s.longitud::text AS longitud,
+         s.telefono,
+         s.referencia,
+         s.activo,
+         s.created_at,
+         s.updated_at,
+         COALESCE(stats.total_empleados, 0)::text AS total_empleados,
+         COALESCE(stats.total_servicios, 0)::text AS total_servicios,
+         COALESCE(stats.proximas_citas, 0)::text AS proximas_citas
+       FROM tenant_base.sedes s
+       LEFT JOIN LATERAL (
+         SELECT
+           (SELECT COUNT(DISTINCT se.empleado_id) FROM tenant_base.sedes_empleados se WHERE se.sede_id = s.id) AS total_empleados,
+           (
+             SELECT COUNT(DISTINCT ss.servicio_id)
+               FROM tenant_base.sedes_servicios ss
+              WHERE ss.sede_id = s.id
+                AND COALESCE(ss.activo, TRUE) = TRUE
+           ) AS total_servicios,
+           (
+             SELECT COUNT(*)
+               FROM tenant_base.agendamientos a
+              WHERE a.sede_id = s.id
+                AND a.fecha_cita >= NOW()
+                AND LOWER(COALESCE(a.estado::text, '')) NOT IN ('cancelada', 'cancelado', 'cancel')
+           ) AS proximas_citas
+       ) stats ON TRUE
+       WHERE s.id = $1
+       LIMIT 1`,
+      tenantSchema,
+    ),
+    [sedeId],
+  )
+
+  if (result.rowCount === 0) {
+    return null
+  }
+
+  return mapAdminSedeRow(result.rows[0])
+}
+
+export async function getAdminSedes(tenantSchema?: string | null): Promise<AdminSedeSummary[]> {
+  await assertSedesModuleAvailable(tenantSchema)
+
+  const result = await pool.query<AdminSedeRow>(
+    tenantSql(
+      `SELECT
+         s.id,
+         s.nombre,
+         s.direccion,
+         s.ciudad,
+         s.latitud::text AS latitud,
+         s.longitud::text AS longitud,
+         s.telefono,
+         s.referencia,
+         s.activo,
+         s.created_at,
+         s.updated_at,
+         COALESCE(stats.total_empleados, 0)::text AS total_empleados,
+         COALESCE(stats.total_servicios, 0)::text AS total_servicios,
+         COALESCE(stats.proximas_citas, 0)::text AS proximas_citas
+       FROM tenant_base.sedes s
+       LEFT JOIN LATERAL (
+         SELECT
+           (SELECT COUNT(DISTINCT se.empleado_id) FROM tenant_base.sedes_empleados se WHERE se.sede_id = s.id) AS total_empleados,
+           (
+             SELECT COUNT(DISTINCT ss.servicio_id)
+               FROM tenant_base.sedes_servicios ss
+              WHERE ss.sede_id = s.id
+                AND COALESCE(ss.activo, TRUE) = TRUE
+           ) AS total_servicios,
+           (
+             SELECT COUNT(*)
+               FROM tenant_base.agendamientos a
+              WHERE a.sede_id = s.id
+                AND a.fecha_cita >= NOW()
+                AND LOWER(COALESCE(a.estado::text, '')) NOT IN ('cancelada', 'cancelado', 'cancel')
+           ) AS proximas_citas
+       ) stats ON TRUE
+       ORDER BY s.activo DESC, s.nombre ASC`,
+      tenantSchema,
+    ),
+  )
+
+  return result.rows.map(mapAdminSedeRow)
+}
+
+export async function createAdminSede(input: {
+  name: string
+  address?: string | null
+  city?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  phone?: string | null
+  reference?: string | null
+  photoUrls?: string[] | null
+  active?: boolean
+  tenantSchema?: string | null
+}): Promise<AdminSedeSummary> {
+  await assertSedesModuleAvailable(input.tenantSchema)
+
+  const encodedReference = composeSedeReference({
+    reference: input.reference,
+    photoUrls: input.photoUrls,
+  })
+
+  const result = await pool.query<{ id: number }>(
+    tenantSql(
+      `INSERT INTO tenant_base.sedes (nombre, direccion, ciudad, latitud, longitud, telefono, referencia, activo)
+       VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8)
+       RETURNING id`,
+      input.tenantSchema,
+    ),
+    [
+      input.name,
+      input.address ?? "",
+      input.city ?? "",
+      input.latitude ?? null,
+      input.longitude ?? null,
+      input.phone ?? "",
+      encodedReference ?? "",
+      input.active ?? true,
+    ],
+  )
+
+  if (result.rowCount === 0) {
+    throw new Error("SEDE_CREATE_FAILED")
+  }
+
+  const created = await getAdminSedeById(result.rows[0].id, input.tenantSchema)
+  if (!created) {
+    throw new Error("SEDE_CREATE_FAILED")
+  }
+
+  return created
+}
+
+export async function updateAdminSede(
+  sedeId: number,
+  input: {
+    name: string
+    address?: string | null
+    city?: string | null
+    latitude?: number | null
+    longitude?: number | null
+    phone?: string | null
+    reference?: string | null
+    photoUrls?: string[] | null
+    active?: boolean
+    tenantSchema?: string | null
+  },
+): Promise<AdminSedeSummary> {
+  await assertSedesModuleAvailable(input.tenantSchema)
+
+  const encodedReference = composeSedeReference({
+    reference: input.reference,
+    photoUrls: input.photoUrls,
+  })
+
+  const result = await pool.query<{ id: number }>(
+    tenantSql(
+      `UPDATE tenant_base.sedes
+          SET nombre = $2,
+              direccion = NULLIF($3, ''),
+              ciudad = NULLIF($4, ''),
+              latitud = $5,
+              longitud = $6,
+              telefono = NULLIF($7, ''),
+              referencia = NULLIF($8, ''),
+              activo = $9,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING id`,
+      input.tenantSchema,
+    ),
+    [
+      sedeId,
+      input.name,
+      input.address ?? "",
+      input.city ?? "",
+      input.latitude ?? null,
+      input.longitude ?? null,
+      input.phone ?? "",
+      encodedReference ?? "",
+      input.active ?? true,
+    ],
+  )
+
+  if (result.rowCount === 0) {
+    throw new SedeRecordNotFoundError()
+  }
+
+  const updated = await getAdminSedeById(sedeId, input.tenantSchema)
+  if (!updated) {
+    throw new SedeRecordNotFoundError()
+  }
+
+  return updated
+}
+
+export async function deleteAdminSede(sedeId: number, tenantSchema?: string | null): Promise<void> {
+  await assertSedesModuleAvailable(tenantSchema)
+
+  const result = await pool.query<{ id: number }>(
+    tenantSql(
+      `DELETE FROM tenant_base.sedes
+        WHERE id = $1
+        RETURNING id`,
+      tenantSchema,
+    ),
+    [sedeId],
+  )
+
+  if (result.rowCount === 0) {
+    throw new SedeRecordNotFoundError()
   }
 }

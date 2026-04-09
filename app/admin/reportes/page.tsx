@@ -1,19 +1,21 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Bar, BarChart, CartesianGrid, XAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatCurrency, formatDate, formatNumber } from "@/lib/formatters"
 import { cn } from "@/lib/utils"
 
 type Granularity = "day" | "month" | "year"
+type SedeInsightsScope = "month" | "quarter" | "year"
 type SeriesMetric = "revenue" | "paymentsCount" | "appointmentsCount"
 
 type RevenueSeriesPoint = {
@@ -91,9 +93,42 @@ type RevenueReport = {
   }
 }
 
+type SedeTopServiceInsight = {
+  serviceId: number | null
+  serviceName: string
+  appointments: number
+  revenue: number
+}
+
+type SedeBusinessInsight = {
+  sedeId: number
+  sedeName: string
+  revenue: number
+  previousRevenue: number
+  growthPct: number | null
+  paidAppointments: number
+  totalAppointments: number
+  upcomingAppointments: number
+  topService: SedeTopServiceInsight | null
+}
+
+type SedeInsightsReport = {
+  scope: SedeInsightsScope
+  scopeLabel: string
+  currentMonthRevenue: number
+  previousMonthRevenue: number
+  monthlyGrowthPct: number | null
+  bestSedeByRevenue: SedeBusinessInsight | null
+  bestSedeByAppointments: SedeBusinessInsight | null
+  sedes: SedeBusinessInsight[]
+}
+
 type ReportsResponse = {
   ok?: boolean
   report?: RevenueReport
+  sedeInsights?: SedeInsightsReport | null
+  focusedSeries?: RevenueSeriesPoint[]
+  warning?: string
   error?: string
 }
 
@@ -215,8 +250,13 @@ function formatHoursFromMinutes(minutes: number): string {
 
 export default function AdminReportsPage() {
   const [granularity, setGranularity] = useState<Granularity>("day")
+  const [scope, setScope] = useState<SedeInsightsScope>("month")
+  const [selectedSede, setSelectedSede] = useState("all")
   const [metric, setMetric] = useState<SeriesMetric>("revenue")
   const [report, setReport] = useState<RevenueReport | null>(null)
+  const [sedeInsights, setSedeInsights] = useState<SedeInsightsReport | null>(null)
+  const [focusedSeries, setFocusedSeries] = useState<RevenueSeriesPoint[]>([])
+  const [warning, setWarning] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -224,9 +264,19 @@ export default function AdminReportsPage() {
     async (signal?: AbortSignal) => {
       setIsLoading(true)
       setError(null)
+      setWarning(null)
 
       try {
-        const response = await fetch(`/api/admin/reports?granularity=${granularity}`, {
+        const query = new URLSearchParams({
+          granularity,
+          scope,
+        })
+
+        if (selectedSede !== "all") {
+          query.set("sedeId", selectedSede)
+        }
+
+        const response = await fetch(`/api/admin/reports?${query.toString()}`, {
           signal,
           cache: "no-store",
           headers: buildTenantHeaders(),
@@ -240,6 +290,9 @@ export default function AdminReportsPage() {
 
         if (!signal?.aborted) {
           setReport(data.report)
+          setSedeInsights(data.sedeInsights ?? null)
+          setFocusedSeries(Array.isArray(data.focusedSeries) ? data.focusedSeries : [])
+          setWarning(data.warning ?? null)
         }
       } catch (requestError) {
         if (signal?.aborted) {
@@ -254,7 +307,7 @@ export default function AdminReportsPage() {
         }
       }
     },
-    [granularity],
+    [granularity, scope, selectedSede],
   )
 
   useEffect(() => {
@@ -264,8 +317,27 @@ export default function AdminReportsPage() {
     return () => controller.abort()
   }, [loadReports])
 
+  useEffect(() => {
+    if (selectedSede === "all") {
+      return
+    }
+
+    const exists = (sedeInsights?.sedes ?? []).some((sede) => String(sede.sedeId) === selectedSede)
+    if (!exists) {
+      setSelectedSede("all")
+    }
+  }, [selectedSede, sedeInsights?.sedes])
+
+  const effectiveSeries = useMemo(() => {
+    if (selectedSede !== "all") {
+      return focusedSeries
+    }
+
+    return report?.series ?? []
+  }, [focusedSeries, report?.series, selectedSede])
+
   const chartData = useMemo(() => {
-    const series = report?.series ?? []
+    const series = effectiveSeries
     const expectedBuckets = buildExpectedBuckets(granularity)
 
     const seriesByBucket = new Map<string, RevenueSeriesPoint>()
@@ -285,9 +357,28 @@ export default function AdminReportsPage() {
         dateLabel: formatAxisDate(bucketStart, granularity),
       }
     })
-  }, [granularity, report?.series])
+  }, [effectiveSeries, granularity])
 
-  const topService = report?.topServices[0] ?? null
+  const focusedSede = useMemo(() => {
+    if (selectedSede === "all") {
+      return null
+    }
+
+    return (sedeInsights?.sedes ?? []).find((sede) => String(sede.sedeId) === selectedSede) ?? null
+  }, [selectedSede, sedeInsights?.sedes])
+
+  const topService = useMemo(() => {
+    if (focusedSede?.topService) {
+      return {
+        serviceId: focusedSede.topService.serviceId,
+        serviceName: focusedSede.topService.serviceName,
+        revenue: focusedSede.topService.revenue,
+        paidAppointments: focusedSede.topService.appointments,
+      }
+    }
+
+    return report?.topServices[0] ?? null
+  }, [focusedSede?.topService, report?.topServices])
 
   const topClientsWithShare = useMemo(() => {
     const totalRevenue = report?.totals.revenue ?? 0
@@ -307,6 +398,25 @@ export default function AdminReportsPage() {
         methodLabel: item.method.replaceAll("_", " "),
       })),
     [report?.income.paymentMethods],
+  )
+
+  const comparativeBySedeData = useMemo(() => {
+    return [...(sedeInsights?.sedes ?? [])]
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 8)
+      .map((sede) => ({
+        ...sede,
+        growthLabel:
+          sede.growthPct == null ? "Sin base" : `${sede.growthPct > 0 ? "+" : ""}${sede.growthPct.toFixed(2)}%`,
+      }))
+  }, [sedeInsights?.sedes])
+
+  const topServicesBySede = useMemo(
+    () =>
+      [...(sedeInsights?.sedes ?? [])]
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 10),
+    [sedeInsights?.sedes],
   )
 
   const heatmapBySlot = useMemo(() => {
@@ -340,6 +450,13 @@ export default function AdminReportsPage() {
 
   return (
     <div className="space-y-4">
+      {warning && (
+        <Alert>
+          <AlertTitle>Datos parciales</AlertTitle>
+          <AlertDescription>{warning}</AlertDescription>
+        </Alert>
+      )}
+
       {error && (
         <Alert variant="destructive">
           <AlertTitle>No pudimos cargar los reportes</AlertTitle>
@@ -358,6 +475,7 @@ export default function AdminReportsPage() {
             <CardTitle>Reportes de facturación</CardTitle>
             <CardDescription>
               Visualiza comportamiento {GRANULARITY_LABELS[granularity].toLowerCase()} de ingresos, pagos y citas pagadas.
+              {focusedSede ? ` Enfoque activo: ${focusedSede.sedeName}.` : " Vista consolidada multi-sede."}
             </CardDescription>
           </div>
 
@@ -396,6 +514,48 @@ export default function AdminReportsPage() {
             <Badge variant="secondary" className="ml-auto">
               Serie: {METRIC_LABELS[metric]}
             </Badge>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-3">
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Horizonte de análisis</p>
+              <Select value={scope} onValueChange={(value) => setScope(value as SedeInsightsScope)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Mes actual" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="month">Mes actual</SelectItem>
+                  <SelectItem value="quarter">Últimos 3 meses</SelectItem>
+                  <SelectItem value="year">Año actual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Sede foco</p>
+              <Select value={selectedSede} onValueChange={setSelectedSede}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Todas las sedes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas las sedes</SelectItem>
+                  {(sedeInsights?.sedes ?? []).map((sede) => (
+                    <SelectItem key={sede.sedeId} value={String(sede.sedeId)}>
+                      {sede.sedeName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Crecimiento mensual</p>
+              <div className="rounded-md border px-3 py-2 text-sm">
+                {sedeInsights?.monthlyGrowthPct == null
+                  ? "Sin base"
+                  : `${sedeInsights.monthlyGrowthPct > 0 ? "+" : ""}${sedeInsights.monthlyGrowthPct}%`}
+              </div>
+            </div>
           </div>
 
           {isLoading ? (
@@ -480,6 +640,50 @@ export default function AdminReportsPage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader>
+                <CardTitle>Comparativo por sede</CardTitle>
+                <CardDescription>Periodo actual vs periodo anterior para cada sede.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? (
+                  <Skeleton className="h-[220px] w-full" />
+                ) : comparativeBySedeData.length > 0 ? (
+                  <ChartContainer config={chartConfig} className="aspect-auto h-[220px] w-full">
+                    <BarChart data={comparativeBySedeData} margin={{ left: 12, right: 12 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis
+                        dataKey="sedeName"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        tickFormatter={(value) => String(value).slice(0, 14)}
+                      />
+                      <YAxis tickLine={false} axisLine={false} />
+                      <ChartTooltip
+                        content={
+                          <ChartTooltipContent
+                            formatter={(value, key, item) => {
+                              const payload = item?.payload as { growthLabel?: string } | undefined
+                              if (key === "revenue") {
+                                return `${formatCurrency(Number(value))} · ${payload?.growthLabel ?? "Sin base"}`
+                              }
+
+                              return formatCurrency(Number(value))
+                            }}
+                          />
+                        }
+                      />
+                      <Bar dataKey="revenue" name="Actual" fill="var(--color-revenue)" radius={[6, 6, 0, 0]} />
+                      <Bar dataKey="previousRevenue" name="Anterior" fill="var(--color-paymentsCount)" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ChartContainer>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No hay sedes con datos de comparación en el horizonte elegido.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle>Métodos de pago</CardTitle>
                 <CardDescription>Desglose para conciliación de caja por periodo.</CardDescription>
               </CardHeader>
@@ -516,8 +720,8 @@ export default function AdminReportsPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Servicios más facturados</CardTitle>
-                <CardDescription>Top servicios por ingresos del periodo seleccionado.</CardDescription>
+                <CardTitle>Top servicio por sede</CardTitle>
+                <CardDescription>Servicio dominante en cada sede para el horizonte activo.</CardDescription>
               </CardHeader>
               <CardContent>
                 {isLoading ? (
@@ -526,20 +730,24 @@ export default function AdminReportsPage() {
                     <Skeleton className="h-8 w-full" />
                     <Skeleton className="h-8 w-full" />
                   </div>
-                ) : (report?.topServices.length ?? 0) > 0 ? (
+                ) : topServicesBySede.length > 0 ? (
                   <div className="space-y-2">
-                    {report!.topServices.map((service, index) => (
-                      <div key={`${service.serviceId ?? "na"}-${index}`} className="flex items-center justify-between rounded-md border px-3 py-2">
+                    {topServicesBySede.map((sede) => (
+                      <div key={sede.sedeId} className="flex items-center justify-between rounded-md border px-3 py-2">
                         <div>
-                          <p className="text-sm font-medium">{service.serviceName}</p>
-                          <p className="text-xs text-muted-foreground">{formatNumber(service.paidAppointments)} citas pagadas</p>
+                          <p className="text-sm font-medium">{sede.sedeName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {sede.topService
+                              ? `${sede.topService.serviceName} · ${formatNumber(sede.topService.appointments)} citas`
+                              : "Sin servicio top"}
+                          </p>
                         </div>
-                        <p className="text-sm font-semibold">{formatCurrency(service.revenue)}</p>
+                        <p className="text-sm font-semibold">{formatCurrency(sede.revenue)}</p>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Aún no hay servicios con facturación en este periodo.</p>
+                  <p className="text-sm text-muted-foreground">Aún no hay servicios líderes por sede en este periodo.</p>
                 )}
               </CardContent>
             </Card>

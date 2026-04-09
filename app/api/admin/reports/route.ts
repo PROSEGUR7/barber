@@ -1,11 +1,20 @@
 import { NextResponse } from "next/server"
 
-import { getAdminPayments, getAdminRevenueReport, type AdminReportsGranularity } from "@/lib/admin"
+import {
+  getAdminPayments,
+  getAdminRevenueReport,
+  getAdminSedeInsightsReport,
+  getAdminSedeRevenueSeries,
+  SedesModuleNotAvailableError,
+  type AdminReportsGranularity,
+  type AdminSedeInsightsScope,
+} from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
 const ALLOWED_GRANULARITIES = new Set<AdminReportsGranularity>(["day", "month", "year"])
+const ALLOWED_SCOPES = new Set<AdminSedeInsightsScope>(["month", "quarter", "year"])
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
   return NextResponse.json(
@@ -26,6 +35,28 @@ function resolveGranularity(value: string | null): AdminReportsGranularity {
   return "day"
 }
 
+function resolveScope(value: string | null): AdminSedeInsightsScope {
+  const normalized = (value ?? "").trim().toLowerCase() as AdminSedeInsightsScope
+  if (ALLOWED_SCOPES.has(normalized)) {
+    return normalized
+  }
+
+  return "month"
+}
+
+function resolveSedeId(value: string | null): number | null {
+  if (!value) {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return parsed
+}
+
 export async function GET(request: Request) {
   try {
     const tenantSchema = await resolveTenantSchemaForAdminRequest(request)
@@ -38,6 +69,8 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url)
     const granularity = resolveGranularity(url.searchParams.get("granularity"))
+    const scope = resolveScope(url.searchParams.get("scope"))
+    const sedeId = resolveSedeId(url.searchParams.get("sedeId"))
 
     const report = await getAdminRevenueReport({
       tenantSchema,
@@ -45,7 +78,41 @@ export async function GET(request: Request) {
       topServicesLimit: 6,
     })
 
-    return NextResponse.json({ ok: true, report }, { status: 200 })
+    let sedeInsights: Awaited<ReturnType<typeof getAdminSedeInsightsReport>> | null = null
+    let focusedSeries: Awaited<ReturnType<typeof getAdminSedeRevenueSeries>> = []
+    let warning: string | undefined
+
+    try {
+      sedeInsights = await getAdminSedeInsightsReport({
+        tenantSchema,
+        scope,
+      })
+
+      if (sedeId) {
+        focusedSeries = await getAdminSedeRevenueSeries({
+          tenantSchema,
+          sedeId,
+          granularity,
+        })
+      }
+    } catch (insightsError) {
+      if (insightsError instanceof SedesModuleNotAvailableError) {
+        warning = "El modulo de sedes aun no esta habilitado para este tenant."
+      } else {
+        throw insightsError
+      }
+    }
+
+    return NextResponse.json(
+      {
+        ok: true,
+        report,
+        sedeInsights,
+        focusedSeries,
+        warning,
+      },
+      { status: 200 },
+    )
   } catch (error) {
     if (error instanceof Error && error.message === "DATABASE_URL env var is not set") {
       return jsonError(503, {
@@ -67,6 +134,8 @@ export async function GET(request: Request) {
 
       const url = new URL(request.url)
       const granularity = resolveGranularity(url.searchParams.get("granularity"))
+      const scope = resolveScope(url.searchParams.get("scope"))
+      const sedeId = resolveSedeId(url.searchParams.get("sedeId"))
       const payments = await getAdminPayments({ tenantSchema, limit: 500 })
 
       const buckets = new Map<string, { revenue: number; paymentsCount: number; appointments: Set<number> }>()
@@ -168,11 +237,38 @@ export async function GET(request: Request) {
         },
       }
 
+      let sedeInsights: Awaited<ReturnType<typeof getAdminSedeInsightsReport>> | null = null
+      let focusedSeries: Awaited<ReturnType<typeof getAdminSedeRevenueSeries>> = []
+      let warning = "Se cargó un reporte base por incompatibilidad temporal de consultas avanzadas."
+
+      try {
+        sedeInsights = await getAdminSedeInsightsReport({
+          tenantSchema,
+          scope,
+        })
+
+        if (sedeId) {
+          focusedSeries = await getAdminSedeRevenueSeries({
+            tenantSchema,
+            sedeId,
+            granularity,
+          })
+        }
+      } catch (insightsError) {
+        if (insightsError instanceof SedesModuleNotAvailableError) {
+          warning = `${warning} El modulo de sedes aun no esta habilitado para este tenant.`
+        } else {
+          throw insightsError
+        }
+      }
+
       return NextResponse.json(
         {
           ok: true,
           report: fallbackReport,
-          warning: "Se cargó un reporte base por incompatibilidad temporal de consultas avanzadas.",
+          sedeInsights,
+          focusedSeries,
+          warning,
         },
         { status: 200 },
       )

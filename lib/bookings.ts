@@ -1,6 +1,6 @@
 import { pool } from "@/lib/db"
 import { ensureMaterializedEmployeeDay } from "@/lib/availability"
-import { tenantSql } from "@/lib/tenant"
+import { normalizeTenantSchema, tenantSql } from "@/lib/tenant"
 
 const BOOKING_TIME_ZONE = process.env.BOOKING_TIME_ZONE ?? "America/Bogota"
 
@@ -26,6 +26,17 @@ type ServiceRow = {
   duracion_min: number
 }
 
+type SedeRow = {
+  id: number
+  nombre: string
+  direccion: string | null
+  ciudad: string | null
+  telefono: string | null
+  activo: boolean
+  latitud: number | null
+  longitud: number | null
+}
+
 type BarberRow = {
   id: number
   nombre: string
@@ -42,6 +53,17 @@ export type Service = {
   description: string | null
   price: number | null
   durationMin: number
+}
+
+export type Sede = {
+  id: number
+  name: string
+  address: string | null
+  city: string | null
+  phone: string | null
+  isActive: boolean
+  latitude: number | null
+  longitude: number | null
 }
 
 export type Barber = {
@@ -73,6 +95,15 @@ export type Appointment = {
   start: string
   end: string | null
   status: AppointmentStatus
+  sede: {
+    id: number
+    name: string
+    address: string | null
+    city: string | null
+    phone: string | null
+    latitude: number | null
+    longitude: number | null
+  } | null
   payment: {
     status: string | null
     method: string | null
@@ -88,6 +119,343 @@ export type Appointment = {
     id: number
     name: string
   }
+}
+
+type TenantSedeFeatures = {
+  hasSedesTable: boolean
+  hasSedesServiciosTable: boolean
+  hasSedesEmpleadosTable: boolean
+  hasServiciosSedeColumn: boolean
+  hasEmpleadosSedeColumn: boolean
+  hasHorariosSedeColumn: boolean
+  hasAgendamientosSedeColumn: boolean
+  hasAgendamientosComentariosColumn: boolean
+  hasAgendamientosSolicitudesColumn: boolean
+}
+
+type TenantSedeFeaturesRow = {
+  has_sedes_table: boolean | string
+  has_sedes_servicios_table: boolean | string
+  has_sedes_empleados_table: boolean | string
+  has_servicios_sede_column: boolean | string
+  has_empleados_sede_column: boolean | string
+  has_horarios_sede_column: boolean | string
+  has_agendamientos_sede_column: boolean | string
+  has_agendamientos_comentarios_column: boolean | string
+  has_agendamientos_solicitudes_column: boolean | string
+}
+
+const tenantSedeFeaturesCache = new Map<string, TenantSedeFeatures>()
+
+function toBoolean(value: unknown): boolean {
+  if (value === true) return true
+  if (value === false) return false
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    return normalized === "true" || normalized === "t" || normalized === "1"
+  }
+
+  if (typeof value === "number") {
+    return value === 1
+  }
+
+  return false
+}
+
+function resolveTenantSchemaName(tenantSchema?: string | null): string {
+  return normalizeTenantSchema(tenantSchema) ?? "tenant_base"
+}
+
+function normalizeSedeId(value: number | null | undefined): number | null {
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    return null
+  }
+
+  return Number(value)
+}
+
+function buildServiceSedeFilterSql(features: TenantSedeFeatures, parameterRef: string): string | null {
+  if (features.hasSedesServiciosTable && features.hasServiciosSedeColumn) {
+    return `(
+      EXISTS (
+        SELECT 1
+          FROM tenant_base.sedes_servicios ss
+         WHERE ss.servicio_id = s.id
+           AND ss.activo = TRUE
+           AND ss.sede_id = ${parameterRef}
+      )
+      OR s.sede_id = ${parameterRef}
+      OR (
+        NOT EXISTS (
+          SELECT 1
+            FROM tenant_base.sedes_servicios ss2
+           WHERE ss2.servicio_id = s.id
+             AND ss2.activo = TRUE
+        )
+        AND s.sede_id IS NULL
+      )
+    )`
+  }
+
+  if (features.hasSedesServiciosTable) {
+    return `(
+      EXISTS (
+        SELECT 1
+          FROM tenant_base.sedes_servicios ss
+         WHERE ss.servicio_id = s.id
+           AND ss.activo = TRUE
+           AND ss.sede_id = ${parameterRef}
+      )
+      OR NOT EXISTS (
+        SELECT 1
+          FROM tenant_base.sedes_servicios ss2
+         WHERE ss2.servicio_id = s.id
+           AND ss2.activo = TRUE
+      )
+    )`
+  }
+
+  if (features.hasServiciosSedeColumn) {
+    return `(s.sede_id = ${parameterRef} OR s.sede_id IS NULL)`
+  }
+
+  return null
+}
+
+function buildEmployeeSedeFilterSql(features: TenantSedeFeatures, parameterRef: string): string | null {
+  if (features.hasSedesEmpleadosTable && features.hasEmpleadosSedeColumn) {
+    return `(
+      EXISTS (
+        SELECT 1
+          FROM tenant_base.sedes_empleados se
+         WHERE se.empleado_id = e.id
+           AND se.sede_id = ${parameterRef}
+      )
+      OR e.sede_id = ${parameterRef}
+    )`
+  }
+
+  if (features.hasSedesEmpleadosTable) {
+    return `(EXISTS (
+      SELECT 1
+        FROM tenant_base.sedes_empleados se
+       WHERE se.empleado_id = e.id
+         AND se.sede_id = ${parameterRef}
+    ))`
+  }
+
+  if (features.hasEmpleadosSedeColumn) {
+    return `(e.sede_id = ${parameterRef})`
+  }
+
+  return null
+}
+
+async function getTenantSedeFeatures(tenantSchema?: string | null): Promise<TenantSedeFeatures> {
+  const schemaName = resolveTenantSchemaName(tenantSchema)
+  const cacheKey = schemaName.toLowerCase()
+
+  const cached = tenantSedeFeaturesCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
+  const result = await pool.query<TenantSedeFeaturesRow>(
+    `SELECT
+      EXISTS (
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'sedes'
+      ) AS has_sedes_table,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'sedes_servicios'
+      ) AS has_sedes_servicios_table,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'sedes_empleados'
+      ) AS has_sedes_empleados_table,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'servicios'
+           AND column_name = 'sede_id'
+      ) AS has_servicios_sede_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'empleados'
+           AND column_name = 'sede_id'
+      ) AS has_empleados_sede_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'horarios_empleados'
+           AND column_name = 'sede_id'
+      ) AS has_horarios_sede_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'agendamientos'
+           AND column_name = 'sede_id'
+      ) AS has_agendamientos_sede_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'agendamientos'
+           AND column_name = 'comentarios_cliente'
+      ) AS has_agendamientos_comentarios_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'agendamientos'
+           AND column_name = 'solicitudes_cliente'
+      ) AS has_agendamientos_solicitudes_column`,
+    [schemaName],
+  )
+
+  const row = result.rows[0]
+  const features: TenantSedeFeatures = {
+    hasSedesTable: toBoolean(row?.has_sedes_table),
+    hasSedesServiciosTable: toBoolean(row?.has_sedes_servicios_table),
+    hasSedesEmpleadosTable: toBoolean(row?.has_sedes_empleados_table),
+    hasServiciosSedeColumn: toBoolean(row?.has_servicios_sede_column),
+    hasEmpleadosSedeColumn: toBoolean(row?.has_empleados_sede_column),
+    hasHorariosSedeColumn: toBoolean(row?.has_horarios_sede_column),
+    hasAgendamientosSedeColumn: toBoolean(row?.has_agendamientos_sede_column),
+    hasAgendamientosComentariosColumn: toBoolean(row?.has_agendamientos_comentarios_column),
+    hasAgendamientosSolicitudesColumn: toBoolean(row?.has_agendamientos_solicitudes_column),
+  }
+
+  tenantSedeFeaturesCache.set(cacheKey, features)
+
+  return features
+}
+
+export async function getActiveSedes(tenantSchema?: string | null): Promise<Sede[]> {
+  const features = await getTenantSedeFeatures(tenantSchema)
+
+  if (!features.hasSedesTable) {
+    return []
+  }
+
+  const result = await pool.query<SedeRow>(
+    tenantSql(
+      `SELECT id,
+              nombre,
+              direccion,
+              ciudad,
+              telefono,
+              activo,
+              latitud,
+              longitud
+         FROM tenant_base.sedes
+        WHERE activo = TRUE
+        ORDER BY nombre ASC`,
+      tenantSchema,
+    ),
+  )
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.nombre,
+    address: row.direccion,
+    city: row.ciudad,
+    phone: row.telefono,
+    isActive: row.activo,
+    latitude: row.latitud,
+    longitude: row.longitud,
+  }))
+}
+
+export async function getSedeById(
+  sedeId: number,
+  tenantSchema?: string | null,
+): Promise<Sede | null> {
+  const normalizedSedeId = normalizeSedeId(sedeId)
+  if (normalizedSedeId == null) {
+    return null
+  }
+
+  const features = await getTenantSedeFeatures(tenantSchema)
+  if (!features.hasSedesTable) {
+    return null
+  }
+
+  const result = await pool.query<SedeRow>(
+    tenantSql(
+      `SELECT id,
+              nombre,
+              direccion,
+              ciudad,
+              telefono,
+              activo,
+              latitud,
+              longitud
+         FROM tenant_base.sedes
+        WHERE id = $1
+        LIMIT 1`,
+      tenantSchema,
+    ),
+    [normalizedSedeId],
+  )
+
+  if (result.rowCount === 0) {
+    return null
+  }
+
+  const row = result.rows[0]
+  return {
+    id: row.id,
+    name: row.nombre,
+    address: row.direccion,
+    city: row.ciudad,
+    phone: row.telefono,
+    isActive: row.activo,
+    latitude: row.latitud,
+    longitude: row.longitud,
+  }
+}
+
+export async function getActiveBarbersBySede(
+  sedeId: number,
+  tenantSchema?: string | null,
+): Promise<Barber[]> {
+  const normalizedSedeId = normalizeSedeId(sedeId)
+  if (normalizedSedeId == null) {
+    return []
+  }
+
+  const features = await getTenantSedeFeatures(tenantSchema)
+  const employeeSedeFilter = buildEmployeeSedeFilterSql(features, "$1")
+
+  const query = tenantSql(
+    `SELECT e.id,
+            e.nombre
+       FROM tenant_base.empleados e
+      WHERE LOWER(COALESCE(e.estado::text, 'activo')) = 'activo'
+        ${employeeSedeFilter ? `AND ${employeeSedeFilter}` : ""}
+      ORDER BY e.nombre ASC`,
+    tenantSchema,
+  )
+
+  const result = await pool.query<BarberRow>(query, employeeSedeFilter ? [normalizedSedeId] : [])
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.nombre,
+  }))
 }
 
 async function resolveClientIdForUser(userId: number, tenantSchema?: string | null): Promise<number> {
@@ -109,16 +477,26 @@ async function resolveClientIdForUser(userId: number, tenantSchema?: string | nu
   return clientId
 }
 
-export async function getActiveServices(tenantSchema?: string | null): Promise<Service[]> {
+export async function getActiveServices(tenantSchema?: string | null, sedeId?: number | null): Promise<Service[]> {
+  const normalizedSedeId = normalizeSedeId(sedeId)
+  const features = await getTenantSedeFeatures(tenantSchema)
+  const serviceSedeFilter =
+    normalizedSedeId !== null ? buildServiceSedeFilterSql(features, "$1") : null
+
   const result = await pool.query<ServiceRow>(
-    tenantSql(`SELECT id,
-            nombre,
-            descripcion,
-            precio,
-            duracion_min
-       FROM tenant_base.servicios
-      WHERE estado = 'activo'
-      ORDER BY nombre ASC`, tenantSchema),
+    tenantSql(
+      `SELECT s.id,
+              s.nombre,
+              s.descripcion,
+              s.precio,
+              s.duracion_min
+         FROM tenant_base.servicios s
+        WHERE s.estado = 'activo'
+          ${serviceSedeFilter ? `AND ${serviceSedeFilter}` : ""}
+        ORDER BY s.nombre ASC`,
+      tenantSchema,
+    ),
+    normalizedSedeId !== null && serviceSedeFilter ? [normalizedSedeId] : [],
   )
 
   return result.rows.map((row) => ({
@@ -130,25 +508,45 @@ export async function getActiveServices(tenantSchema?: string | null): Promise<S
   }))
 }
 
-export async function getBarbersForService(serviceId: number, tenantSchema?: string | null): Promise<Barber[]> {
+export async function getBarbersForService(
+  serviceId: number,
+  tenantSchema?: string | null,
+  sedeId?: number | null,
+): Promise<Barber[]> {
+  const normalizedSedeId = normalizeSedeId(sedeId)
+  const features = await getTenantSedeFeatures(tenantSchema)
+  const employeeSedeFilterForService =
+    normalizedSedeId !== null ? buildEmployeeSedeFilterSql(features, "$2") : null
+  const employeeSedeFilterFallback =
+    normalizedSedeId !== null ? buildEmployeeSedeFilterSql(features, "$1") : null
+
   const result = await pool.query<BarberRow>(
-    tenantSql(`SELECT e.id,
-            e.nombre
-       FROM tenant_base.empleados e
-       INNER JOIN tenant_base.empleados_servicios es
-               ON es.empleado_id = e.id
-      WHERE es.servicio_id = $1
-      ORDER BY e.nombre ASC`, tenantSchema),
-    [serviceId],
+    tenantSql(
+      `SELECT e.id,
+              e.nombre
+         FROM tenant_base.empleados e
+         INNER JOIN tenant_base.empleados_servicios es
+                 ON es.empleado_id = e.id
+        WHERE es.servicio_id = $1
+          ${employeeSedeFilterForService ? `AND ${employeeSedeFilterForService}` : ""}
+        ORDER BY e.nombre ASC`,
+      tenantSchema,
+    ),
+    normalizedSedeId !== null && employeeSedeFilterForService ? [serviceId, normalizedSedeId] : [serviceId],
   )
 
   if (result.rowCount === 0) {
     const fallback = await pool.query<BarberRow>(
-      tenantSql(`SELECT id,
-              nombre
-         FROM tenant_base.empleados
-        WHERE LOWER(COALESCE(estado::text, 'activo')) = 'activo'
-        ORDER BY nombre ASC`, tenantSchema),
+      tenantSql(
+        `SELECT e.id,
+                e.nombre
+           FROM tenant_base.empleados e
+          WHERE LOWER(COALESCE(e.estado::text, 'activo')) = 'activo'
+            ${employeeSedeFilterFallback ? `AND ${employeeSedeFilterFallback}` : ""}
+          ORDER BY e.nombre ASC`,
+        tenantSchema,
+      ),
+      normalizedSedeId !== null && employeeSedeFilterFallback ? [normalizedSedeId] : [],
     )
 
     return fallback.rows.map((row) => ({
@@ -169,9 +567,14 @@ export async function getAvailabilitySlots(options: {
   date: string
   excludeAppointmentId?: number
   durationMinOverride?: number
+  sedeId?: number | null
   tenantSchema?: string | null
 }): Promise<AvailabilitySlot[]> {
   const { serviceId, employeeId, date, excludeAppointmentId, durationMinOverride, tenantSchema } = options
+  const normalizedSedeId = normalizeSedeId(options.sedeId)
+
+  const features = await getTenantSedeFeatures(tenantSchema)
+  const hasHorariosSedeFilter = normalizedSedeId !== null && features.hasHorariosSedeColumn
 
   await ensureMaterializedEmployeeDay({ employeeId, date, tenantSchema })
 
@@ -200,6 +603,7 @@ export async function getAvailabilitySlots(options: {
           FROM tenant_base.horarios_empleados he
          WHERE he.empleado_id = $2
            AND DATE(he.fecha_hora_inicio AT TIME ZONE $6) = $3::date
+         ${hasHorariosSedeFilter ? "AND (he.sede_id = $7::int OR he.sede_id IS NULL)" : ""}
       ),
       ocupados AS (
         SELECT tstzrange(a.fecha_cita, COALESCE(a.fecha_cita_fin, a.fecha_cita), '[)') AS r
@@ -217,7 +621,7 @@ export async function getAvailabilitySlots(options: {
           CROSS JOIN LATERAL generate_series(
             b.ini,
             b.fin - make_interval(mins := (SELECT duracion_min FROM svc)),
-            make_interval(mins := GREATEST((SELECT duracion_min FROM svc), 5))
+            interval '10 minutes'
           ) AS gs
       ),
       libres AS (
@@ -233,14 +637,24 @@ export async function getAvailabilitySlots(options: {
       FROM libres
      ORDER BY slot_ini
      LIMIT 240`, tenantSchema),
-    [
-      serviceId,
-      employeeId,
-      date,
-      typeof excludeAppointmentId === "number" ? excludeAppointmentId : null,
-      typeof durationMinOverride === "number" ? durationMinOverride : null,
-      BOOKING_TIME_ZONE,
-    ],
+    hasHorariosSedeFilter
+      ? [
+          serviceId,
+          employeeId,
+          date,
+          typeof excludeAppointmentId === "number" ? excludeAppointmentId : null,
+          typeof durationMinOverride === "number" ? durationMinOverride : null,
+          BOOKING_TIME_ZONE,
+          normalizedSedeId,
+        ]
+      : [
+          serviceId,
+          employeeId,
+          date,
+          typeof excludeAppointmentId === "number" ? excludeAppointmentId : null,
+          typeof durationMinOverride === "number" ? durationMinOverride : null,
+          BOOKING_TIME_ZONE,
+        ],
   )
 
   const mapped = result.rows.map((row) => ({
@@ -260,11 +674,58 @@ export async function getAvailabilitySlots(options: {
   })
 }
 
+export async function getAvailabilitySlotsWithoutPreference(options: {
+  serviceId: number
+  date: string
+  excludeAppointmentId?: number
+  sedeId?: number | null
+  tenantSchema?: string | null
+}): Promise<AvailabilitySlot[]> {
+  const { serviceId, date, excludeAppointmentId, tenantSchema } = options
+  const normalizedSedeId = normalizeSedeId(options.sedeId)
+
+  const barbers = await getBarbersForService(serviceId, tenantSchema, normalizedSedeId)
+  if (barbers.length === 0) {
+    return []
+  }
+
+  const slotGroups = await Promise.all(
+    barbers.map((barber) =>
+      getAvailabilitySlots({
+        serviceId,
+        employeeId: barber.id,
+        date,
+        excludeAppointmentId,
+        sedeId: normalizedSedeId,
+        tenantSchema,
+      }),
+    ),
+  )
+
+  const dedup = new Map<string, AvailabilitySlot>()
+  for (const slots of slotGroups) {
+    for (const slot of slots) {
+      if (!dedup.has(slot.start)) {
+        dedup.set(slot.start, slot)
+      }
+    }
+  }
+
+  return Array.from(dedup.values()).sort((a, b) => {
+    const left = new Date(a.start).getTime()
+    const right = new Date(b.start).getTime()
+    return left - right
+  })
+}
+
 export async function reserveAppointment(options: {
   userId: number
   employeeId: number
   serviceId: number
   start: string
+  sedeId?: number | null
+  customerComment?: string | null
+  customerRequest?: string | null
   tenantSchema?: string | null
 }): Promise<{ appointmentId: number }>
 {
@@ -273,6 +734,9 @@ export async function reserveAppointment(options: {
     employeeId: options.employeeId,
     serviceIds: [options.serviceId],
     start: options.start,
+    sedeId: options.sedeId,
+    customerComment: options.customerComment,
+    customerRequest: options.customerRequest,
     tenantSchema: options.tenantSchema,
   })
 
@@ -284,10 +748,24 @@ export async function reserveAppointments(options: {
   employeeId: number
   serviceIds: number[]
   start: string
+  sedeId?: number | null
+  customerComment?: string | null
+  customerRequest?: string | null
   tenantSchema?: string | null
 }): Promise<{ appointmentIds: number[] }>
 {
   const { userId, employeeId, serviceIds, start, tenantSchema } = options
+  const normalizedSedeId = normalizeSedeId(options.sedeId)
+  const normalizedCustomerComment =
+    typeof options.customerComment === "string" && options.customerComment.trim().length > 0
+      ? options.customerComment.trim().slice(0, 1000)
+      : null
+  const normalizedCustomerRequest =
+    typeof options.customerRequest === "string" && options.customerRequest.trim().length > 0
+      ? options.customerRequest.trim().slice(0, 1000)
+      : null
+
+  const features = await getTenantSedeFeatures(tenantSchema)
 
   if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
     const error = new Error("SERVICE_NOT_FOUND")
@@ -326,6 +804,49 @@ export async function reserveAppointments(options: {
   try {
     await client.query("BEGIN")
 
+    if (normalizedSedeId !== null && features.hasSedesTable) {
+      const sedeResult = await client.query<{ id: number }>(
+        tenantSql(
+          `SELECT id
+             FROM tenant_base.sedes
+            WHERE id = $1
+              AND activo = TRUE
+            LIMIT 1`,
+          tenantSchema,
+        ),
+        [normalizedSedeId],
+      )
+
+      if (sedeResult.rowCount === 0) {
+        const error = new Error("SEDE_NOT_FOUND")
+        ;(error as { code?: string }).code = "SEDE_NOT_FOUND"
+        throw error
+      }
+
+      const employeeSedeFilter = buildEmployeeSedeFilterSql(features, "$2")
+      if (employeeSedeFilter) {
+        const employeeInSedeResult = await client.query<{ exists: boolean }>(
+          tenantSql(
+            `SELECT EXISTS(
+               SELECT 1
+                 FROM tenant_base.empleados e
+                WHERE e.id = $1
+                  AND ${employeeSedeFilter}
+               LIMIT 1
+             ) AS exists`,
+            tenantSchema,
+          ),
+          [employeeId, normalizedSedeId],
+        )
+
+        if (!employeeInSedeResult.rows[0]?.exists) {
+          const error = new Error("BARBER_NOT_IN_SEDE")
+          ;(error as { code?: string }).code = "BARBER_NOT_IN_SEDE"
+          throw error
+        }
+      }
+    }
+
     // Business rule: max 2 appointments per client per day (excluding cancelled).
     const dailyCountResult = await client.query<{ count: number }>(
       tenantSql(`SELECT COUNT(*)::int AS count
@@ -351,17 +872,24 @@ export async function reserveAppointments(options: {
       throw error
     }
 
+    const serviceSedeFilter =
+      normalizedSedeId !== null ? buildServiceSedeFilterSql(features, "$2") : null
+
     const durationsResult = await client.query<{ id: number; duracion_min: number }>(
-      tenantSql(`SELECT id, duracion_min
-         FROM tenant_base.servicios
-        WHERE id = ANY($1::int[])
-          AND estado = 'activo'`, tenantSchema),
-      [serviceIds],
+      tenantSql(
+        `SELECT s.id, s.duracion_min
+           FROM tenant_base.servicios s
+          WHERE s.id = ANY($1::int[])
+            AND s.estado = 'activo'
+            ${serviceSedeFilter ? `AND ${serviceSedeFilter}` : ""}`,
+        tenantSchema,
+      ),
+      normalizedSedeId !== null && serviceSedeFilter ? [serviceIds, normalizedSedeId] : [serviceIds],
     )
 
     if (durationsResult.rowCount !== serviceIds.length) {
-      const error = new Error("SERVICE_NOT_FOUND")
-      ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+      const error = new Error(normalizedSedeId !== null ? "SERVICE_NOT_IN_SEDE" : "SERVICE_NOT_FOUND")
+      ;(error as { code?: string }).code = normalizedSedeId !== null ? "SERVICE_NOT_IN_SEDE" : "SERVICE_NOT_FOUND"
       throw error
     }
 
@@ -387,6 +915,7 @@ export async function reserveAppointments(options: {
       employeeId,
       date: slotDateLocal,
       durationMinOverride: totalDurationMin,
+      sedeId: normalizedSedeId,
       tenantSchema,
     })
 
@@ -419,16 +948,64 @@ export async function reserveAppointments(options: {
       throw error
     }
 
+    const insertColumns = [
+      "cliente_id",
+      "empleado_id",
+      "servicio_id",
+      "fecha_cita",
+      "fecha_cita_fin",
+      "estado",
+      "notificado",
+      "creado_en",
+    ]
+
+    const insertValues = [
+      "$1",
+      "$2",
+      "$3",
+      "$4::timestamptz",
+      "$4::timestamptz + make_interval(mins := $5)",
+      "'pendiente'::tenant_base.estado_agendamiento_enum",
+      "'no notificado'::tenant_base.notificado_enum",
+      "now()",
+    ]
+
+    const insertParams: Array<number | string | null> = [
+      clientId,
+      employeeId,
+      primaryServiceId,
+      startForInsert,
+      totalDurationMin,
+    ]
+
+    if (features.hasAgendamientosSedeColumn) {
+      insertColumns.push("sede_id")
+      insertParams.push(normalizedSedeId)
+      insertValues.push(`$${insertParams.length}::int`)
+    }
+
+    if (features.hasAgendamientosComentariosColumn) {
+      insertColumns.push("comentarios_cliente")
+      insertParams.push(normalizedCustomerComment)
+      insertValues.push(`$${insertParams.length}::text`)
+    }
+
+    if (features.hasAgendamientosSolicitudesColumn) {
+      insertColumns.push("solicitudes_cliente")
+      insertParams.push(normalizedCustomerRequest)
+      insertValues.push(`$${insertParams.length}::text`)
+    }
+
     const insertResult = await client.query<{ id: number }>(
-      tenantSql(`INSERT INTO tenant_base.agendamientos
-        (cliente_id, empleado_id, servicio_id, fecha_cita, fecha_cita_fin, estado, notificado, creado_en)
+      tenantSql(
+        `INSERT INTO tenant_base.agendamientos
+        (${insertColumns.join(", ")})
        VALUES
-        ($1, $2, $3, $4::timestamptz, $4::timestamptz + make_interval(mins := $5),
-         'pendiente'::tenant_base.estado_agendamiento_enum,
-         'no notificado'::tenant_base.notificado_enum,
-         now())
-       RETURNING id`, tenantSchema),
-      [clientId, employeeId, primaryServiceId, startForInsert, totalDurationMin],
+        (${insertValues.join(", ")})
+       RETURNING id`,
+        tenantSchema,
+      ),
+      insertParams,
     )
 
     const insertedId = insertResult.rows[0]?.id
@@ -447,11 +1024,77 @@ export async function reserveAppointments(options: {
   }
 }
 
+export async function reserveAppointmentsWithoutPreference(options: {
+  userId: number
+  serviceIds: number[]
+  start: string
+  sedeId?: number | null
+  customerComment?: string | null
+  customerRequest?: string | null
+  tenantSchema?: string | null
+}): Promise<{ appointmentIds: number[]; employeeId: number }> {
+  const normalizedSedeId = normalizeSedeId(options.sedeId)
+  const primaryServiceId = options.serviceIds[0]
+
+  if (!Number.isInteger(primaryServiceId) || primaryServiceId <= 0) {
+    const error = new Error("SERVICE_NOT_FOUND")
+    ;(error as { code?: string }).code = "SERVICE_NOT_FOUND"
+    throw error
+  }
+
+  const barbers = await getBarbersForService(primaryServiceId, options.tenantSchema, normalizedSedeId)
+
+  for (const barber of barbers) {
+    try {
+      const result = await reserveAppointments({
+        userId: options.userId,
+        employeeId: barber.id,
+        serviceIds: options.serviceIds,
+        start: options.start,
+        sedeId: normalizedSedeId,
+        customerComment: options.customerComment,
+        customerRequest: options.customerRequest,
+        tenantSchema: options.tenantSchema,
+      })
+
+      return {
+        appointmentIds: result.appointmentIds,
+        employeeId: barber.id,
+      }
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+          ? ((error as { code?: string }).code as string)
+          : null
+
+      if (code === "SLOT_NOT_AVAILABLE" || code === "SLOT_ALREADY_TAKEN" || code === "BARBER_NOT_IN_SEDE") {
+        continue
+      }
+
+      throw error
+    }
+  }
+
+  const error = new Error("SLOT_NOT_AVAILABLE")
+  ;(error as { code?: string }).code = "SLOT_NOT_AVAILABLE"
+  throw error
+}
+
 type AppointmentRow = {
   id: number
   fecha_cita: Date
   fecha_cita_fin: Date | null
   estado: string
+  sede_id: number | null
+  sede_nombre: string | null
+  sede_direccion: string | null
+  sede_ciudad: string | null
+  sede_telefono: string | null
+  sede_latitud: number | null
+  sede_longitud: number | null
   servicio_id: number
   servicio_nombre: string
   servicio_precio: number | null
@@ -499,6 +1142,8 @@ export async function getAppointmentsForUser(options: {
   tenantSchema?: string | null
 }): Promise<Appointment[]> {
   const { userId, scope, statuses = [], limit = 100, tenantSchema } = options
+  const sedeFeatures = await getTenantSedeFeatures(tenantSchema)
+  const includeSedeInQuery = sedeFeatures.hasSedesTable && sedeFeatures.hasAgendamientosSedeColumn
 
   const statusArray = statuses.length > 0 ? statuses : null
   const orderDirection = scope === "upcoming" ? "ASC" : "DESC"
@@ -507,11 +1152,34 @@ export async function getAppointmentsForUser(options: {
       ? "(a.fecha_cita >= now() OR a.estado::text IN ('pendiente', 'confirmada', 'provisional'))"
       : "(a.fecha_cita < now() AND a.estado::text NOT IN ('pendiente', 'confirmada', 'provisional'))"
 
-  const result = await pool.query<AppointmentRow>(
-    tenantSql(`SELECT a.id,
+  const buildQuery = (withSedeData: boolean) => {
+    const sedeSelectSql = withSedeData
+      ? `,
+            sd.id AS sede_id,
+            sd.nombre AS sede_nombre,
+            sd.direccion AS sede_direccion,
+            sd.ciudad AS sede_ciudad,
+            sd.telefono AS sede_telefono,
+            sd.latitud::double precision AS sede_latitud,
+            sd.longitud::double precision AS sede_longitud`
+      : `,
+            NULL::int AS sede_id,
+            NULL::text AS sede_nombre,
+            NULL::text AS sede_direccion,
+            NULL::text AS sede_ciudad,
+            NULL::text AS sede_telefono,
+            NULL::double precision AS sede_latitud,
+            NULL::double precision AS sede_longitud`
+
+    const sedeJoinSql = withSedeData
+      ? "LEFT JOIN tenant_base.sedes sd ON sd.id = a.sede_id"
+      : ""
+
+    return tenantSql(`SELECT a.id,
             a.fecha_cita,
             a.fecha_cita_fin,
-            a.estado,
+            a.estado
+          ${sedeSelectSql},
             s.id  AS servicio_id,
             s.nombre AS servicio_nombre,
             s.precio AS servicio_precio,
@@ -524,6 +1192,7 @@ export async function getAppointmentsForUser(options: {
        INNER JOIN tenant_base.clientes c ON c.id = a.cliente_id
        INNER JOIN tenant_base.servicios s ON s.id = a.servicio_id
        INNER JOIN tenant_base.empleados e ON e.id = a.empleado_id
+       ${sedeJoinSql}
        LEFT JOIN LATERAL (
          SELECT
            pg.estado::text AS pago_estado,
@@ -553,15 +1222,48 @@ export async function getAppointmentsForUser(options: {
         AND ${scopeCondition}
         AND ($2::text[] IS NULL OR a.estado::text = ANY($2::text[]))
       ORDER BY a.fecha_cita ${orderDirection}
-      LIMIT $3`, tenantSchema),
-    [userId, statusArray, limit],
-  )
+      LIMIT $3`, tenantSchema)
+  }
+
+  let result: { rows: AppointmentRow[] }
+
+  try {
+    result = await pool.query<AppointmentRow>(buildQuery(includeSedeInQuery), [userId, statusArray, limit])
+  } catch (error) {
+    const errorCode =
+      typeof error === "object" && error !== null && "code" in error
+        ? ((error as { code?: string }).code ?? "")
+        : ""
+
+    // Fallback for tenants with partial or custom sede schema rollout.
+    if (includeSedeInQuery) {
+      console.warn("Falling back to appointments query without sede metadata", {
+        tenantSchema,
+        errorCode,
+      })
+      result = await pool.query<AppointmentRow>(buildQuery(false), [userId, statusArray, limit])
+    } else {
+      throw error
+    }
+  }
 
   return result.rows.map((row) => ({
     id: row.id,
     start: row.fecha_cita.toISOString(),
     end: row.fecha_cita_fin ? row.fecha_cita_fin.toISOString() : null,
     status: row.estado,
+    sede:
+      typeof row.sede_id === "number"
+        ? {
+            id: row.sede_id,
+            name: row.sede_nombre ?? "Sede",
+            address: row.sede_direccion,
+            city: row.sede_ciudad,
+            phone: row.sede_telefono,
+            latitude: row.sede_latitud,
+            longitude: row.sede_longitud,
+          }
+        : null,
     payment: {
       status: row.pago_estado,
       method: row.pago_metodo,
