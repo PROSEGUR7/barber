@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { addDays, endOfMonth, format, startOfMonth } from "date-fns"
 import { es } from "date-fns/locale"
-import { CalendarIcon, Loader2, Save } from "lucide-react"
+import { CalendarIcon, Clock3, Loader2, Save, ShieldCheck, TimerReset } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,6 +11,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import { useToast } from "@/components/ui/use-toast"
 import {
@@ -78,6 +79,9 @@ export default function BarberAvailabilityPage() {
   const [isConfirmExceptionOpen, setIsConfirmExceptionOpen] = useState(false)
   const [isDuplicateExceptionOpen, setIsDuplicateExceptionOpen] = useState(false)
   const [duplicateExceptionMessage, setDuplicateExceptionMessage] = useState<string | null>(null)
+
+  const [bufferMinutes, setBufferMinutes] = useState("10")
+  const [minNoticeHours, setMinNoticeHours] = useState("4")
 
   const buildTenantHeaders = (): HeadersInit => {
     if (typeof window === "undefined") {
@@ -152,6 +156,15 @@ export default function BarberAvailabilityPage() {
       const stored = localStorage.getItem("userId")
       const parsed = stored ? Number.parseInt(stored, 10) : NaN
       setUserId(Number.isFinite(parsed) ? parsed : null)
+
+      const savedBuffer = localStorage.getItem("barberBufferMinutes")
+      const savedNotice = localStorage.getItem("barberMinNoticeHours")
+      if (savedBuffer && /^\d+$/.test(savedBuffer)) {
+        setBufferMinutes(savedBuffer)
+      }
+      if (savedNotice && /^\d+$/.test(savedNotice)) {
+        setMinNoticeHours(savedNotice)
+      }
     } catch {
       setUserId(null)
     }
@@ -255,6 +268,80 @@ export default function BarberAvailabilityPage() {
     copy.sort((a, b) => a.dayOfWeek - b.dayOfWeek)
     return copy
   }, [weeklyRules])
+
+  const metrics = useMemo(() => {
+    const activeRules = weeklyRules.filter((rule) => rule.isEnabled)
+    const activeDays = activeRules.length
+
+    const weeklyMinutes = activeRules.reduce((total, rule) => {
+      const [startH, startM] = rule.startTime.split(":").map((x) => Number(x))
+      const [endH, endM] = rule.endTime.split(":").map((x) => Number(x))
+      if (![startH, startM, endH, endM].every(Number.isFinite)) return total
+      const start = startH * 60 + startM
+      const end = endH * 60 + endM
+      return total + Math.max(0, end - start)
+    }, 0)
+
+    const exceptionDays = new Set(exceptions.map((item) => item.date)).size
+    const occupationGoal = Math.min(100, Math.round((weeklyMinutes / (45 * 60)) * 100))
+
+    return {
+      activeDays,
+      weeklyHours: Math.round((weeklyMinutes / 60) * 10) / 10,
+      exceptionDays,
+      occupationGoal,
+    }
+  }, [exceptions, weeklyRules])
+
+  const applyTemplate = (template: "standard" | "extended" | "weekend") => {
+    setWeeklyRules((current) => {
+      return current.map((rule) => {
+        if (template === "standard") {
+          return {
+            ...rule,
+            isEnabled: rule.dayOfWeek >= 1 && rule.dayOfWeek <= 5,
+            startTime: "09:00",
+            endTime: "18:00",
+          }
+        }
+
+        if (template === "extended") {
+          return {
+            ...rule,
+            isEnabled: rule.dayOfWeek >= 1 && rule.dayOfWeek <= 6,
+            startTime: "08:00",
+            endTime: "19:00",
+          }
+        }
+
+        return {
+          ...rule,
+          isEnabled: rule.dayOfWeek === 5 || rule.dayOfWeek === 6,
+          startTime: "10:00",
+          endTime: "20:00",
+        }
+      })
+    })
+  }
+
+  const saveOperationalRules = () => {
+    const parsedBuffer = Number(bufferMinutes)
+    const parsedNotice = Number(minNoticeHours)
+
+    if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0 || parsedBuffer > 60) {
+      toast({ title: "Buffer inválido", description: "Define un buffer entre 0 y 60 minutos.", variant: "destructive" })
+      return
+    }
+
+    if (!Number.isFinite(parsedNotice) || parsedNotice < 0 || parsedNotice > 72) {
+      toast({ title: "Anticipación inválida", description: "Define entre 0 y 72 horas.", variant: "destructive" })
+      return
+    }
+
+    localStorage.setItem("barberBufferMinutes", String(Math.trunc(parsedBuffer)))
+    localStorage.setItem("barberMinNoticeHours", String(Math.trunc(parsedNotice)))
+    toast({ title: "Reglas guardadas", description: "Se guardaron tus reglas operativas locales." })
+  }
 
   const isWorkingDay = (date: Date): boolean => {
     const dow = date.getDay()
@@ -390,7 +477,50 @@ export default function BarberAvailabilityPage() {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Disponibilidad</h1>
-          <p className="text-muted-foreground">Configura tu horario semanal y excepciones por fecha.</p>
+          <p className="text-muted-foreground">Configura tu capacidad operativa semanal, excepciones y reglas de agenda.</p>
+        </div>
+
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Card>
+            <CardContent className="flex items-start justify-between p-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Días activos</p>
+                <p className="mt-1 text-2xl font-semibold">{metrics.activeDays}</p>
+                <p className="text-xs text-muted-foreground">sobre 7 días de operación</p>
+              </div>
+              <Clock3 className="h-5 w-5 text-muted-foreground" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-start justify-between p-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Horas semanales</p>
+                <p className="mt-1 text-2xl font-semibold">{metrics.weeklyHours}h</p>
+                <p className="text-xs text-muted-foreground">capacidad habilitada</p>
+              </div>
+              <TimerReset className="h-5 w-5 text-muted-foreground" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-start justify-between p-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Excepciones del mes</p>
+                <p className="mt-1 text-2xl font-semibold">{metrics.exceptionDays}</p>
+                <p className="text-xs text-muted-foreground">días con ajuste especial</p>
+              </div>
+              <CalendarIcon className="h-5 w-5 text-muted-foreground" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="space-y-2 p-4">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Meta capacidad</span>
+                <span>{metrics.occupationGoal}%</span>
+              </div>
+              <Progress value={metrics.occupationGoal} />
+              <p className="text-xs text-muted-foreground">Referencia empresarial sobre 45h/semana.</p>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
@@ -400,6 +530,15 @@ export default function BarberAvailabilityPage() {
               <CardDescription>Activa o desactiva cada día y define el rango de horas.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="mb-2 text-sm font-medium">Plantillas rápidas</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => applyTemplate("standard")}>Estándar L-V</Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => applyTemplate("extended")}>Extendido L-S</Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => applyTemplate("weekend")}>Foco fin de semana</Button>
+                </div>
+              </div>
+
               {isLoadingWeekly ? (
                 <div className="space-y-3">
                   <div className="h-10 w-full bg-muted animate-pulse rounded" />
@@ -456,6 +595,28 @@ export default function BarberAvailabilityPage() {
                   ))}
                 </div>
               )}
+
+              <Separator />
+
+              <div className="rounded-md border bg-muted/20 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4" />
+                  <p className="text-sm font-medium">Reglas operativas</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>Buffer entre citas (min)</Label>
+                    <Input type="number" min={0} max={60} value={bufferMinutes} onChange={(e) => setBufferMinutes(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Anticipación mínima (h)</Label>
+                    <Input type="number" min={0} max={72} value={minNoticeHours} onChange={(e) => setMinNoticeHours(e.target.value)} />
+                  </div>
+                </div>
+                <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={saveOperationalRules}>
+                  Guardar reglas operativas
+                </Button>
+              </div>
 
               <Separator />
 

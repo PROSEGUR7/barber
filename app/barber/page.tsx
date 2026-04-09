@@ -1,19 +1,30 @@
 "use client"
-import { useEffect, useMemo, useState } from "react"
-import { format, isSameDay, startOfDay } from "date-fns"
+
+import Link from "next/link"
+import { type ComponentType, useEffect, useMemo, useState } from "react"
+import { addDays, format, isBefore, startOfDay } from "date-fns"
 import { es } from "date-fns/locale"
-import { CalendarIcon, CheckCircle, Clock, DollarSign, User, XCircle } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowRight,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  DollarSign,
+  Scissors,
+  TrendingUp,
+  UserRound,
+  Wallet,
+} from "lucide-react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Calendar } from "@/components/ui/calendar"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useToast } from "@/components/ui/use-toast"
+import { cn } from "@/lib/utils"
 
-type AppointmentStatus = "pendiente" | "completada" | "cancelada" | string
+type AppointmentStatus = "pendiente" | "confirmada" | "completada" | "cancelada" | string
 
 type Appointment = {
   id: number
@@ -25,16 +36,64 @@ type Appointment = {
   status: AppointmentStatus
 }
 
-export default function BarberDashboard() {
-  const { toast } = useToast()
-  const [userId, setUserId] = useState<number | null>(null)
-  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
-  const [activeTab, setActiveTab] = useState<"today" | "upcoming" | "history">("today")
+type EarningsSummary = {
+  today: { count: number; amount: number }
+  week: { count: number; amount: number }
+  month: { count: number; amount: number }
+}
 
-  const [appointments, setAppointments] = useState<Appointment[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+const currencyFormatter = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  maximumFractionDigits: 0,
+})
+
+function normalize(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase()
+}
+
+function formatCurrency(value: number) {
+  return currencyFormatter.format(Number.isFinite(value) ? value : 0)
+}
+
+function getStatusBadgeClass(status: string) {
+  switch (normalize(status)) {
+    case "pendiente":
+      return "bg-amber-500/10 text-amber-700 border-amber-500/30"
+    case "confirmada":
+      return "bg-sky-500/10 text-sky-700 border-sky-500/30"
+    case "completada":
+      return "bg-emerald-500/10 text-emerald-700 border-emerald-500/30"
+    case "cancelada":
+      return "bg-rose-500/10 text-rose-700 border-rose-500/30"
+    default:
+      return "bg-muted text-foreground border-border"
+  }
+}
+
+function getStatusText(status: string) {
+  switch (normalize(status)) {
+    case "pendiente":
+      return "Pendiente"
+    case "confirmada":
+      return "Confirmada"
+    case "completada":
+      return "Completada"
+    case "cancelada":
+      return "Cancelada"
+    default:
+      return status
+  }
+}
+
+export default function BarberDashboardPage() {
+  const [userId, setUserId] = useState<number | null>(null)
+  const [todayAppointments, setTodayAppointments] = useState<Appointment[]>([])
+  const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([])
+  const [historyAppointments, setHistoryAppointments] = useState<Appointment[]>([])
+  const [earningsSummary, setEarningsSummary] = useState<EarningsSummary | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [updatingId, setUpdatingId] = useState<number | null>(null)
 
   const buildTenantHeaders = (): HeadersInit => {
     if (typeof window === "undefined") {
@@ -66,513 +125,344 @@ export default function BarberDashboard() {
     }
   }, [])
 
-  const loadAppointments = async () => {
+  useEffect(() => {
     if (!userId) {
-      setAppointments([])
+      setIsLoading(false)
       setError("No encontramos tu sesión activa. Vuelve a iniciar sesión.")
       return
     }
 
-    setIsLoading(true)
-    setError(null)
+    const load = async () => {
+      setIsLoading(true)
+      setError(null)
 
-    try {
-      const params = new URLSearchParams({
-        userId: String(userId),
-        scope: activeTab,
-      })
+      try {
+        const headers = buildTenantHeaders()
+        const today = format(startOfDay(new Date()), "yyyy-MM-dd")
 
-      if (activeTab === "today") {
-        params.set("date", format(startOfDay(selectedDate), "yyyy-MM-dd"))
-      }
+        const [todayRes, upcomingRes, historyRes, earningsRes] = await Promise.all([
+          fetch(`/api/barber/appointments?userId=${userId}&scope=today&date=${today}`, { cache: "no-store", headers }),
+          fetch(`/api/barber/appointments?userId=${userId}&scope=upcoming`, { cache: "no-store", headers }),
+          fetch(`/api/barber/appointments?userId=${userId}&scope=history`, { cache: "no-store", headers }),
+          fetch(`/api/barber/earnings?userId=${userId}`, { cache: "no-store", headers }),
+        ])
 
-      const response = await fetch(`/api/barber/appointments?${params.toString()}`, {
-        method: "GET",
-        cache: "no-store",
-        headers: buildTenantHeaders(),
-      })
+        const [todayData, upcomingData, historyData, earningsData] = await Promise.all([
+          todayRes.json().catch(() => ({})),
+          upcomingRes.json().catch(() => ({})),
+          historyRes.json().catch(() => ({})),
+          earningsRes.json().catch(() => ({})),
+        ])
 
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        setAppointments([])
-        setError(data.error ?? "No se pudieron cargar las citas")
-        return
-      }
+        if (!todayRes.ok || !upcomingRes.ok || !historyRes.ok || !earningsRes.ok) {
+          const firstError =
+            todayData.error ?? upcomingData.error ?? historyData.error ?? earningsData.error ?? "No se pudo cargar el panel"
+          throw new Error(firstError)
+        }
 
-      const items = Array.isArray(data.appointments) ? (data.appointments as any[]) : []
-      setAppointments(
-        items.map((item) => ({
-          id: Number(item.id),
-          clientName: String(item.clientName ?? "Cliente"),
-          serviceName: String(item.serviceName ?? "Servicio"),
-          start: String(item.start),
-          end: item.end ? String(item.end) : null,
-          price: item.price != null && Number.isFinite(Number(item.price)) ? Number(item.price) : null,
-          status: String(item.status ?? "pendiente"),
-        })),
-      )
-    } catch (err) {
-      console.error("Error loading barber appointments", err)
-      setAppointments([])
-      setError("Error de conexión al cargar las citas")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+        const mapAppointments = (items: any[]): Appointment[] =>
+          items.map((item) => ({
+            id: Number(item.id),
+            clientName: String(item.clientName ?? "Cliente"),
+            serviceName: String(item.serviceName ?? "Servicio"),
+            start: String(item.start),
+            end: item.end ? String(item.end) : null,
+            price: item.price != null && Number.isFinite(Number(item.price)) ? Number(item.price) : null,
+            status: String(item.status ?? "pendiente"),
+          }))
 
-  useEffect(() => {
-    void loadAppointments()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, activeTab, selectedDate])
+        setTodayAppointments(mapAppointments(Array.isArray(todayData.appointments) ? todayData.appointments : []))
+        setUpcomingAppointments(mapAppointments(Array.isArray(upcomingData.appointments) ? upcomingData.appointments : []))
+        setHistoryAppointments(mapAppointments(Array.isArray(historyData.appointments) ? historyData.appointments : []))
 
-  const updateStatus = async (appointmentId: number, status: "cancelada" | "completada") => {
-    if (!userId) return
-    setUpdatingId(appointmentId)
-    try {
-      const response = await fetch(`/api/barber/appointments/${appointmentId}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...buildTenantHeaders() },
-        body: JSON.stringify({ userId, status }),
-      })
-
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        toast({
-          title: "No se pudo actualizar",
-          description: data.error ?? "Intenta nuevamente.",
-          variant: "destructive",
+        const summary = earningsData.summary ?? earningsData
+        setEarningsSummary({
+          today: {
+            count: Number(summary?.today?.count ?? 0),
+            amount: Number(summary?.today?.amount ?? 0),
+          },
+          week: {
+            count: Number(summary?.week?.count ?? 0),
+            amount: Number(summary?.week?.amount ?? 0),
+          },
+          month: {
+            count: Number(summary?.month?.count ?? 0),
+            amount: Number(summary?.month?.amount ?? 0),
+          },
         })
-        return
+      } catch (loadError) {
+        console.error("Error loading barber dashboard", loadError)
+        setError(loadError instanceof Error ? loadError.message : "No se pudo cargar el panel")
+      } finally {
+        setIsLoading(false)
       }
+    }
 
-      toast({
-        title: "Actualizado",
-        description: "La cita se actualizó correctamente.",
+    void load()
+  }, [userId])
+
+  const now = new Date()
+
+  const summary = useMemo(() => {
+    const totalToday = todayAppointments.length
+    const pendingToday = todayAppointments.filter((apt) => ["pendiente", "confirmada"].includes(normalize(apt.status))).length
+    const completedToday = todayAppointments.filter((apt) => normalize(apt.status) === "completada").length
+    const canceledToday = todayAppointments.filter((apt) => normalize(apt.status) === "cancelada").length
+
+    const upcoming7Days = upcomingAppointments.filter((apt) => {
+      const start = new Date(apt.start)
+      return start >= startOfDay(now) && start <= addDays(startOfDay(now), 7)
+    }).length
+
+    const overduePending = todayAppointments.filter((apt) => {
+      const start = new Date(apt.start)
+      return isBefore(start, now) && ["pendiente", "confirmada"].includes(normalize(apt.status))
+    }).length
+
+    const completionRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0
+
+    return {
+      totalToday,
+      pendingToday,
+      completedToday,
+      canceledToday,
+      upcoming7Days,
+      overduePending,
+      completionRate,
+    }
+  }, [todayAppointments, upcomingAppointments, now])
+
+  const nextAppointments = useMemo(() => {
+    return [...upcomingAppointments]
+      .filter((apt) => ["pendiente", "confirmada"].includes(normalize(apt.status)))
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+      .slice(0, 5)
+  }, [upcomingAppointments])
+
+  const topClients = useMemo(() => {
+    const bucket = new Map<string, { name: string; count: number; lastVisit: string }>()
+
+    for (const apt of historyAppointments) {
+      const key = apt.clientName.trim().toLowerCase()
+      const current = bucket.get(key)
+      if (!current) {
+        bucket.set(key, { name: apt.clientName, count: 1, lastVisit: apt.start })
+      } else {
+        current.count += 1
+        if (new Date(apt.start).getTime() > new Date(current.lastVisit).getTime()) {
+          current.lastVisit = apt.start
+        }
+      }
+    }
+
+    return [...bucket.values()]
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count
+        return new Date(b.lastVisit).getTime() - new Date(a.lastVisit).getTime()
       })
-      await loadAppointments()
-    } catch (err) {
-      console.error("Error updating appointment status", err)
-      toast({
-        title: "Error de conexión",
-        description: "No pudimos comunicar con el servidor.",
-        variant: "destructive",
-      })
-    } finally {
-      setUpdatingId(null)
-    }
-  }
+      .slice(0, 6)
+  }, [historyAppointments])
 
-  const selectedDayAppointments = useMemo(() => {
-    const target = startOfDay(selectedDate)
-    return appointments.filter((apt) => isSameDay(new Date(apt.start), target))
-  }, [appointments, selectedDate])
-
-  const pendingCount = selectedDayAppointments.filter((apt) => apt.status === "pendiente").length
-  const completedCount = selectedDayAppointments.filter((apt) => apt.status === "completada").length
-
-  const totalEarnings = selectedDayAppointments
-    .filter((apt) => apt.status === "completada")
-    .reduce((sum, apt) => sum + (apt.price ?? 0), 0)
-
-  const averageTicket = completedCount > 0 ? Math.round(totalEarnings / completedCount) : 0
-
-  const daySummary = useMemo(() => {
-    const nonCancelled = selectedDayAppointments.filter((apt) => apt.status !== "cancelada")
-    const starts = nonCancelled.map((apt) => new Date(apt.start).getTime()).filter(Number.isFinite)
-    const ends = nonCancelled
-      .map((apt) => (apt.end ? new Date(apt.end).getTime() : null))
-      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-
-    const first = starts.length ? new Date(Math.min(...starts)) : null
-    const last = ends.length ? new Date(Math.max(...ends)) : null
-    const totalMinutes = nonCancelled.reduce((acc, apt) => {
-      const startMs = new Date(apt.start).getTime()
-      const endMs = apt.end ? new Date(apt.end).getTime() : NaN
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return acc
-      return acc + Math.max(0, Math.round((endMs - startMs) / 60000))
-    }, 0)
-
-    const estimated = nonCancelled.reduce((acc, apt) => acc + (apt.price ?? 0), 0)
-
-    return { first, last, totalMinutes, estimated }
-  }, [selectedDayAppointments])
-
-  const getStatusColor = (status: AppointmentStatus) => {
-    switch (status) {
-      case "pendiente":
-        return "bg-yellow-500/10 text-yellow-500 border-yellow-500/20"
-      case "completada":
-        return "bg-green-500/10 text-green-500 border-green-500/20"
-      case "cancelada":
-        return "bg-red-500/10 text-red-500 border-red-500/20"
-      default:
-        return "bg-muted text-foreground border-border"
-    }
-  }
-
-  const getStatusText = (status: AppointmentStatus) => {
-    switch (status) {
-      case "pendiente":
-        return "Pendiente"
-      case "completada":
-        return "Completada"
-      case "cancelada":
-        return "Cancelada"
-      default:
-        return status
-    }
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-64" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <Skeleton key={index} className="h-28 w-full" />
+          ))}
+        </div>
+        <Skeleton className="h-80 w-full" />
+      </div>
+    )
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <main className="container mx-auto px-4 py-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Panel de Peluquero</h1>
-            <p className="text-muted-foreground">Gestiona tus citas y horarios del día</p>
+      <main className="container mx-auto space-y-6 px-4 py-8">
+        <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Centro operativo del peluquero</h1>
+            <p className="text-muted-foreground">Controla agenda, ejecución, ingresos y seguimiento de clientes en una sola vista.</p>
           </div>
+          <Badge variant="outline" className="w-fit capitalize">
+            {format(new Date(), "EEEE d 'de' MMMM yyyy", { locale: es })}
+          </Badge>
+        </section>
 
-          {/* Stats */}
-          <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {error && (
+          <Card>
+            <CardContent className="py-4 text-sm text-destructive">{error}</CardContent>
+          </Card>
+        )}
+
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <MetricCard title="Agenda de hoy" value={String(summary.totalToday)} subtitle={`${summary.pendingToday} por gestionar`} icon={CalendarDays} />
+          <MetricCard title="Cumplimiento" value={`${summary.completionRate}%`} subtitle={`${summary.completedToday} completadas`} icon={CheckCircle2} />
+          <MetricCard title="Incidencias" value={String(summary.canceledToday)} subtitle="Cancelaciones del día" icon={AlertTriangle} />
+          <MetricCard title="Próximos 7 días" value={String(summary.upcoming7Days)} subtitle="Carga futura" icon={Clock3} />
+          <MetricCard
+            title="Ingreso de hoy"
+            value={formatCurrency(earningsSummary?.today.amount ?? 0)}
+            subtitle={`${earningsSummary?.today.count ?? 0} servicios pagados`}
+            icon={DollarSign}
+          />
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>Agenda inmediata</CardTitle>
+              <CardDescription>Próximas citas que requieren ejecución o seguimiento.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {nextAppointments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tienes citas próximas pendientes.</p>
+              ) : (
+                nextAppointments.map((apt) => (
+                  <div key={apt.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{apt.clientName}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {apt.serviceName} · {format(new Date(apt.start), "dd/MM HH:mm")}
+                      </p>
+                    </div>
+                    <Badge variant="outline" className={getStatusBadgeClass(apt.status)}>
+                      {getStatusText(apt.status)}
+                    </Badge>
+                  </div>
+                ))
+              )}
+              <div className="pt-2">
+                <Button asChild variant="outline" className="w-full sm:w-auto">
+                  <Link href="/barber/agendamientos">
+                    Abrir calendario operativo
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="space-y-6">
             <Card>
-              <CardHeader className="pb-1.5">
-                <CardDescription>Citas Hoy</CardDescription>
-                <CardTitle className="text-2xl">{selectedDayAppointments.length}</CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle>Control de KPI</CardTitle>
+                <CardDescription>Indicadores críticos de la operación diaria.</CardDescription>
               </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">Total de citas programadas</p>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Cumplimiento de citas</span>
+                    <span className="font-medium">{summary.completionRate}%</span>
+                  </div>
+                  <Progress value={summary.completionRate} />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Pagos de la semana</span>
+                    <span className="font-medium">{formatCurrency(earningsSummary?.week.amount ?? 0)}</span>
+                  </div>
+                  <Progress value={Math.min(100, Math.round(((earningsSummary?.week.amount ?? 0) / 1000000) * 100))} />
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <p className="font-medium">Alertas activas</p>
+                  <p className="mt-1 text-muted-foreground">{summary.overduePending} citas con posible retraso operativo.</p>
+                </div>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader className="pb-1.5">
-                <CardDescription>Pendientes</CardDescription>
-                <CardTitle className="text-2xl text-yellow-500">{pendingCount}</CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle>Clientes recurrentes</CardTitle>
+                <CardDescription>Base de fidelización a priorizar esta semana.</CardDescription>
               </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">Por atender</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-1.5">
-                <CardDescription>Completadas</CardDescription>
-                <CardTitle className="text-2xl text-green-500">{completedCount}</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">Servicios cerrados del día</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-1.5">
-                <CardDescription>Ingreso diario</CardDescription>
-                <CardTitle className="text-2xl text-primary">${daySummary.estimated}</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">
-                  Ticket promedio: ${averageTicket}
-                </p>
+              <CardContent className="space-y-2">
+                {topClients.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aún no hay historial suficiente para ranking.</p>
+                ) : (
+                  topClients.map((client) => (
+                    <div key={client.name} className="flex items-center justify-between rounded-md border p-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{client.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Última visita: {format(new Date(client.lastVisit), "dd/MM/yyyy", { locale: es })}
+                        </p>
+                      </div>
+                      <Badge variant="secondary">{client.count} citas</Badge>
+                    </div>
+                  ))
+                )}
               </CardContent>
             </Card>
           </div>
+        </section>
 
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]" id="mis-citas">
-            {/* Appointments List */}
-            <div>
-              <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="w-full">
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="today">Hoy</TabsTrigger>
-                  <TabsTrigger value="upcoming">Próximas</TabsTrigger>
-                  <TabsTrigger value="history">Historial</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="today" className="space-y-4 mt-4">
-                  {isLoading ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <div className="space-y-3">
-                          {Array.from({ length: 3 }).map((_, idx) => (
-                            <Skeleton key={idx} className="h-20 w-full" />
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : error ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <p className="text-sm text-destructive">{error}</p>
-                      </CardContent>
-                    </Card>
-                  ) : selectedDayAppointments.length === 0 ? (
-                    <Card>
-                      <CardContent className="py-12">
-                        <Empty className="border-0 bg-transparent p-0">
-                          <EmptyMedia variant="icon">
-                            <CalendarIcon className="size-6" />
-                          </EmptyMedia>
-                          <EmptyHeader>
-                            <EmptyTitle>Sin citas para hoy</EmptyTitle>
-                            <EmptyDescription>
-                              Cuando tus clientes agenden una visita, la verás en esta sección.
-                            </EmptyDescription>
-                          </EmptyHeader>
-                        </Empty>
-                      </CardContent>
-                    </Card>
-                  ) : (
-                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-                      {selectedDayAppointments.map((appointment) => (
-                      <Card key={appointment.id}>
-                        <CardContent className="p-4">
-                          <div className="mb-3 flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3">
-                              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-                                <User className="h-4 w-4 text-primary" />
-                              </div>
-                              <div>
-                                <h3 className="mb-0.5 text-base font-semibold leading-tight">{appointment.clientName}</h3>
-                                <p className="mb-1 text-sm text-muted-foreground">{appointment.serviceName}</p>
-                                <div className="flex flex-wrap items-center gap-3 text-sm">
-                                  <span className="flex items-center gap-1">
-                                    <Clock className="h-4 w-4 text-muted-foreground" />
-                                    {format(new Date(appointment.start), "HH:mm", { locale: es })}
-                                    {appointment.end
-                                      ? ` (${format(new Date(appointment.end), "HH:mm", { locale: es })})`
-                                      : ""}
-                                  </span>
-                                  <span className="flex items-center gap-1">
-                                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                                    {appointment.price != null ? `$${appointment.price}` : "-"}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                            <Badge variant="outline" className={getStatusColor(appointment.status)}>
-                              {getStatusText(appointment.status)}
-                            </Badge>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            {appointment.status === "pendiente" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  onClick={() => updateStatus(appointment.id, "completada")}
-                                  className="h-8"
-                                  disabled={updatingId === appointment.id}
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  Marcar como Completada
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => updateStatus(appointment.id, "cancelada")}
-                                  className="h-8"
-                                  disabled={updatingId === appointment.id}
-                                >
-                                  <XCircle className="h-4 w-4 mr-2" />
-                                  Cancelar
-                                </Button>
-                              </>
-                            )}
-                            {appointment.status === "completada" && (
-                              <div className="w-full py-1 text-center text-sm font-medium text-green-500">
-                                Cita completada exitosamente
-                              </div>
-                            )}
-                            {appointment.status === "cancelada" && (
-                              <div className="w-full py-1 text-center text-sm font-medium text-red-500">
-                                Cita cancelada
-                              </div>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="upcoming" className="mt-4">
-                  {isLoading ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <div className="space-y-3">
-                          {Array.from({ length: 3 }).map((_, idx) => (
-                            <Skeleton key={idx} className="h-20 w-full" />
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : error ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <p className="text-sm text-destructive">{error}</p>
-                      </CardContent>
-                    </Card>
-                  ) : appointments.length === 0 ? (
-                    <Card>
-                      <CardContent className="py-12">
-                        <Empty className="border-0 bg-transparent p-0">
-                          <EmptyMedia variant="icon">
-                            <CalendarIcon className="size-6" />
-                          </EmptyMedia>
-                          <EmptyHeader>
-                            <EmptyTitle>Sin citas próximas</EmptyTitle>
-                            <EmptyDescription>
-                              Cuando existan nuevas reservas, aparecerán aquí.
-                            </EmptyDescription>
-                          </EmptyHeader>
-                        </Empty>
-                      </CardContent>
-                    </Card>
-                  ) : (
-                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-                      {appointments.map((appointment) => (
-                        <Card key={appointment.id}>
-                          <CardContent className="p-4">
-                            <div className="mb-1.5 flex items-start justify-between gap-3">
-                              <div className="flex items-start gap-3">
-                                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-                                  <User className="h-4 w-4 text-primary" />
-                                </div>
-                                <div>
-                                  <h3 className="mb-0.5 text-base font-semibold leading-tight">{appointment.clientName}</h3>
-                                  <p className="mb-1 text-sm text-muted-foreground">{appointment.serviceName}</p>
-                                  <div className="flex items-center gap-4 text-sm">
-                                    <span className="flex items-center gap-1">
-                                      <Clock className="h-4 w-4 text-muted-foreground" />
-                                      {format(new Date(appointment.start), "EEEE d 'de' MMMM · HH:mm", { locale: es })}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                              <Badge variant="outline" className={getStatusColor(appointment.status)}>
-                                {getStatusText(appointment.status)}
-                              </Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="history" className="mt-4">
-                  {isLoading ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <div className="space-y-3">
-                          {Array.from({ length: 3 }).map((_, idx) => (
-                            <Skeleton key={idx} className="h-20 w-full" />
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : error ? (
-                    <Card>
-                      <CardContent className="py-6">
-                        <p className="text-sm text-destructive">{error}</p>
-                      </CardContent>
-                    </Card>
-                  ) : appointments.length === 0 ? (
-                    <Card>
-                      <CardContent className="py-12">
-                        <Empty className="border-0 bg-transparent p-0">
-                          <EmptyMedia variant="icon">
-                            <CalendarIcon className="size-6" />
-                          </EmptyMedia>
-                          <EmptyHeader>
-                            <EmptyTitle>Sin historial registrado</EmptyTitle>
-                            <EmptyDescription>
-                              Aquí aparecerán las citas completadas o canceladas.
-                            </EmptyDescription>
-                          </EmptyHeader>
-                        </Empty>
-                      </CardContent>
-                    </Card>
-                  ) : (
-                    <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-                      {appointments.map((appointment) => (
-                        <Card key={appointment.id}>
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <h3 className="text-base font-semibold leading-tight">{appointment.clientName}</h3>
-                                <p className="text-sm text-muted-foreground">{appointment.serviceName}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {format(new Date(appointment.start), "EEEE d 'de' MMMM · HH:mm", { locale: es })}
-                                </p>
-                              </div>
-                              <Badge variant="outline" className={getStatusColor(appointment.status)}>
-                                {getStatusText(appointment.status)}
-                              </Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </TabsContent>
-              </Tabs>
-            </div>
-
-            {/* Calendar & Quick Stats */}
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Calendario</CardTitle>
-                  <CardDescription>Selecciona una fecha para ver citas</CardDescription>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="rounded-xl border bg-muted/20 p-3">
-                    <Calendar
-                      mode="single"
-                      selected={selectedDate}
-                      onSelect={setSelectedDate}
-                      className="mx-auto w-full max-w-[320px] rounded-md bg-background p-1"
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Resumen del Día</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Primera cita</span>
-                    <span className="font-semibold">
-                      {daySummary.first ? format(daySummary.first, "HH:mm", { locale: es }) : "-"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Última cita</span>
-                    <span className="font-semibold">
-                      {daySummary.last ? format(daySummary.last, "HH:mm", { locale: es }) : "-"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Tiempo total</span>
-                    <span className="font-semibold">
-                      {daySummary.totalMinutes > 0
-                        ? `${Math.floor(daySummary.totalMinutes / 60)}h ${daySummary.totalMinutes % 60}min`
-                        : "-"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between pt-4 border-t">
-                    <span className="text-sm font-medium">Ingresos estimados</span>
-                    <span className="font-bold text-lg text-primary">
-                      ${daySummary.estimated}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
+        <section>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>Acciones rápidas por sección</CardTitle>
+              <CardDescription>Módulos empresariales del perfil de empleado.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <ActionLink href="/barber/agendamientos" title="Agendamientos" description="Calendario día/semana/mes" icon={CalendarDays} />
+              <ActionLink href="/barber/appointments" title="Mis citas" description="Ejecución y estados" icon={Clock3} />
+              <ActionLink href="/barber/availability" title="Disponibilidad" description="Plantillas y excepciones" icon={Scissors} />
+              <ActionLink href="/barber/services" title="Servicios" description="Catálogo y activación" icon={UserRound} />
+              <ActionLink href="/barber/earnings" title="Ganancias" description="Ingresos y objetivos" icon={Wallet} />
+            </CardContent>
+          </Card>
+        </section>
       </main>
     </div>
+  )
+}
+
+function MetricCard({
+  title,
+  value,
+  subtitle,
+  icon: Icon,
+}: {
+  title: string
+  value: string
+  subtitle: string
+  icon: ComponentType<{ className?: string }>
+}) {
+  return (
+    <Card>
+      <CardContent className="flex items-start justify-between p-4">
+        <div>
+          <p className="text-xs text-muted-foreground">{title}</p>
+          <p className="mt-1 text-2xl font-semibold">{value}</p>
+          <p className="text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <Icon className="h-5 w-5 text-muted-foreground" />
+      </CardContent>
+    </Card>
+  )
+}
+
+function ActionLink({
+  href,
+  title,
+  description,
+  icon: Icon,
+}: {
+  href: string
+  title: string
+  description: string
+  icon: ComponentType<{ className?: string }>
+}) {
+  return (
+    <Link href={href} className={cn("rounded-md border p-3 transition-colors hover:bg-muted/40") }>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold">{title}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </div>
+    </Link>
   )
 }

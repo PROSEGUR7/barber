@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { DollarSign, Loader2, TrendingUp } from "lucide-react"
+import { type ComponentType, useEffect, useMemo, useState } from "react"
+import { DollarSign, Loader2, TrendingUp, Wallet } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 
@@ -18,7 +20,7 @@ type EarningsSummary = {
 }
 
 type MonthlyEarningsPoint = {
-  month: string // YYYY-MM
+  month: string
   amount: number
   count: number
 }
@@ -35,9 +37,19 @@ type EarningsAnalytics = {
   topClients: TopClient[]
 }
 
+const currencyFormatter = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  maximumFractionDigits: 0,
+})
+
 function toNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value)
   return Number.isFinite(n) ? n : 0
+}
+
+function formatCurrency(value: number): string {
+  return currencyFormatter.format(Number.isFinite(value) ? value : 0)
 }
 
 export default function BarberEarningsPage() {
@@ -46,6 +58,9 @@ export default function BarberEarningsPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [summary, setSummary] = useState<EarningsSummary | null>(null)
   const [analytics, setAnalytics] = useState<EarningsAnalytics | null>(null)
+
+  const [commissionRate, setCommissionRate] = useState("50")
+  const [monthlyGoal, setMonthlyGoal] = useState("3000000")
 
   const buildTenantHeaders = (): HeadersInit => {
     if (typeof window === "undefined") {
@@ -72,6 +87,11 @@ export default function BarberEarningsPage() {
       const stored = localStorage.getItem("userId")
       const parsed = stored ? Number.parseInt(stored, 10) : NaN
       setUserId(Number.isFinite(parsed) ? parsed : null)
+
+      const savedCommissionRate = localStorage.getItem("barberCommissionRate")
+      const savedMonthlyGoal = localStorage.getItem("barberMonthlyGoal")
+      if (savedCommissionRate) setCommissionRate(savedCommissionRate)
+      if (savedMonthlyGoal) setMonthlyGoal(savedMonthlyGoal)
     } catch {
       setUserId(null)
     }
@@ -129,27 +149,7 @@ export default function BarberEarningsPage() {
     }
 
     void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
-
-  const Metric = ({ title, count, amount }: { title: string; count: number; amount: number }) => (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-2xl font-bold">${amount}</div>
-            <div className="text-xs text-muted-foreground">{count} citas</div>
-          </div>
-          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-            <DollarSign className="h-5 w-5 text-primary" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
 
   const monthlyChartConfig = {
     amount: {
@@ -170,39 +170,49 @@ export default function BarberEarningsPage() {
     return format(dt, "MMM yyyy", { locale: es })
   }
 
-  const getIntegerTicks = (max: number) => {
-    const safeMax = Math.max(0, Math.trunc(Number.isFinite(max) ? max : 0))
-    if (safeMax <= 10) {
-      return Array.from({ length: safeMax + 1 }, (_, i) => i)
-    }
-
-    const step = Math.max(1, Math.ceil(safeMax / 5))
-    const ticks: number[] = []
-    for (let v = 0; v <= safeMax; v += step) ticks.push(v)
-    if (ticks[ticks.length - 1] !== safeMax) ticks.push(safeMax)
-    return ticks
-  }
-
+  const topClient = analytics?.topClients?.[0] ?? null
   const bestMonth = analytics?.monthlyEarnings?.reduce<MonthlyEarningsPoint | null>((best, cur) => {
     if (!best) return cur
     return cur.amount > best.amount ? cur : best
   }, null)
 
-  const topClient = analytics?.topClients?.[0] ?? null
+  const derived = useMemo(() => {
+    const monthlyAmount = summary?.month.amount ?? 0
+    const weeklyAmount = summary?.week.amount ?? 0
 
-  const topClientsMaxCount = analytics?.topClients?.reduce((max, c) => Math.max(max, c.count), 0) ?? 0
-  const topClientsTicks = getIntegerTicks(topClientsMaxCount)
+    const rate = Math.max(0, Math.min(100, Number(commissionRate) || 0))
+    const goal = Math.max(0, Number(monthlyGoal) || 0)
+
+    const commission = monthlyAmount * (rate / 100)
+    const projection = Math.round((weeklyAmount * 4.3 + monthlyAmount) / 2)
+    const goalProgress = goal > 0 ? Math.min(100, Math.round((monthlyAmount / goal) * 100)) : 0
+
+    return {
+      rate,
+      goal,
+      commission,
+      projection,
+      goalProgress,
+    }
+  }, [commissionRate, monthlyGoal, summary])
+
+  const saveTargets = () => {
+    localStorage.setItem("barberCommissionRate", String(Math.max(0, Math.min(100, Number(commissionRate) || 0))))
+    localStorage.setItem("barberMonthlyGoal", String(Math.max(0, Number(monthlyGoal) || 0)))
+    toast({ title: "Objetivos guardados", description: "Tus metas financieras fueron actualizadas." })
+  }
 
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Ganancias</h1>
-          <p className="text-muted-foreground">Resumen de tus ingresos por citas completadas.</p>
+          <p className="text-muted-foreground">Vista financiera operativa con proyección, comisiones y metas.</p>
         </div>
 
         {isLoading ? (
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
+            <Skeleton className="h-28 w-full" />
             <Skeleton className="h-28 w-full" />
             <Skeleton className="h-28 w-full" />
             <Skeleton className="h-28 w-full" />
@@ -218,96 +228,133 @@ export default function BarberEarningsPage() {
           </Card>
         ) : (
           <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-3">
-              <Metric title="Hoy" count={summary.today.count} amount={summary.today.amount} />
-              <Metric title="Esta semana" count={summary.week.count} amount={summary.week.amount} />
-              <Metric title="Este mes" count={summary.month.count} amount={summary.month.amount} />
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Metric title="Hoy" count={summary.today.count} amount={summary.today.amount} icon={DollarSign} />
+              <Metric title="Esta semana" count={summary.week.count} amount={summary.week.amount} icon={TrendingUp} />
+              <Metric title="Este mes" count={summary.month.count} amount={summary.month.amount} icon={Wallet} />
+              <Metric title="Proyección mensual" count={0} amount={derived.projection} icon={TrendingUp} subtitle="estimada" />
             </div>
 
-            {analytics && (
-              <div className="grid gap-4 lg:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Ganancias por mes</CardTitle>
-                    <CardDescription>
-                      Comparativa de los últimos 6 meses.
-                      {bestMonth ? ` Mejor mes: ${formatMonthLabel(bestMonth.month)} ($${bestMonth.amount}).` : ""}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <ChartContainer config={monthlyChartConfig} className="h-[290px] w-full">
-                      <BarChart data={analytics.monthlyEarnings} margin={{ top: 12, right: 8, left: 8, bottom: 0 }}>
-                        <CartesianGrid vertical={false} />
-                        <XAxis
-                          dataKey="month"
-                          tickLine={false}
-                          axisLine={false}
-                          tickMargin={8}
-                          minTickGap={16}
-                          tickFormatter={(value) => formatMonthLabel(String(value))}
-                        />
-                        <YAxis tickLine={false} axisLine={false} tickFormatter={(value) => `$${Number(value)}`} />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Ganancias por mes</CardTitle>
+                  <CardDescription>
+                    Comparativa de los últimos 6 meses.
+                    {bestMonth ? ` Mejor mes: ${formatMonthLabel(bestMonth.month)} (${formatCurrency(bestMonth.amount)}).` : ""}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer config={monthlyChartConfig} className="h-[290px] w-full">
+                    <BarChart data={analytics?.monthlyEarnings ?? []} margin={{ top: 12, right: 8, left: 8, bottom: 0 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis
+                        dataKey="month"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        minTickGap={16}
+                        tickFormatter={(value) => formatMonthLabel(String(value))}
+                      />
+                      <YAxis tickLine={false} axisLine={false} tickFormatter={(value) => formatCurrency(Number(value))} />
+                      <ChartTooltip
+                        cursor={false}
+                        content={<ChartTooltipContent formatter={(value) => formatCurrency(Number(value))} />}
+                      />
+                      <Bar dataKey="amount" fill="var(--color-amount)" radius={10} />
+                    </BarChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Clientes más atendidos</CardTitle>
+                  <CardDescription>
+                    Este mes.
+                    {topClient ? ` Top: ${topClient.clientName} (${topClient.count} citas).` : ""}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {(analytics?.topClients.length ?? 0) === 0 ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <TrendingUp className="h-4 w-4" />
+                      No hay clientes para mostrar.
+                    </div>
+                  ) : (
+                    <ChartContainer config={clientsChartConfig} className="h-[290px] w-full">
+                      <BarChart
+                        data={analytics?.topClients ?? []}
+                        layout="vertical"
+                        margin={{ top: 12, right: 16, left: 8, bottom: 0 }}
+                      >
+                        <CartesianGrid horizontal={false} />
+                        <YAxis dataKey="clientName" type="category" tickLine={false} axisLine={false} width={140} />
+                        <XAxis dataKey="count" type="number" tickLine={false} axisLine={false} allowDecimals={false} />
                         <ChartTooltip
                           cursor={false}
-                          content={<ChartTooltipContent formatter={(value) => `$${Number(value)}`} />}
+                          content={<ChartTooltipContent formatter={(value) => `${Number(value)} citas`} />}
                         />
-                        <Bar dataKey="amount" fill="var(--color-amount)" radius={10} />
+                        <Bar dataKey="count" fill="var(--color-count)" radius={10} />
                       </BarChart>
                     </ChartContainer>
-                  </CardContent>
-                </Card>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Clientes más atendidos</CardTitle>
-                    <CardDescription>
-                      Este mes.
-                      {topClient ? ` Top: ${topClient.clientName} (${topClient.count} citas).` : ""}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {analytics.topClients.length === 0 ? (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <TrendingUp className="h-4 w-4" />
-                        No hay clientes para mostrar.
-                      </div>
-                    ) : (
-                      <ChartContainer config={clientsChartConfig} className="h-[290px] w-full">
-                        <BarChart
-                          data={analytics.topClients}
-                          layout="vertical"
-                          margin={{ top: 12, right: 16, left: 8, bottom: 0 }}
-                        >
-                          <CartesianGrid horizontal={false} />
-                          <YAxis
-                            dataKey="clientName"
-                            type="category"
-                            tickLine={false}
-                            axisLine={false}
-                            width={140}
-                          />
-                          <XAxis
-                            dataKey="count"
-                            type="number"
-                            tickLine={false}
-                            axisLine={false}
-                            allowDecimals={false}
-                            domain={[0, Math.max(1, topClientsMaxCount)]}
-                            ticks={topClientsTicks}
-                            tickFormatter={(value) => String(Math.trunc(Number(value)))}
-                          />
-                          <ChartTooltip
-                            cursor={false}
-                            content={<ChartTooltipContent formatter={(value) => `${Number(value)} citas`} />}
-                          />
-                          <Bar dataKey="count" fill="var(--color-count)" radius={10} />
-                        </BarChart>
-                      </ChartContainer>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            )}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Comisiones y liquidación</CardTitle>
+                  <CardDescription>Simula tu comisión mensual según tu porcentaje actual.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Porcentaje comisión</label>
+                      <Input type="number" min={0} max={100} value={commissionRate} onChange={(e) => setCommissionRate(e.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Meta mensual</label>
+                      <Input type="number" min={0} value={monthlyGoal} onChange={(e) => setMonthlyGoal(e.target.value)} />
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <p className="text-muted-foreground">Comisión estimada del mes</p>
+                    <p className="text-xl font-semibold">{formatCurrency(derived.commission)}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={saveTargets}
+                    className="w-full rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-muted/40"
+                  >
+                    Guardar objetivos financieros
+                  </button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Objetivo mensual</CardTitle>
+                  <CardDescription>Seguimiento del avance frente a tu meta de ingreso.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Progreso</span>
+                    <span className="font-medium">{derived.goalProgress}%</span>
+                  </div>
+                  <Progress value={derived.goalProgress} />
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <p className="text-muted-foreground">Meta configurada</p>
+                    <p className="font-semibold">{formatCurrency(derived.goal)}</p>
+                    <p className="mt-1 text-muted-foreground">Ingresado este mes: {formatCurrency(summary.month.amount)}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         )}
 
@@ -323,5 +370,38 @@ export default function BarberEarningsPage() {
         )}
       </main>
     </div>
+  )
+}
+
+function Metric({
+  title,
+  count,
+  amount,
+  icon: Icon,
+  subtitle,
+}: {
+  title: string
+  count: number
+  amount: number
+  icon: ComponentType<{ className?: string }>
+  subtitle?: string
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-2xl font-bold">{formatCurrency(amount)}</div>
+            <div className="text-xs text-muted-foreground">{subtitle ?? `${count} citas`}</div>
+          </div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+            <Icon className="h-5 w-5 text-primary" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

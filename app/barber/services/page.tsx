@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Loader2, Save, Scissors } from "lucide-react"
+import { CheckCheck, Loader2, Save, Scissors, Sparkles, TimerReset } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -21,6 +22,17 @@ type Service = {
 type BarberServiceState = {
   serviceId: number
   isEnabled: boolean
+}
+
+const currencyFormatter = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  maximumFractionDigits: 0,
+})
+
+function formatCurrency(value: number | null) {
+  if (value == null || Number.isNaN(value)) return "Sin precio"
+  return currencyFormatter.format(value)
 }
 
 export default function BarberServicesPage() {
@@ -115,7 +127,6 @@ export default function BarberServicesPage() {
   useEffect(() => {
     if (!userId) return
     void loadData(userId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
 
   const enabledSet = useMemo(() => {
@@ -132,11 +143,54 @@ export default function BarberServicesPage() {
     return allServices.filter((s) => s.name.toLowerCase().includes(q))
   }, [allServices, search])
 
+  const metrics = useMemo(() => {
+    const activeCount = allServices.filter((service) => enabledSet.has(service.id)).length
+    const inactiveCount = Math.max(0, allServices.length - activeCount)
+
+    const activeServices = allServices.filter((service) => enabledSet.has(service.id))
+
+    const avgDuration =
+      activeServices.length > 0
+        ? Math.round(activeServices.reduce((sum, service) => sum + (service.durationMin ?? 0), 0) / activeServices.length)
+        : 0
+
+    const avgPrice =
+      activeServices.length > 0
+        ? Math.round(activeServices.reduce((sum, service) => sum + (service.price ?? 0), 0) / activeServices.length)
+        : 0
+
+    const topPriced = [...activeServices]
+      .filter((service) => service.price != null)
+      .sort((a, b) => (b.price ?? 0) - (a.price ?? 0))[0]
+
+    return {
+      total: allServices.length,
+      activeCount,
+      inactiveCount,
+      avgDuration,
+      avgPrice,
+      topPriced,
+    }
+  }, [allServices, enabledSet])
+
   const toggleService = (serviceId: number, next: boolean) => {
     setBarberServices((prev) => {
       const existing = prev.find((x) => x.serviceId === serviceId)
       if (!existing) return [...prev, { serviceId, isEnabled: next }]
       return prev.map((x) => (x.serviceId === serviceId ? { ...x, isEnabled: next } : x))
+    })
+  }
+
+  const toggleAllFiltered = (next: boolean) => {
+    setBarberServices((prev) => {
+      const nextMap = new Map<number, boolean>()
+      for (const item of prev) nextMap.set(item.serviceId, item.isEnabled)
+      for (const service of filtered) nextMap.set(service.id, next)
+
+      return allServices.map((service) => ({
+        serviceId: service.id,
+        isEnabled: nextMap.get(service.id) ?? false,
+      }))
     })
   }
 
@@ -170,7 +224,14 @@ export default function BarberServicesPage() {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Servicios</h1>
-          <p className="text-muted-foreground">Selecciona los servicios que ofreces.</p>
+          <p className="text-muted-foreground">Gestiona tu portafolio activo y su capacidad operativa.</p>
+        </div>
+
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard title="Servicios catálogo" value={String(metrics.total)} subtitle={`${metrics.activeCount} activos`} />
+          <MetricCard title="Duración promedio" value={`${metrics.avgDuration} min`} subtitle="Servicios habilitados" />
+          <MetricCard title="Ticket promedio" value={formatCurrency(metrics.avgPrice)} subtitle="Portafolio activo" />
+          <MetricCard title="Servicio premium" value={metrics.topPriced?.name ?? "Sin datos"} subtitle={formatCurrency(metrics.topPriced?.price ?? null)} />
         </div>
 
         <Card>
@@ -179,7 +240,7 @@ export default function BarberServicesPage() {
               <Scissors className="h-5 w-5" />
               Mis servicios
             </CardTitle>
-            <CardDescription>Activa/desactiva servicios. Solo se mostrarán al cliente los activos.</CardDescription>
+            <CardDescription>Activa o desactiva servicios. Solo se mostrarán al cliente los activos.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2">
@@ -187,13 +248,26 @@ export default function BarberServicesPage() {
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ej: Corte" />
             </div>
 
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => toggleAllFiltered(true)}>
+                <CheckCheck className="mr-2 h-4 w-4" />
+                Activar filtrados
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => toggleAllFiltered(false)}>
+                <TimerReset className="mr-2 h-4 w-4" />
+                Desactivar filtrados
+              </Button>
+              <Badge variant="secondary">{metrics.inactiveCount} inactivos</Badge>
+              <Badge variant="outline">{filtered.length} visibles</Badge>
+            </div>
+
             <Separator />
 
             {isLoading ? (
               <div className="space-y-2">
-                <div className="h-10 w-full bg-muted animate-pulse rounded" />
-                <div className="h-10 w-full bg-muted animate-pulse rounded" />
-                <div className="h-10 w-full bg-muted animate-pulse rounded" />
+                <div className="h-10 w-full animate-pulse rounded bg-muted" />
+                <div className="h-10 w-full animate-pulse rounded bg-muted" />
+                <div className="h-10 w-full animate-pulse rounded bg-muted" />
               </div>
             ) : (
               <div className="space-y-3">
@@ -202,11 +276,18 @@ export default function BarberServicesPage() {
                   return (
                     <div key={service.id} className="flex items-center justify-between rounded-md border p-3">
                       <div>
-                        <div className="font-medium text-sm">{service.name}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-sm font-medium">{service.name}</div>
+                          {checked && (
+                            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700">
+                              Activo
+                            </Badge>
+                          )}
+                        </div>
                         <div className="text-xs text-muted-foreground">
-                          {service.durationMin != null ? `${service.durationMin} min` : ""}
+                          {service.durationMin != null ? `${service.durationMin} min` : "Duración pendiente"}
                           {service.durationMin != null && service.price != null ? " · " : ""}
-                          {service.price != null ? `$${service.price}` : ""}
+                          {formatCurrency(service.price)}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -221,13 +302,35 @@ export default function BarberServicesPage() {
 
             <Separator />
 
+            <div className="rounded-md border bg-muted/20 p-3">
+              <div className="mb-1.5 flex items-center gap-2 text-sm font-medium">
+                <Sparkles className="h-4 w-4" />
+                Recomendación operativa
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Mantén activos los servicios de mayor demanda y revisa semanalmente tu ticket promedio para optimizar el portafolio.
+              </p>
+            </div>
+
             <Button onClick={save} disabled={!userId || isSaving || isLoading} className="w-full">
-              {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Guardar servicios
             </Button>
           </CardContent>
         </Card>
       </main>
     </div>
+  )
+}
+
+function MetricCard({ title, value, subtitle }: { title: string; value: string; subtitle: string }) {
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <p className="text-xs text-muted-foreground">{title}</p>
+        <p className="mt-1 text-2xl font-semibold">{value}</p>
+        <p className="text-xs text-muted-foreground">{subtitle}</p>
+      </CardContent>
+    </Card>
   )
 }
