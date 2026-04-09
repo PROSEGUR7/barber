@@ -23,7 +23,12 @@ type ProfileResponse = {
   role: AppRole
   name: string
   phone: string
+  avatarUrl: string | null
   lastLogin: string | null
+}
+
+type ProfileSettingsRow = {
+  avatar_url: string | null
 }
 
 const TENANT_SCHEMA_PATTERN = /^(tenant_base|tenant_[a-z0-9_]+)$/i
@@ -136,6 +141,35 @@ async function resolveNameAndPhone(userId: number, role: AppRole, fallbackEmail:
   }
 }
 
+async function ensureProfileSettingsTable(tenantSchema: string): Promise<void> {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ${tenantSchema}.user_profile_settings (
+       user_id integer PRIMARY KEY REFERENCES ${tenantSchema}.users(id) ON DELETE CASCADE,
+       avatar_url text,
+       updated_at timestamp NOT NULL DEFAULT NOW()
+     )`,
+  )
+}
+
+async function getAvatarUrl(userId: number, tenantSchema: string): Promise<string | null> {
+  try {
+    await ensureProfileSettingsTable(tenantSchema)
+    const result = await pool.query<ProfileSettingsRow>(
+      `SELECT avatar_url
+         FROM ${tenantSchema}.user_profile_settings
+        WHERE user_id = $1
+        LIMIT 1`,
+      [userId],
+    )
+
+    const avatarUrl = result.rows[0]?.avatar_url?.trim()
+    return avatarUrl && avatarUrl.length > 0 ? avatarUrl : null
+  } catch (error) {
+    console.warn("No se pudo cargar avatar del perfil", error)
+    return null
+  }
+}
+
 async function buildProfileByEmail(email: string, tenantSchema: string): Promise<ProfileResponse | null> {
   const user = await getUserByEmail(email, tenantSchema)
 
@@ -145,6 +179,7 @@ async function buildProfileByEmail(email: string, tenantSchema: string): Promise
 
   const role = roleMap[user.rol]
   const { name, phone } = await resolveNameAndPhone(user.id, role, user.correo, tenantSchema)
+  const avatarUrl = await getAvatarUrl(user.id, tenantSchema)
 
   return {
     id: user.id,
@@ -152,6 +187,7 @@ async function buildProfileByEmail(email: string, tenantSchema: string): Promise
     role,
     name,
     phone,
+    avatarUrl,
     lastLogin: user.ultimo_acceso,
   }
 }

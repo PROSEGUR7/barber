@@ -1,10 +1,12 @@
 "use client"
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { type ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
+import { Camera, Trash2, Upload } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -33,6 +35,7 @@ type ProfilePayload = {
   role: ProfileRole
   name: string
   phone: string
+  avatarUrl: string | null
   lastLogin: string | null
 }
 
@@ -106,6 +109,7 @@ export default function ProfilePage() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
 
@@ -116,6 +120,21 @@ export default function ProfilePage() {
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingPreferences, setIsSavingPreferences] = useState(false)
   const [isSavingPassword, setIsSavingPassword] = useState(false)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [isRemovingAvatar, setIsRemovingAvatar] = useState(false)
+
+  const syncSidebarUserInfo = useCallback((nextName: string, nextEmail: string, nextAvatarUrl: string | null) => {
+    localStorage.setItem("userEmail", nextEmail)
+    localStorage.setItem("userDisplayName", nextName)
+
+    if (nextAvatarUrl && nextAvatarUrl.trim().length > 0) {
+      localStorage.setItem("userAvatar", nextAvatarUrl)
+    } else {
+      localStorage.removeItem("userAvatar")
+    }
+
+    window.dispatchEvent(new Event("user-profile-updated"))
+  }, [])
 
   const loadProfile = useCallback(async () => {
     setIsLoading(true)
@@ -153,9 +172,9 @@ export default function ProfilePage() {
       setName(profile.name)
       setEmail(profile.email)
       setPhone(profile.phone)
+      setAvatarUrl(profile.avatarUrl ?? null)
 
-      localStorage.setItem("userEmail", profile.email)
-      localStorage.setItem("userDisplayName", profile.name)
+      syncSidebarUserInfo(profile.name, profile.email, profile.avatarUrl ?? null)
 
       const rawPreferences = localStorage.getItem(getPreferencesKey(profile.email))
 
@@ -179,13 +198,139 @@ export default function ProfilePage() {
     } finally {
       setIsLoading(false)
     }
-  }, [router])
+  }, [router, syncSidebarUserInfo])
 
   useEffect(() => {
     void loadProfile()
   }, [loadProfile])
 
   const roleLabel = useMemo(() => getRoleLabel(role), [role])
+  const avatarFallback = useMemo(() => {
+    const source = name.trim() || email.trim() || "U"
+    return source.charAt(0).toUpperCase()
+  }, [email, name])
+
+  const handleAvatarUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    const allowed = ["image/jpeg", "image/png", "image/webp"]
+    if (!allowed.includes(file.type)) {
+      toast({
+        variant: "destructive",
+        title: "Formato no soportado",
+        description: "Usa una imagen JPG, PNG o WEBP.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    if (file.size > 4 * 1024 * 1024) {
+      toast({
+        variant: "destructive",
+        title: "Imagen muy pesada",
+        description: "La foto no puede superar 4MB.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    const targetEmail = (currentEmail || email).trim().toLowerCase()
+    if (!targetEmail) {
+      toast({
+        variant: "destructive",
+        title: "Sesión inválida",
+        description: "No encontramos tu correo para actualizar la foto.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    setIsUploadingAvatar(true)
+
+    try {
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+      const form = new FormData()
+      form.append("email", targetEmail)
+      form.append("file", file)
+
+      if (tenantSchema) {
+        form.append("tenantSchema", tenantSchema)
+      }
+
+      const response = await fetch("/api/profile/avatar", {
+        method: "POST",
+        headers: buildTenantHeaders(),
+        body: form,
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { avatarUrl?: string | null; error?: string }
+
+      if (!response.ok || !data.avatarUrl) {
+        toast({
+          variant: "destructive",
+          title: "No se pudo subir la imagen",
+          description: data.error ?? "Intenta nuevamente.",
+        })
+        return
+      }
+
+      setAvatarUrl(data.avatarUrl)
+      syncSidebarUserInfo(name.trim() || targetEmail.split("@")[0], targetEmail, data.avatarUrl)
+      toast({ title: "Avatar actualizado", description: "Tu foto de perfil se guardó correctamente." })
+    } catch (error) {
+      console.error("Error uploading avatar", error)
+      toast({
+        variant: "destructive",
+        title: "Error de conexión",
+        description: "No fue posible subir la foto de perfil.",
+      })
+    } finally {
+      setIsUploadingAvatar(false)
+      event.target.value = ""
+    }
+  }
+
+  const handleAvatarRemove = async () => {
+    const targetEmail = (currentEmail || email).trim().toLowerCase()
+    if (!targetEmail) {
+      return
+    }
+
+    setIsRemovingAvatar(true)
+
+    try {
+      const response = await fetch(`/api/profile/avatar?email=${encodeURIComponent(targetEmail)}`, {
+        method: "DELETE",
+        headers: buildTenantHeaders(),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      if (!response.ok) {
+        toast({
+          variant: "destructive",
+          title: "No se pudo eliminar",
+          description: data.error ?? "Intenta nuevamente.",
+        })
+        return
+      }
+
+      setAvatarUrl(null)
+      syncSidebarUserInfo(name.trim() || targetEmail.split("@")[0], targetEmail, null)
+      toast({ title: "Avatar eliminado", description: "Se eliminó tu foto de perfil." })
+    } catch (error) {
+      console.error("Error deleting avatar", error)
+      toast({
+        variant: "destructive",
+        title: "Error de conexión",
+        description: "No fue posible eliminar la foto de perfil.",
+      })
+    } finally {
+      setIsRemovingAvatar(false)
+    }
+  }
 
   const handleProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -254,9 +399,9 @@ export default function ProfilePage() {
       setName(updated.name)
       setEmail(updated.email)
       setPhone(updated.phone)
+      setAvatarUrl(updated.avatarUrl ?? null)
 
-      localStorage.setItem("userEmail", updated.email)
-      localStorage.setItem("userDisplayName", updated.name)
+      syncSidebarUserInfo(updated.name, updated.email, updated.avatarUrl ?? null)
 
       if (previousEmail && previousEmail !== updated.email) {
         const previousKey = getPreferencesKey(previousEmail)
@@ -455,6 +600,44 @@ export default function ProfilePage() {
                       <CardDescription>Actualiza tu información principal para la cuenta.</CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-4 md:grid-cols-2">
+                      <div className="md:col-span-2 rounded-lg border border-border/70 bg-muted/20 p-4">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-20 w-20 border">
+                              <AvatarImage src={avatarUrl ?? undefined} alt={name || email || "Avatar"} />
+                              <AvatarFallback className="text-lg">{avatarFallback}</AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="text-sm font-medium">Foto de perfil</p>
+                              <p className="text-xs text-muted-foreground">Visible en tu menú personal y navegación lateral.</p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <input
+                              id="profile-avatar-input"
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              onChange={handleAvatarUpload}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={isUploadingAvatar}
+                              onClick={() => document.getElementById("profile-avatar-input")?.click()}
+                            >
+                              {isUploadingAvatar ? <Upload className="mr-2 h-4 w-4 animate-pulse" /> : <Camera className="mr-2 h-4 w-4" />}
+                              {isUploadingAvatar ? "Subiendo..." : "Subir foto"}
+                            </Button>
+                            <Button type="button" variant="outline" disabled={!avatarUrl || isRemovingAvatar} onClick={handleAvatarRemove}>
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {isRemovingAvatar ? "Eliminando..." : "Eliminar"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="space-y-2">
                         <Label htmlFor="profile-name">Nombre completo</Label>
                         <Input

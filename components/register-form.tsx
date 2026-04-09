@@ -120,6 +120,8 @@ export function RegisterForm({ className, ...props }: React.ComponentProps<"div"
       localStorage.setItem("userDisplayName", user.displayName)
     }
 
+    localStorage.removeItem("userAvatar")
+
     persistTenant(user.tenant)
     localStorage.setItem("onboardingPlanId", planId)
 

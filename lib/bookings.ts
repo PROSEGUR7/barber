@@ -40,6 +40,7 @@ type SedeRow = {
 type BarberRow = {
   id: number
   nombre: string
+  avatar_url: string | null
 }
 
 type AvailabilityRow = {
@@ -69,6 +70,7 @@ export type Sede = {
 export type Barber = {
   id: number
   name: string
+  avatarUrl: string | null
 }
 
 export type AvailabilitySlot = {
@@ -125,6 +127,7 @@ type TenantSedeFeatures = {
   hasSedesTable: boolean
   hasSedesServiciosTable: boolean
   hasSedesEmpleadosTable: boolean
+  hasUserProfileSettingsTable: boolean
   hasServiciosSedeColumn: boolean
   hasEmpleadosSedeColumn: boolean
   hasHorariosSedeColumn: boolean
@@ -137,6 +140,7 @@ type TenantSedeFeaturesRow = {
   has_sedes_table: boolean | string
   has_sedes_servicios_table: boolean | string
   has_sedes_empleados_table: boolean | string
+  has_user_profile_settings_table: boolean | string
   has_servicios_sede_column: boolean | string
   has_empleados_sede_column: boolean | string
   has_horarios_sede_column: boolean | string
@@ -282,6 +286,12 @@ async function getTenantSedeFeatures(tenantSchema?: string | null): Promise<Tena
       ) AS has_sedes_empleados_table,
       EXISTS (
         SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'user_profile_settings'
+      ) AS has_user_profile_settings_table,
+      EXISTS (
+        SELECT 1
           FROM information_schema.columns
          WHERE table_schema = $1
            AND table_name = 'servicios'
@@ -330,6 +340,7 @@ async function getTenantSedeFeatures(tenantSchema?: string | null): Promise<Tena
     hasSedesTable: toBoolean(row?.has_sedes_table),
     hasSedesServiciosTable: toBoolean(row?.has_sedes_servicios_table),
     hasSedesEmpleadosTable: toBoolean(row?.has_sedes_empleados_table),
+    hasUserProfileSettingsTable: toBoolean(row?.has_user_profile_settings_table),
     hasServiciosSedeColumn: toBoolean(row?.has_servicios_sede_column),
     hasEmpleadosSedeColumn: toBoolean(row?.has_empleados_sede_column),
     hasHorariosSedeColumn: toBoolean(row?.has_horarios_sede_column),
@@ -442,8 +453,10 @@ export async function getActiveBarbersBySede(
 
   const query = tenantSql(
     `SELECT e.id,
-            e.nombre
+            e.nombre,
+            ${features.hasUserProfileSettingsTable ? "ups.avatar_url" : "NULL::text AS avatar_url"}
        FROM tenant_base.empleados e
+       ${features.hasUserProfileSettingsTable ? "LEFT JOIN tenant_base.user_profile_settings ups ON ups.user_id = e.user_id" : ""}
       WHERE LOWER(COALESCE(e.estado::text, 'activo')) = 'activo'
         ${employeeSedeFilter ? `AND ${employeeSedeFilter}` : ""}
       ORDER BY e.nombre ASC`,
@@ -455,6 +468,7 @@ export async function getActiveBarbersBySede(
   return result.rows.map((row) => ({
     id: row.id,
     name: row.nombre,
+    avatarUrl: row.avatar_url,
   }))
 }
 
@@ -523,10 +537,12 @@ export async function getBarbersForService(
   const result = await pool.query<BarberRow>(
     tenantSql(
       `SELECT e.id,
-              e.nombre
+              e.nombre,
+              ${features.hasUserProfileSettingsTable ? "ups.avatar_url" : "NULL::text AS avatar_url"}
          FROM tenant_base.empleados e
          INNER JOIN tenant_base.empleados_servicios es
                  ON es.empleado_id = e.id
+         ${features.hasUserProfileSettingsTable ? "LEFT JOIN tenant_base.user_profile_settings ups ON ups.user_id = e.user_id" : ""}
         WHERE es.servicio_id = $1
           ${employeeSedeFilterForService ? `AND ${employeeSedeFilterForService}` : ""}
         ORDER BY e.nombre ASC`,
@@ -539,8 +555,10 @@ export async function getBarbersForService(
     const fallback = await pool.query<BarberRow>(
       tenantSql(
         `SELECT e.id,
-                e.nombre
+                e.nombre,
+                ${features.hasUserProfileSettingsTable ? "ups.avatar_url" : "NULL::text AS avatar_url"}
            FROM tenant_base.empleados e
+           ${features.hasUserProfileSettingsTable ? "LEFT JOIN tenant_base.user_profile_settings ups ON ups.user_id = e.user_id" : ""}
           WHERE LOWER(COALESCE(e.estado::text, 'activo')) = 'activo'
             ${employeeSedeFilterFallback ? `AND ${employeeSedeFilterFallback}` : ""}
           ORDER BY e.nombre ASC`,
@@ -552,12 +570,14 @@ export async function getBarbersForService(
     return fallback.rows.map((row) => ({
       id: row.id,
       name: row.nombre,
+      avatarUrl: row.avatar_url,
     }))
   }
 
   return result.rows.map((row) => ({
     id: row.id,
     name: row.nombre,
+    avatarUrl: row.avatar_url,
   }))
 }
 

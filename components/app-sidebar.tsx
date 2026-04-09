@@ -65,22 +65,40 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       return
     }
 
-    const storedRole = localStorage.getItem("userRole") as RoleKey | null
-    if (storedRole === "client" || storedRole === "barber" || storedRole === "admin") {
-      setRole(storedRole)
+    const syncSidebarUserInfo = () => {
+      const storedRole = localStorage.getItem("userRole") as RoleKey | null
+      if (storedRole === "client" || storedRole === "barber" || storedRole === "admin") {
+        setRole(storedRole)
+      }
+
+      const storedEmail = (localStorage.getItem("userEmail") ?? "").trim()
+      const storedDisplayName = (localStorage.getItem("userDisplayName") ?? "").trim()
+      const storedAvatar = (localStorage.getItem("userAvatar") ?? "").trim()
+      const fallbackName = storedDisplayName || (storedEmail ? storedEmail.split("@")[0] : "Usuario Hair Salon")
+      const formattedName = formatDisplayName(fallbackName).trim() || "Usuario Hair Salon"
+
+      setUserInfo((previous) => ({
+        ...previous,
+        name: formattedName,
+        email: storedEmail,
+        avatar: storedAvatar || defaultAvatar,
+      }))
     }
 
-  const storedEmail = (localStorage.getItem("userEmail") ?? "").trim()
-  const storedDisplayName = (localStorage.getItem("userDisplayName") ?? "").trim()
-    const fallbackName = storedDisplayName || (storedEmail ? storedEmail.split("@")[0] : "Usuario Hair Salon")
-    const formattedName = formatDisplayName(fallbackName).trim() || "Usuario Hair Salon"
+    syncSidebarUserInfo()
 
-    setUserInfo((previous) => ({
-      ...previous,
-      name: formattedName,
-      email: storedEmail,
-    }))
+    const handleProfileUpdated = () => {
+      syncSidebarUserInfo()
+    }
 
+    const handleFocusSync = () => {
+      syncSidebarUserInfo()
+    }
+
+    window.addEventListener("user-profile-updated", handleProfileUpdated)
+    window.addEventListener("focus", handleFocusSync)
+
+    const storedRole = localStorage.getItem("userRole") as RoleKey | null
     if (storedRole === "admin") {
       const tenantSchema =
         (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim() || null
@@ -138,6 +156,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       }
 
       const handleStorage = (event: StorageEvent) => {
+        if (["userEmail", "userDisplayName", "userRole", "userAvatar"].includes(event.key ?? "")) {
+          syncSidebarUserInfo()
+        }
+
         if (event.key !== "adminBillingUpdatedAt") {
           return
         }
@@ -160,11 +182,27 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         isDisposed = true
         activeController?.abort()
         window.clearInterval(intervalId)
+        window.removeEventListener("user-profile-updated", handleProfileUpdated)
+        window.removeEventListener("focus", handleFocusSync)
         window.removeEventListener("focus", handleFocus)
         window.removeEventListener("admin-billing-updated", handleBillingUpdated)
         window.removeEventListener("storage", handleStorage)
         document.removeEventListener("visibilitychange", handleVisibilityChange)
       }
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (["userEmail", "userDisplayName", "userRole", "userAvatar"].includes(event.key ?? "")) {
+        syncSidebarUserInfo()
+      }
+    }
+
+    window.addEventListener("storage", handleStorage)
+
+    return () => {
+      window.removeEventListener("user-profile-updated", handleProfileUpdated)
+      window.removeEventListener("focus", handleFocusSync)
+      window.removeEventListener("storage", handleStorage)
     }
   }, [])
 
@@ -174,6 +212,72 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       roleLabel: roleLabels[role],
     }))
   }, [role])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const email = (userInfo.email ?? "").trim().toLowerCase()
+    if (!email) {
+      return
+    }
+
+    const tenant = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+    const headers: Record<string, string> = {
+      "x-user-email": email,
+    }
+
+    if (tenant) {
+      headers["x-tenant"] = tenant
+    }
+
+    const controller = new AbortController()
+
+    const hydrateAvatar = async () => {
+      try {
+        const response = await fetch(`/api/profile?email=${encodeURIComponent(email)}`, {
+          cache: "no-store",
+          headers,
+          signal: controller.signal,
+        })
+
+        const payload = (await response.json().catch(() => null)) as
+          | { profile?: { avatarUrl?: string | null; name?: string | null } }
+          | null
+
+        if (!response.ok || !payload?.profile) {
+          return
+        }
+
+        const nextAvatar = payload.profile.avatarUrl?.trim() || defaultAvatar
+        const nextName = payload.profile.name?.trim() || userInfo.name
+
+        if (nextAvatar && nextAvatar !== defaultAvatar) {
+          localStorage.setItem("userAvatar", nextAvatar)
+        } else {
+          localStorage.removeItem("userAvatar")
+        }
+
+        setUserInfo((previous) => ({
+          ...previous,
+          name: nextName,
+          avatar: nextAvatar,
+        }))
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return
+        }
+        console.warn("No se pudo hidratar el avatar del usuario", error)
+      }
+    }
+
+    void hydrateAvatar()
+
+    return () => {
+      controller.abort()
+    }
+  }, [userInfo.email])
 
   const menusByRole = React.useMemo(() => {
     const clientNav = [

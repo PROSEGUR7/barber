@@ -1,11 +1,12 @@
 "use client"
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
-import { Plus } from "lucide-react"
+import { type ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { Camera, Plus, Trash2, Upload } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { AdminPromoCodesTable, type PromoCodeSummary } from "@/components/admin/promo-codes-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -55,6 +56,7 @@ type ProfilePayload = {
   role: ProfileRole
   name: string
   phone: string
+  avatarUrl: string | null
   lastLogin: string | null
 }
 
@@ -135,9 +137,12 @@ export default function AdminAjustesPage() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingPreferences, setIsSavingPreferences] = useState(false)
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [isRemovingAvatar, setIsRemovingAvatar] = useState(false)
   const [profileFeedback, setProfileFeedback] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null)
   const [settingsView, setSettingsView] = useState<"personal" | "platform">("personal")
 
@@ -162,6 +167,27 @@ export default function AdminAjustesPage() {
   const [serviceOptions, setServiceOptions] = useState<AdminServiceOption[]>([])
 
   const roleLabel = useMemo(() => getRoleLabel(role), [role])
+  const avatarFallback = useMemo(() => {
+    const source = name.trim() || email.trim() || "A"
+    return source.charAt(0).toUpperCase()
+  }, [email, name])
+
+  const syncSidebarUserInfo = useCallback((nextName: string, nextEmail: string, nextAvatarUrl: string | null) => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    localStorage.setItem("userEmail", nextEmail)
+    localStorage.setItem("userDisplayName", nextName)
+
+    if (nextAvatarUrl && nextAvatarUrl.trim().length > 0) {
+      localStorage.setItem("userAvatar", nextAvatarUrl)
+    } else {
+      localStorage.removeItem("userAvatar")
+    }
+
+    window.dispatchEvent(new Event("user-profile-updated"))
+  }, [])
 
   const loadProfileSettings = useCallback(async () => {
     setIsProfileLoading(true)
@@ -199,11 +225,14 @@ export default function AdminAjustesPage() {
           setName(fallbackName)
           setEmail(storedEmail)
           setPhone("")
+          setAvatarUrl(null)
           setProfileError(null)
           setProfileFeedback({
             type: "info",
             message: "No encontramos tu perfil en la base tenant. Mostramos datos de sesión para que puedas continuar.",
           })
+
+          syncSidebarUserInfo(fallbackName, storedEmail, null)
 
           const fallbackPreferencesRaw = localStorage.getItem(getPreferencesKey(storedEmail))
           if (fallbackPreferencesRaw) {
@@ -234,9 +263,9 @@ export default function AdminAjustesPage() {
       setName(profile.name)
       setEmail(profile.email)
       setPhone(profile.phone)
+      setAvatarUrl(profile.avatarUrl ?? null)
 
-      localStorage.setItem("userEmail", profile.email)
-      localStorage.setItem("userDisplayName", profile.name)
+      syncSidebarUserInfo(profile.name, profile.email, profile.avatarUrl ?? null)
 
       const rawPreferences = localStorage.getItem(getPreferencesKey(profile.email))
 
@@ -260,7 +289,7 @@ export default function AdminAjustesPage() {
     } finally {
       setIsProfileLoading(false)
     }
-  }, [])
+  }, [syncSidebarUserInfo])
 
   const loadSettings = useCallback(
     async (signal?: AbortSignal) => {
@@ -436,9 +465,9 @@ export default function AdminAjustesPage() {
       setName(updated.name)
       setEmail(updated.email)
       setPhone(updated.phone)
+      setAvatarUrl(updated.avatarUrl ?? null)
 
-      localStorage.setItem("userEmail", updated.email)
-      localStorage.setItem("userDisplayName", updated.name)
+      syncSidebarUserInfo(updated.name, updated.email, updated.avatarUrl ?? null)
 
       if (previousEmail && previousEmail !== updated.email) {
         const previousKey = getPreferencesKey(previousEmail)
@@ -457,6 +486,140 @@ export default function AdminAjustesPage() {
       setProfileFeedback({ type: "error", message: "No fue posible guardar tu configuración personal." })
     } finally {
       setIsSavingProfile(false)
+    }
+  }
+
+  const handleAvatarUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    const allowed = ["image/jpeg", "image/png", "image/webp"]
+    if (!allowed.includes(file.type)) {
+      setProfileFeedback({
+        type: "error",
+        message: "Formato no soportado. Usa una imagen JPG, PNG o WEBP.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    if (file.size > 4 * 1024 * 1024) {
+      setProfileFeedback({
+        type: "error",
+        message: "La foto no puede superar 4MB.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    const targetEmail = (currentEmail || email).trim().toLowerCase()
+    if (!targetEmail) {
+      setProfileFeedback({
+        type: "error",
+        message: "No encontramos tu correo para actualizar la foto.",
+      })
+      event.target.value = ""
+      return
+    }
+
+    setProfileFeedback(null)
+    setIsUploadingAvatar(true)
+
+    try {
+      const tenantSchema =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+          : ""
+
+      const form = new FormData()
+      form.append("email", targetEmail)
+      form.append("file", file)
+      if (tenantSchema) {
+        form.append("tenantSchema", tenantSchema)
+      }
+
+      const response = await fetch("/api/profile/avatar", {
+        method: "POST",
+        headers: buildTenantHeaders(),
+        body: form,
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string; avatarUrl?: string | null }
+
+      if (!response.ok) {
+        setProfileFeedback({
+          type: "error",
+          message: data.error ?? "No se pudo actualizar la foto de perfil.",
+        })
+        return
+      }
+
+      const nextAvatarUrl = typeof data.avatarUrl === "string" && data.avatarUrl.trim().length > 0 ? data.avatarUrl : null
+      setAvatarUrl(nextAvatarUrl)
+      syncSidebarUserInfo(name.trim() || targetEmail.split("@")[0] || "Administrador", targetEmail, nextAvatarUrl)
+      setProfileFeedback({
+        type: "success",
+        message: "Foto de perfil actualizada.",
+      })
+    } catch (error) {
+      console.error("Error uploading avatar", error)
+      setProfileFeedback({
+        type: "error",
+        message: "No se pudo subir la foto por un error de conexión.",
+      })
+    } finally {
+      setIsUploadingAvatar(false)
+      event.target.value = ""
+    }
+  }
+
+  const handleAvatarRemove = async () => {
+    const targetEmail = (currentEmail || email).trim().toLowerCase()
+    if (!targetEmail || !avatarUrl) {
+      return
+    }
+
+    setProfileFeedback(null)
+    setIsRemovingAvatar(true)
+
+    try {
+      const tenantSchema =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+          : ""
+
+      const query = new URLSearchParams({ email: targetEmail })
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+
+      const response = await fetch(`/api/profile/avatar?${query.toString()}`, {
+        method: "DELETE",
+        headers: buildTenantHeaders(),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      if (!response.ok) {
+        setProfileFeedback({
+          type: "error",
+          message: data.error ?? "No se pudo eliminar la foto de perfil.",
+        })
+        return
+      }
+
+      setAvatarUrl(null)
+      syncSidebarUserInfo(name.trim() || targetEmail.split("@")[0] || "Administrador", targetEmail, null)
+      setProfileFeedback({ type: "success", message: "Foto de perfil eliminada." })
+    } catch (error) {
+      console.error("Error removing avatar", error)
+      setProfileFeedback({
+        type: "error",
+        message: "No se pudo eliminar la foto por un error de conexión.",
+      })
+    } finally {
+      setIsRemovingAvatar(false)
     }
   }
 
@@ -678,6 +841,43 @@ export default function AdminAjustesPage() {
                     <CardDescription>Actualiza tu nombre, teléfono y correo de acceso.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="relative">
+                          <Avatar className="h-24 w-24 border border-border/70">
+                            <AvatarImage src={avatarUrl ?? undefined} alt={name || email || "Avatar"} />
+                            <AvatarFallback className="text-3xl font-semibold">{avatarFallback}</AvatarFallback>
+                          </Avatar>
+                          <label
+                            htmlFor="admin-profile-avatar-input"
+                            className={`absolute -bottom-1 -right-1 inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background shadow-sm ${isUploadingAvatar ? "pointer-events-none opacity-70" : "cursor-pointer"}`}
+                          >
+                            {isUploadingAvatar ? <Upload className="h-4 w-4 animate-pulse" /> : <Camera className="h-4 w-4" />}
+                          </label>
+                          <input
+                            id="admin-profile-avatar-input"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="hidden"
+                            onChange={handleAvatarUpload}
+                            disabled={isUploadingAvatar}
+                          />
+                        </div>
+
+                        <div className="flex-1 text-center sm:text-left">
+                          <p className="text-sm font-medium">Foto de perfil</p>
+                          <p className="text-xs text-muted-foreground">
+                            Haz clic en el ícono de editar para subir una foto.
+                          </p>
+                        </div>
+
+                        <Button type="button" variant="outline" disabled={!avatarUrl || isRemovingAvatar} onClick={handleAvatarRemove}>
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          {isRemovingAvatar ? "Eliminando..." : "Quitar"}
+                        </Button>
+                      </div>
+                    </div>
+
                     <div className="space-y-2">
                       <Label htmlFor="admin-profile-name">Nombre completo</Label>
                       <Input

@@ -38,6 +38,8 @@ export function NavUser({
       localStorage.removeItem("userRole")
       localStorage.removeItem("userEmail")
       localStorage.removeItem("userDisplayName")
+      localStorage.removeItem("userAvatar")
+      window.dispatchEvent(new Event("user-profile-updated"))
     } catch {}
     router.push("/login")
   }

@@ -17,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -48,6 +49,7 @@ type Sede = {
 type Barber = {
   id: number
   name: string
+  avatarUrl: string | null
 }
 
 type AvailabilitySlot = {
@@ -1774,39 +1776,42 @@ export default function BookingPage() {
     return [
       preferenceCard,
       ...barbers.map((barber) => {
-      const isSelected = selectedBarber === barber.id
-      const initials = barber.name
-        .split(" ")
-        .map((part) => part.charAt(0))
-        .join("")
-        .slice(0, 2)
-        .toUpperCase()
+        const isSelected = selectedBarber === barber.id
+        const initials = barber.name
+          .split(" ")
+          .map((part) => part.charAt(0))
+          .join("")
+          .slice(0, 2)
+          .toUpperCase()
 
-      return (
-        <button
-          key={barber.id}
-          type="button"
-          onClick={() => {
-            setSelectedBarber(barber.id)
-            setIsBarberPreferenceFlexible(false)
-          }}
-          className={cn(
-            "flex w-full items-center gap-4 rounded-2xl border bg-card/80 p-4 text-left transition-all",
-            "hover:border-foreground/20 hover:shadow-sm",
-            isSelected && "border-foreground bg-foreground text-background shadow-md",
-          )}
-        >
-          <span className={cn("flex size-12 items-center justify-center rounded-full bg-muted text-base font-semibold", isSelected && "bg-background/20 text-background")}
+        return (
+          <button
+            key={barber.id}
+            type="button"
+            onClick={() => {
+              setSelectedBarber(barber.id)
+              setIsBarberPreferenceFlexible(false)
+            }}
+            className={cn(
+              "flex w-full items-center gap-4 rounded-2xl border bg-card/80 p-4 text-left transition-all",
+              "hover:border-foreground/20 hover:shadow-sm",
+              isSelected && "border-foreground bg-foreground text-background shadow-md",
+            )}
           >
-            {initials || "BB"}
-          </span>
-          <div className="flex flex-1 flex-col">
-            <span className="font-semibold leading-tight">{barber.name}</span>
-            <span className={cn("text-xs text-muted-foreground", isSelected && "text-background/80")}>Profesional disponible</span>
-          </div>
-        </button>
-      )
-    })]
+            <Avatar className="size-12 border border-border/60">
+              <AvatarImage src={barber.avatarUrl ?? undefined} alt={barber.name} />
+              <AvatarFallback className={cn("bg-muted text-base font-semibold", isSelected && "bg-background/20 text-background")}>
+                {initials || "BB"}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex flex-1 flex-col">
+              <span className="font-semibold leading-tight">{barber.name}</span>
+              <span className={cn("text-xs text-muted-foreground", isSelected && "text-background/80")}>Profesional disponible</span>
+            </div>
+          </button>
+        )
+      }),
+    ]
   }
 
   const renderSlotsContent = () => {

@@ -256,6 +256,7 @@ export function LoginForm({
       } else {
         localStorage.removeItem("userDisplayName")
       }
+      localStorage.removeItem("userAvatar")
       const userId = typeof user.id === "number" ? user.id : null
 
       if (userId != null) {
@@ -390,6 +391,8 @@ export function LoginForm({
       } else {
         localStorage.removeItem("userDisplayName")
       }
+
+      localStorage.removeItem("userAvatar")
 
       if (typeof user.id === "number") {
         localStorage.setItem("userId", String(user.id))
