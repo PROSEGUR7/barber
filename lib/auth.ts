@@ -220,17 +220,26 @@ async function insertEmployeeProfile(
   client: { query: typeof pool.query },
   empleadosTable: string,
   tenantSchema: string,
-  values: { userId: number; fullName: string; phone: string },
+  values: { userId: number; fullName: string; phone: string; sedeId?: number | null },
 ) {
   const columns = await getTableColumns(client, tenantSchema, "empleados")
   const columnNames = ["user_id", "nombre", "telefono"]
   const placeholders = ["$1", "$2", "$3"]
   const parameters: Array<number | string> = [values.userId, values.fullName, values.phone]
+  let nextParameterIndex = 4
+
+  if (columns.has("sede_id") && Number.isInteger(values.sedeId) && Number(values.sedeId) > 0) {
+    columnNames.push("sede_id")
+    placeholders.push(`$${nextParameterIndex}`)
+    parameters.push(Number(values.sedeId))
+    nextParameterIndex += 1
+  }
 
   if (columns.has("estado")) {
     columnNames.push("estado")
-    placeholders.push("$4")
+    placeholders.push(`$${nextParameterIndex}`)
     parameters.push("activo")
+    nextParameterIndex += 1
   }
 
   if (columns.has("fecha_ingreso")) {
@@ -506,6 +515,7 @@ export async function findUserById(id: number, tenantSchema?: string): Promise<A
 type CreateUserProfile = {
   name?: string
   phone?: string
+  sedeId?: number | null
 }
 
 export async function createUser({
@@ -569,6 +579,7 @@ export async function createUser({
         userId: userRow.id,
         fullName,
         phone,
+        sedeId: profile?.sedeId,
       })
     }
 

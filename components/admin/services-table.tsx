@@ -73,6 +73,7 @@ const COLUMN_LABELS: Record<string, string> = {
   name: 'Servicio',
   serviceType: 'Tipo',
   category: 'Categoría',
+  sedes: 'Sedes',
   description: 'Descripción',
   price: 'Precio',
   durationMin: 'Duración',
@@ -128,6 +129,7 @@ export function AdminServicesTable({
           service.description ?? '',
           normalizeServiceType(service.serviceType),
           service.category.name ?? '',
+          service.sedeNames.join(' '),
         ]
           .map((value) => value.toLowerCase())
           .some((value) => value.includes(search))
@@ -222,6 +224,24 @@ export function AdminServicesTable({
             {row.original.category.name ?? 'Sin categoría'}
           </span>
         ),
+      },
+      {
+        id: 'sedes',
+        accessorFn: (service) =>
+          service.sedeNames.length > 0
+            ? service.sedeNames.join(', ')
+            : 'Sin asignar',
+        header: ({ column }: HeaderContext<ServiceSummary, unknown>) => (
+          <SortableHeader column={column} title='Sedes' />
+        ),
+        cell: ({ row }: CellContext<ServiceSummary, unknown>) => (
+          <span className='text-sm text-muted-foreground'>
+            {row.original.sedeNames.length > 0
+              ? row.original.sedeNames.join(', ')
+              : 'Sin asignar'}
+          </span>
+        ),
+        enableSorting: true,
       },
       {
         accessorKey: 'price',
@@ -340,6 +360,7 @@ export function AdminServicesTable({
       'Servicio',
       'Tipo',
       'Categoría',
+      'Sedes',
       'Descripción',
       'Precio',
       'Duración (min)',
@@ -351,6 +372,7 @@ export function AdminServicesTable({
         escapeCsv(service.name),
         escapeCsv(normalizeServiceType(service.serviceType)),
         escapeCsv(service.category.name ?? ''),
+        escapeCsv(service.sedeNames.join(' | ')),
         escapeCsv(service.description ?? ''),
         escapeCsv(String(service.price)),
         escapeCsv(String(service.durationMin)),
@@ -413,7 +435,7 @@ export function AdminServicesTable({
               <Input
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder='Buscar por servicio o descripción'
+                placeholder='Buscar por servicio, sede o descripción'
                 className='pl-10'
               />
             </div>

@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Sheet,
@@ -22,7 +23,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { useToast } from "@/hooks/use-toast"
-import type { EmployeeSummary, ServiceSummary } from "@/lib/admin"
+import type { AdminSedeSummary, EmployeeSummary, ServiceSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type EmployeesResponse = {
@@ -46,6 +47,11 @@ type EmployeeResponse = {
 
 type ServicesCatalogResponse = {
   services?: ServiceSummary[]
+  error?: string
+}
+
+type SedesResponse = {
+  sedes?: AdminSedeSummary[]
   error?: string
 }
 
@@ -85,12 +91,16 @@ export default function AdminEmployeesPage() {
   const [employeesError, setEmployeesError] = useState<string | null>(null)
   const [servicesCatalog, setServicesCatalog] = useState<ServiceSummary[]>([])
   const [areServicesLoading, setAreServicesLoading] = useState(true)
+  const [sedesCatalog, setSedesCatalog] = useState<AdminSedeSummary[]>([])
+  const [areSedesLoading, setAreSedesLoading] = useState(true)
+  const [sedesError, setSedesError] = useState<string | null>(null)
 
   const [isRegisterOpen, setIsRegisterOpen] = useState(false)
   const [formName, setFormName] = useState("")
   const [formEmail, setFormEmail] = useState("")
   const [formPhone, setFormPhone] = useState("")
   const [formPassword, setFormPassword] = useState("")
+  const [formSedeId, setFormSedeId] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -102,6 +112,7 @@ export default function AdminEmployeesPage() {
   const [editName, setEditName] = useState("")
   const [editEmail, setEditEmail] = useState("")
   const [editPhone, setEditPhone] = useState("")
+  const [editSedeId, setEditSedeId] = useState("")
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([])
   const [editError, setEditError] = useState<string | null>(null)
   const [isEditSubmitting, setIsEditSubmitting] = useState(false)
@@ -113,6 +124,7 @@ export default function AdminEmployeesPage() {
     setFormEmail("")
     setFormPhone("")
     setFormPassword("")
+    setFormSedeId("")
     setFormError(null)
   }, [])
 
@@ -188,13 +200,69 @@ export default function AdminEmployeesPage() {
     [],
   )
 
+  const loadSedesCatalog = useCallback(
+    async (signal?: AbortSignal) => {
+      setAreSedesLoading(true)
+      setSedesError(null)
+
+      try {
+        const response = await fetch("/api/admin/sedes", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
+        const data: SedesResponse = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudieron cargar las sedes")
+        }
+
+        if (!signal?.aborted) {
+          const list = Array.isArray(data.sedes) ? data.sedes : []
+          const activeSedes = list.filter((sede) => sede.active)
+          setSedesCatalog(activeSedes)
+        }
+      } catch (error) {
+        if (signal?.aborted) {
+          return
+        }
+
+        console.error("Error fetching sedes catalog", error)
+        setSedesCatalog([])
+        setSedesError("No se pudieron cargar las sedes. Se usará la sede por defecto del sistema.")
+      } finally {
+        if (!signal?.aborted) {
+          setAreSedesLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     const controller = new AbortController()
     void loadEmployees(controller.signal)
     void loadServicesCatalog(controller.signal)
+    void loadSedesCatalog(controller.signal)
 
     return () => controller.abort()
-  }, [loadEmployees, loadServicesCatalog])
+  }, [loadEmployees, loadServicesCatalog, loadSedesCatalog])
+
+  useEffect(() => {
+    if (!isRegisterOpen || formSedeId || sedesCatalog.length === 0) {
+      return
+    }
+
+    setFormSedeId(String(sedesCatalog[0].id))
+  }, [formSedeId, isRegisterOpen, sedesCatalog])
+
+  useEffect(() => {
+    if (!isEditOpen || editSedeId || sedesCatalog.length === 0) {
+      return
+    }
+
+    setEditSedeId(String(sedesCatalog[0].id))
+  }, [editSedeId, isEditOpen, sedesCatalog])
 
   useEffect(() => {
     if (!isRegisterOpen) {
@@ -209,6 +277,7 @@ export default function AdminEmployeesPage() {
       setEditName("")
       setEditEmail("")
       setEditPhone("")
+      setEditSedeId("")
       setSelectedServiceIds([])
       setEditError(null)
       setIsEditSubmitting(false)
@@ -285,6 +354,14 @@ export default function AdminEmployeesPage() {
       return
     }
 
+    const parsedSedeId = Number(formSedeId)
+    const hasSedeSelection = Number.isInteger(parsedSedeId) && parsedSedeId > 0
+
+    if (sedesCatalog.length > 0 && !hasSedeSelection) {
+      setFormError("Selecciona la sede donde trabajará el empleado.")
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -299,6 +376,7 @@ export default function AdminEmployeesPage() {
           email: sanitizedEmail,
           password: formPassword,
           phone: sanitizedPhone,
+          ...(hasSedeSelection ? { sedeId: parsedSedeId } : {}),
         }),
       })
 
@@ -349,6 +427,7 @@ export default function AdminEmployeesPage() {
     setEditName(employee.name)
     setEditEmail(employee.email)
     setEditPhone(employee.phone ?? "")
+    setEditSedeId(employee.sedeId != null ? String(employee.sedeId) : "")
     setSelectedServiceIds(employee.serviceIds)
     setEditError(null)
     setIsEditOpen(true)
@@ -417,6 +496,14 @@ export default function AdminEmployeesPage() {
       return
     }
 
+    const parsedEditSedeId = Number(editSedeId)
+    const hasEditSedeSelection = Number.isInteger(parsedEditSedeId) && parsedEditSedeId > 0
+
+    if (sedesCatalog.length > 0 && !hasEditSedeSelection) {
+      setEditError("Selecciona la sede asignada del empleado.")
+      return
+    }
+
     setIsEditSubmitting(true)
 
     try {
@@ -430,6 +517,7 @@ export default function AdminEmployeesPage() {
           name: sanitizedName,
           email: sanitizedEmail,
           phone: sanitizedPhone,
+          ...(hasEditSedeSelection ? { sedeId: parsedEditSedeId } : {}),
           serviceIds: selectedServiceIds,
         }),
       })
@@ -594,6 +682,43 @@ export default function AdminEmployeesPage() {
                         <FieldDescription>Solo números, espacios o símbolos + - (mínimo 7 caracteres).</FieldDescription>
                       </Field>
                       <Field>
+                        <FieldLabel htmlFor="employee-sede">Sede asignada</FieldLabel>
+                        <Select
+                          value={formSedeId}
+                          onValueChange={(value) => {
+                            setFormSedeId(value)
+                            setFormError(null)
+                          }}
+                          disabled={areSedesLoading || sedesCatalog.length === 0}
+                        >
+                          <SelectTrigger id="employee-sede">
+                            <SelectValue
+                              placeholder={
+                                areSedesLoading
+                                  ? "Cargando sedes..."
+                                  : sedesCatalog.length === 0
+                                    ? "Sin sedes activas"
+                                    : "Selecciona una sede"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {sedesCatalog.map((sede) => (
+                              <SelectItem key={sede.id} value={String(sede.id)}>
+                                {sede.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FieldDescription>
+                          {sedesError
+                            ? sedesError
+                            : sedesCatalog.length > 0
+                              ? "El empleado quedará asociado a esta sede al registrarlo."
+                              : "No hay sedes activas; el sistema asignará la sede por defecto."}
+                        </FieldDescription>
+                      </Field>
+                      <Field>
                         <FieldLabel htmlFor="employee-password">Contraseña temporal</FieldLabel>
                         <Input
                           id="employee-password"
@@ -667,6 +792,43 @@ export default function AdminEmployeesPage() {
                           }}
                           required
                         />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="edit-employee-sede">Sede asignada</FieldLabel>
+                        <Select
+                          value={editSedeId}
+                          onValueChange={(value) => {
+                            setEditSedeId(value)
+                            setEditError(null)
+                          }}
+                          disabled={areSedesLoading || sedesCatalog.length === 0}
+                        >
+                          <SelectTrigger id="edit-employee-sede">
+                            <SelectValue
+                              placeholder={
+                                areSedesLoading
+                                  ? "Cargando sedes..."
+                                  : sedesCatalog.length === 0
+                                    ? "Sin sedes activas"
+                                    : "Selecciona una sede"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {sedesCatalog.map((sede) => (
+                              <SelectItem key={sede.id} value={String(sede.id)}>
+                                {sede.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FieldDescription>
+                          {sedesError
+                            ? sedesError
+                            : sedesCatalog.length > 0
+                              ? "Puedes cambiar la sede del empleado desde aquí."
+                              : "No hay sedes activas; se mantendrá la sede actual del sistema."}
+                        </FieldDescription>
                       </Field>
                       <Field>
                         <FieldLabel>Servicios asignados</FieldLabel>

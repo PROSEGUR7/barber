@@ -8,6 +8,8 @@ export type EmployeeSummary = {
   name: string
   email: string
   phone: string | null
+  sedeId: number | null
+  sedeName: string | null
   status: string | null
   joinedAt: string | null
   totalAppointments: number
@@ -44,6 +46,8 @@ export type ServiceSummary = {
   durationMin: number
   status: string | null
   serviceType: "individual" | "paquete"
+  sedeIds: number[]
+  sedeNames: string[]
   category: {
     id: number | null
     name: string | null
@@ -264,6 +268,13 @@ export class InvalidServicePackageError extends Error {
   }
 }
 
+export class InvalidServiceSedeAssociationError extends Error {
+  constructor(message = "INVALID_SERVICE_SEDE_ASSOCIATION") {
+    super(message)
+    this.name = "InvalidServiceSedeAssociationError"
+  }
+}
+
 export class AdminUserRecordNotFoundError extends Error {
   constructor(message = "ADMIN_USER_RECORD_NOT_FOUND") {
     super(message)
@@ -277,6 +288,8 @@ type EmployeeSummaryRow = {
   nombre: string
   correo: string
   telefono: string | null
+  sede_id: number | null
+  sede_nombre: string | null
   estado: string | null
   fecha_ingreso: Date | null
   total_appointments: string | null
@@ -294,6 +307,8 @@ type EmployeeBasicRow = {
   nombre: string
   correo: string
   telefono: string | null
+  sede_id: number | null
+  sede_nombre: string | null
   estado: string | null
   fecha_ingreso: Date | null
 }
@@ -304,6 +319,8 @@ type EmployeeLegacyBasicRow = {
   nombre: string
   correo: string
   telefono: string | null
+  sede_id: number | null
+  sede_nombre: string | null
 }
 
 type ClientSummaryRow = {
@@ -579,6 +596,8 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
     name: row.nombre,
     email: row.correo,
     phone: row.telefono,
+    sedeId: row.sede_id,
+    sedeName: row.sede_nombre,
     status: row.estado,
     joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
     totalAppointments,
@@ -654,6 +673,8 @@ function mapServiceRow(row: ServiceSummaryRow): ServiceSummary {
     durationMin: Number(row.duracion_min ?? 0),
     status: row.estado,
     serviceType,
+    sedeIds: [],
+    sedeNames: [],
     category: {
       id: row.categoria_id,
       name: row.categoria_nombre?.trim() || null,
@@ -664,9 +685,329 @@ function mapServiceRow(row: ServiceSummaryRow): ServiceSummary {
 }
 
 const ensuredServiceCatalogSchemas = new Set<string>()
+const serviceSedeCapabilitiesCache = new Map<string, ServiceSedeCapabilities>()
+
+type ServiceSedeCapabilities = {
+  hasSedesTable: boolean
+  hasSedesServiciosTable: boolean
+  hasServiciosSedeColumn: boolean
+}
+
+type ServiceSedeCapabilitiesRow = {
+  has_sedes_table: boolean | string
+  has_sedes_servicios_table: boolean | string
+  has_servicios_sede_column: boolean | string
+}
+
+type ServiceSedeAssignmentRow = {
+  servicio_id: number
+  sede_id: number | null
+  sede_nombre: string | null
+}
 
 function getServiceCatalogSchemaKey(tenantSchema?: string | null): string {
   return (tenantSchema ?? "tenant_base").trim().toLowerCase() || "tenant_base"
+}
+
+function toBooleanFlag(value: unknown): boolean {
+  if (value === true) {
+    return true
+  }
+
+  if (value === false) {
+    return false
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    return normalized === "true" || normalized === "t" || normalized === "1"
+  }
+
+  if (typeof value === "number") {
+    return value === 1
+  }
+
+  return false
+}
+
+function normalizeSedeIds(sedeIds: number[] | null | undefined): number[] {
+  return Array.from(new Set((sedeIds ?? []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)))
+}
+
+async function getServiceSedeCapabilities(
+  queryable: {
+    query: <T>(queryText: string, values?: unknown[]) => Promise<QueryResultWithRows<T>>
+  },
+  tenantSchema?: string | null,
+): Promise<ServiceSedeCapabilities> {
+  const resolvedSchema = normalizeTenantSchema(tenantSchema) ?? BASE_TENANT_SCHEMA
+  const cacheKey = resolvedSchema.toLowerCase()
+
+  const cached = serviceSedeCapabilitiesCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
+  const result = await queryable.query<ServiceSedeCapabilitiesRow>(
+    `SELECT
+      EXISTS (
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'sedes'
+      ) AS has_sedes_table,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name = 'sedes_servicios'
+      ) AS has_sedes_servicios_table,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'servicios'
+           AND column_name = 'sede_id'
+      ) AS has_servicios_sede_column`,
+    [resolvedSchema],
+  )
+
+  const row = result.rows[0]
+  const capabilities: ServiceSedeCapabilities = {
+    hasSedesTable: toBooleanFlag(row?.has_sedes_table),
+    hasSedesServiciosTable: toBooleanFlag(row?.has_sedes_servicios_table),
+    hasServiciosSedeColumn: toBooleanFlag(row?.has_servicios_sede_column),
+  }
+
+  serviceSedeCapabilitiesCache.set(cacheKey, capabilities)
+  return capabilities
+}
+
+async function getPackageDurationFromItems(
+  client: {
+    query: <T>(queryText: string, values?: unknown[]) => Promise<QueryResultWithRows<T>>
+  },
+  options: {
+    packageItemServiceIds: number[]
+    tenantSchema?: string | null
+  },
+): Promise<number> {
+  const uniqueServiceIds = [...new Set(options.packageItemServiceIds)]
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)
+
+  if (uniqueServiceIds.length === 0) {
+    throw new InvalidServicePackageError("PACKAGE_ITEMS_REQUIRED")
+  }
+
+  const result = await client.query<{ total_duration: string | null; total_services: string | null }>(
+    tenantSql(
+      `SELECT
+         COALESCE(SUM(COALESCE(s.duracion_min, 0)), 0)::text AS total_duration,
+         COUNT(*)::text AS total_services
+       FROM tenant_base.servicios s
+       WHERE s.id = ANY($1::int[])
+         AND LOWER(COALESCE(s.tipo_servicio, 'individual')) = 'individual'`,
+      options.tenantSchema,
+    ),
+    [uniqueServiceIds],
+  )
+
+  const totalServices = Number(result.rows[0]?.total_services ?? 0)
+  const totalDuration = Number(result.rows[0]?.total_duration ?? 0)
+
+  if (totalServices !== uniqueServiceIds.length) {
+    throw new InvalidServicePackageError("PACKAGE_ITEMS_INVALID")
+  }
+
+  if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
+    throw new InvalidServicePackageError("PACKAGE_DURATION_INVALID")
+  }
+
+  return Math.trunc(totalDuration)
+}
+
+async function syncServiceSedeAssignments(
+  client: {
+    query: <T>(queryText: string, values?: unknown[]) => Promise<QueryResultWithRows<T>>
+  },
+  options: {
+    serviceId: number
+    sedeIds: number[]
+    tenantSchema?: string | null
+  },
+) {
+  const sedeIds = normalizeSedeIds(options.sedeIds)
+  const capabilities = await getServiceSedeCapabilities(client, options.tenantSchema)
+
+  if (!capabilities.hasSedesTable) {
+    return
+  }
+
+  if (!capabilities.hasSedesServiciosTable && !capabilities.hasServiciosSedeColumn && sedeIds.length > 0) {
+    throw new InvalidServiceSedeAssociationError("SERVICE_SEDES_NOT_SUPPORTED")
+  }
+
+  if (!capabilities.hasSedesServiciosTable && sedeIds.length > 1) {
+    throw new InvalidServiceSedeAssociationError("SERVICE_SEDES_MULTIPLE_NOT_SUPPORTED")
+  }
+
+  if (sedeIds.length > 0) {
+    const validSedes = await client.query<{ id: number }>(
+      tenantSql(
+        `SELECT id
+           FROM tenant_base.sedes
+          WHERE id = ANY($1::int[])`,
+        options.tenantSchema,
+      ),
+      [sedeIds],
+    )
+
+    if (validSedes.rowCount !== sedeIds.length) {
+      throw new InvalidServiceSedeAssociationError("SERVICE_SEDES_INVALID")
+    }
+  }
+
+  if (capabilities.hasSedesServiciosTable) {
+    await client.query(
+      tenantSql(
+        `UPDATE tenant_base.sedes_servicios
+            SET activo = FALSE
+          WHERE servicio_id = $1`,
+        options.tenantSchema,
+      ),
+      [options.serviceId],
+    )
+
+    if (sedeIds.length > 0) {
+      await client.query(
+        tenantSql(
+          `INSERT INTO tenant_base.sedes_servicios (sede_id, servicio_id, activo)
+           SELECT raw.sede_id, $1, TRUE
+             FROM unnest($2::int[]) AS raw(sede_id)
+           ON CONFLICT (sede_id, servicio_id)
+           DO UPDATE
+                 SET activo = TRUE`,
+          options.tenantSchema,
+        ),
+        [options.serviceId, sedeIds],
+      )
+    }
+  }
+
+  if (capabilities.hasServiciosSedeColumn) {
+    await client.query(
+      tenantSql(
+        `UPDATE tenant_base.servicios
+            SET sede_id = $2
+          WHERE id = $1`,
+        options.tenantSchema,
+      ),
+      [options.serviceId, sedeIds[0] ?? null],
+    )
+  }
+}
+
+async function attachServiceSedeAssignments(
+  services: ServiceSummary[],
+  tenantSchema?: string | null,
+): Promise<ServiceSummary[]> {
+  if (services.length === 0) {
+    return services
+  }
+
+  const capabilities = await getServiceSedeCapabilities(pool, tenantSchema)
+  if (!capabilities.hasSedesTable) {
+    return services
+  }
+
+  const serviceIds = services.map((service) => service.id)
+  const assignments = new Map<number, Map<number, string>>()
+
+  if (capabilities.hasSedesServiciosTable) {
+    const assignmentResult = await pool.query<ServiceSedeAssignmentRow>(
+      tenantSql(
+        `SELECT
+           ss.servicio_id,
+           ss.sede_id,
+           sd.nombre AS sede_nombre
+         FROM tenant_base.sedes_servicios ss
+         LEFT JOIN tenant_base.sedes sd ON sd.id = ss.sede_id
+         WHERE ss.servicio_id = ANY($1::int[])
+           AND COALESCE(ss.activo, TRUE) = TRUE`,
+        tenantSchema,
+      ),
+      [serviceIds],
+    )
+
+    for (const row of assignmentResult.rows) {
+      if (!Number.isInteger(row.servicio_id) || !Number.isInteger(row.sede_id)) {
+        continue
+      }
+
+      const serviceId = Number(row.servicio_id)
+      const sedeId = Number(row.sede_id)
+      const sedeName = row.sede_nombre?.trim() || `Sede #${sedeId}`
+      const current = assignments.get(serviceId) ?? new Map<number, string>()
+      current.set(sedeId, sedeName)
+      assignments.set(serviceId, current)
+    }
+  }
+
+  if (capabilities.hasServiciosSedeColumn) {
+    const fallbackResult = await pool.query<ServiceSedeAssignmentRow>(
+      tenantSql(
+        `SELECT
+           s.id AS servicio_id,
+           s.sede_id,
+           sd.nombre AS sede_nombre
+         FROM tenant_base.servicios s
+         LEFT JOIN tenant_base.sedes sd ON sd.id = s.sede_id
+         WHERE s.id = ANY($1::int[])
+           AND s.sede_id IS NOT NULL`,
+        tenantSchema,
+      ),
+      [serviceIds],
+    )
+
+    for (const row of fallbackResult.rows) {
+      if (!Number.isInteger(row.servicio_id) || !Number.isInteger(row.sede_id)) {
+        continue
+      }
+
+      const serviceId = Number(row.servicio_id)
+      const current = assignments.get(serviceId)
+
+      if (current && current.size > 0) {
+        continue
+      }
+
+      const sedeId = Number(row.sede_id)
+      const sedeName = row.sede_nombre?.trim() || `Sede #${sedeId}`
+      assignments.set(serviceId, new Map([[sedeId, sedeName]]))
+    }
+  }
+
+  return services.map((service) => {
+    const serviceAssignments = assignments.get(service.id)
+    if (!serviceAssignments || serviceAssignments.size === 0) {
+      return {
+        ...service,
+        sedeIds: [],
+        sedeNames: [],
+      }
+    }
+
+    const sortedAssignments = Array.from(serviceAssignments.entries()).sort((a, b) => {
+      return a[1].localeCompare(b[1], "es", { sensitivity: "base" })
+    })
+
+    return {
+      ...service,
+      sedeIds: sortedAssignments.map(([sedeId]) => sedeId),
+      sedeNames: sortedAssignments.map(([, sedeName]) => sedeName),
+    }
+  })
 }
 
 async function ensureServiceCatalogSchema(
@@ -919,7 +1260,8 @@ async function getServiceById(serviceId: number, tenantSchema?: string | null): 
     return null
   }
 
-  return mapServiceRow(result.rows[0])
+  const [service] = await attachServiceSedeAssignments([mapServiceRow(result.rows[0])], tenantSchema)
+  return service ?? null
 }
 
 function mapAdminAppointmentRow(row: AdminAppointmentRow): AdminAppointmentSummary {
@@ -932,8 +1274,8 @@ function mapAdminAppointmentRow(row: AdminAppointmentRow): AdminAppointmentSumma
     !Number.isNaN(row.fecha_cita_fin.getTime()) &&
     row.fecha_cita_fin.getTime() > startAt.getTime()
 
-  const endAt = hasValidEndAt
-    ? row.fecha_cita_fin
+  const endAt: Date = hasValidEndAt
+    ? row.fecha_cita_fin!
     : new Date(startAt.getTime() + serviceDuration * 60 * 1000)
 
   return {
@@ -1023,6 +1365,8 @@ export async function getEmployeesWithStats(filter?: {
       e.user_id,
       e.nombre,
       e.telefono,
+      e.sede_id,
+      sd.nombre AS sede_nombre,
       e.estado,
       e.fecha_ingreso,
       u.correo,
@@ -1035,6 +1379,7 @@ export async function getEmployeesWithStats(filter?: {
       COALESCE(assigned_services.services, ARRAY[]::text[]) AS services
     FROM tenant_base.empleados e
     INNER JOIN tenant_base.users u ON u.id = e.user_id
+    LEFT JOIN tenant_base.sedes sd ON sd.id = e.sede_id
     LEFT JOIN LATERAL (
       SELECT
         COUNT(a.id) AS total_appointments,
@@ -1098,6 +1443,8 @@ export async function getEmployeesWithStats(filter?: {
         e.user_id,
         e.nombre,
         e.telefono,
+        NULL::int AS sede_id,
+        NULL::text AS sede_nombre,
         e.estado,
         e.fecha_ingreso,
         u.correo
@@ -1115,6 +1462,8 @@ export async function getEmployeesWithStats(filter?: {
         name: row.nombre,
         email: row.correo,
         phone: row.telefono,
+        sedeId: row.sede_id,
+        sedeName: row.sede_nombre,
         status: row.estado,
         joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
         totalAppointments: 0,
@@ -1135,6 +1484,8 @@ export async function getEmployeesWithStats(filter?: {
           e.user_id,
           e.nombre,
           e.telefono,
+          NULL::int AS sede_id,
+          NULL::text AS sede_nombre,
           u.correo
         FROM tenant_base.empleados e
         INNER JOIN tenant_base.users u ON u.id = e.user_id
@@ -1153,6 +1504,8 @@ export async function getEmployeesWithStats(filter?: {
         name: row.nombre,
         email: row.correo,
         phone: row.telefono,
+        sedeId: row.sede_id,
+        sedeName: row.sede_nombre,
         status: null,
         joinedAt: null,
         totalAppointments: 0,
@@ -1178,6 +1531,7 @@ export async function registerEmployee(input: {
   email: string
   password: string
   phone: string
+  sedeId?: number | null
   tenantSchema?: string | null
 }): Promise<EmployeeSummary> {
   let user: AuthUser
@@ -1193,6 +1547,7 @@ export async function registerEmployee(input: {
       profile: {
         name: input.name,
         phone: sanitizedPhone,
+        sedeId: Number.isInteger(input.sedeId) && Number(input.sedeId) > 0 ? Number(input.sedeId) : null,
       },
     })
   } catch (error) {
@@ -1216,22 +1571,60 @@ export async function updateEmployee(input: {
   name: string
   email: string
   phone: string
+  sedeId?: number | null
   serviceIds?: number[]
   tenantSchema?: string | null
 }): Promise<EmployeeSummary> {
   const client = await pool.connect()
+  const resolvedTenantSchema = normalizeTenantSchema(input.tenantSchema) ?? BASE_TENANT_SCHEMA
 
   try {
     await client.query("BEGIN")
 
-    const employeeResult = await client.query<{ user_id: number }>(
-      tenantSql(`UPDATE tenant_base.empleados
-          SET nombre = $2,
-              telefono = $3
-        WHERE id = $1
-        RETURNING user_id`, input.tenantSchema),
-      [input.employeeId, input.name, input.phone],
+    const hasSedeColumnResult = await client.query<{ has_column: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM information_schema.columns
+          WHERE table_schema = $1
+            AND table_name = 'empleados'
+            AND column_name = 'sede_id'
+       ) AS has_column`,
+      [resolvedTenantSchema],
     )
+
+    const hasSedeColumn = Boolean(hasSedeColumnResult.rows[0]?.has_column)
+    const hasSedeInput = input.sedeId !== undefined
+    const normalizedSedeId = Number.isInteger(input.sedeId) && Number(input.sedeId) > 0 ? Number(input.sedeId) : null
+
+    if (hasSedeColumn && hasSedeInput && normalizedSedeId != null) {
+      const sedeExistsResult = await client.query<{ id: number }>(
+        tenantSql(`SELECT id FROM tenant_base.sedes WHERE id = $1 LIMIT 1`, input.tenantSchema),
+        [normalizedSedeId],
+      )
+
+      if (sedeExistsResult.rowCount === 0) {
+        throw new SedeRecordNotFoundError()
+      }
+    }
+
+    const employeeResult = hasSedeColumn && hasSedeInput
+      ? await client.query<{ user_id: number }>(
+          tenantSql(`UPDATE tenant_base.empleados
+              SET nombre = $2,
+                  telefono = $3,
+                  sede_id = $4
+            WHERE id = $1
+            RETURNING user_id`, input.tenantSchema),
+          [input.employeeId, input.name, input.phone, normalizedSedeId],
+        )
+      : await client.query<{ user_id: number }>(
+          tenantSql(`UPDATE tenant_base.empleados
+              SET nombre = $2,
+                  telefono = $3
+            WHERE id = $1
+            RETURNING user_id`, input.tenantSchema),
+          [input.employeeId, input.name, input.phone],
+        )
 
     if (employeeResult.rowCount === 0) {
       throw new EmployeeRecordNotFoundError()
@@ -1612,7 +2005,7 @@ export async function getServicesCatalog(tenantSchema?: string | null): Promise<
     ),
   )
 
-  return result.rows.map(mapServiceRow)
+  return attachServiceSedeAssignments(result.rows.map(mapServiceRow), tenantSchema)
 }
 
 export async function createService(input: {
@@ -1624,6 +2017,7 @@ export async function createService(input: {
   serviceType?: "individual" | "paquete"
   categoryName?: string | null
   packageItemServiceIds?: number[]
+  sedeIds?: number[]
   tenantSchema?: string | null
 }): Promise<ServiceSummary> {
   const client = await pool.connect()
@@ -1634,6 +2028,13 @@ export async function createService(input: {
 
     const categoryId = await resolveCategoryId(client, input.categoryName, input.tenantSchema)
     const serviceType = input.serviceType === "paquete" ? "paquete" : "individual"
+    const durationMin =
+      serviceType === "paquete"
+        ? await getPackageDurationFromItems(client, {
+            packageItemServiceIds: input.packageItemServiceIds ?? [],
+            tenantSchema: input.tenantSchema,
+          })
+        : input.durationMin
 
     const result = await client.query<{ id: number }>(
       tenantSql(
@@ -1646,7 +2047,7 @@ export async function createService(input: {
         input.name,
         input.description ?? "",
         input.price,
-        input.durationMin,
+        durationMin,
         input.status ?? "activo",
         serviceType,
         categoryId,
@@ -1663,6 +2064,14 @@ export async function createService(input: {
       await syncServicePackageItems(client, {
         packageServiceId: createdServiceId,
         packageItemServiceIds: input.packageItemServiceIds ?? [],
+        tenantSchema: input.tenantSchema,
+      })
+    }
+
+    if (Array.isArray(input.sedeIds)) {
+      await syncServiceSedeAssignments(client, {
+        serviceId: createdServiceId,
+        sedeIds: input.sedeIds,
         tenantSchema: input.tenantSchema,
       })
     }
@@ -1699,6 +2108,7 @@ export async function updateService(
     serviceType?: "individual" | "paquete"
     categoryName?: string | null
     packageItemServiceIds?: number[]
+    sedeIds?: number[]
     tenantSchema?: string | null
   },
 ): Promise<ServiceSummary> {
@@ -1710,6 +2120,13 @@ export async function updateService(
 
     const categoryId = await resolveCategoryId(client, input.categoryName, input.tenantSchema)
     const serviceType = input.serviceType === "paquete" ? "paquete" : "individual"
+    const durationMin =
+      serviceType === "paquete"
+        ? await getPackageDurationFromItems(client, {
+            packageItemServiceIds: input.packageItemServiceIds ?? [],
+            tenantSchema: input.tenantSchema,
+          })
+        : input.durationMin
 
     const result = await client.query<{ id: number }>(
       tenantSql(
@@ -1730,7 +2147,7 @@ export async function updateService(
         input.name,
         input.description ?? "",
         input.price,
-        input.durationMin,
+        durationMin,
         input.status ?? "activo",
         serviceType,
         categoryId,
@@ -1756,6 +2173,14 @@ export async function updateService(
         ),
         [serviceId],
       )
+    }
+
+    if (Array.isArray(input.sedeIds)) {
+      await syncServiceSedeAssignments(client, {
+        serviceId,
+        sedeIds: input.sedeIds,
+        tenantSchema: input.tenantSchema,
+      })
     }
 
     await client.query("COMMIT")

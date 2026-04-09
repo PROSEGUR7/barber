@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { InvalidServicePackageError, createService, getServicesCatalog } from "@/lib/admin"
+import {
+  InvalidServicePackageError,
+  InvalidServiceSedeAssociationError,
+  createService,
+  getServicesCatalog,
+} from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
@@ -10,11 +15,20 @@ const serviceSchema = z.object({
   name: z.string().trim().min(2),
   description: z.string().trim().nullable().optional(),
   price: z.coerce.number().min(0),
-  durationMin: z.coerce.number().int().min(5).max(600),
+  durationMin: z.coerce.number().int().min(5).max(600).optional(),
   status: z.enum(["activo", "inactivo"]).default("activo"),
   serviceType: z.enum(["individual", "paquete"]).default("individual"),
   categoryName: z.string().trim().max(120).nullable().optional(),
   packageItemServiceIds: z.array(z.coerce.number().int().positive()).max(50).optional().default([]),
+  sedeIds: z.array(z.coerce.number().int().positive()).max(100).optional(),
+}).superRefine((value, ctx) => {
+  if (value.serviceType === "individual" && value.durationMin == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "La duración es obligatoria para servicios individuales.",
+      path: ["durationMin"],
+    })
+  }
 })
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
@@ -86,11 +100,12 @@ export async function POST(request: Request) {
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       price: parsed.data.price,
-      durationMin: parsed.data.durationMin,
+      durationMin: parsed.data.durationMin ?? 0,
       status: parsed.data.status,
       serviceType: parsed.data.serviceType,
       categoryName: parsed.data.categoryName ?? null,
       packageItemServiceIds: parsed.data.packageItemServiceIds,
+      sedeIds: parsed.data.sedeIds,
       tenantSchema,
     })
 
@@ -100,6 +115,13 @@ export async function POST(request: Request) {
       return jsonError(400, {
         code: error.message,
         error: "No se pudo crear el paquete. Verifica los servicios seleccionados.",
+      })
+    }
+
+    if (error instanceof InvalidServiceSedeAssociationError) {
+      return jsonError(400, {
+        code: error.message,
+        error: "No se pudo asociar el servicio a las sedes seleccionadas.",
       })
     }
 

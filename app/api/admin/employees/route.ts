@@ -11,6 +11,7 @@ const createEmployeeSchema = z.object({
   name: z.string().trim().min(2),
   email: z.string().trim().email(),
   password: z.string().min(8),
+  sedeId: z.number().int().positive().optional(),
   phone: z
     .string()
     .trim()
@@ -89,6 +90,7 @@ export async function POST(request: Request) {
       email: parsed.data.email.toLowerCase(),
       password: parsed.data.password,
       phone: parsed.data.phone,
+      sedeId: parsed.data.sedeId ?? null,
       tenantSchema,
     })
 

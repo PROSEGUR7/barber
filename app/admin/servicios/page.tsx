@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
-import type { ServiceSummary } from "@/lib/admin"
+import type { AdminSedeSummary, ServiceSummary } from "@/lib/admin"
 import { formatCurrency, formatNumber } from "@/lib/formatters"
 
 type ServicesResponse = {
@@ -34,6 +34,11 @@ type ServicesResponse = {
 
 type ServiceResponse = {
   service?: ServiceSummary
+  error?: string
+}
+
+type SedesResponse = {
+  sedes?: AdminSedeSummary[]
   error?: string
 }
 
@@ -67,6 +72,9 @@ export default function AdminServiciosPage() {
   const [services, setServices] = useState<ServiceSummary[]>([])
   const [areServicesLoading, setAreServicesLoading] = useState(true)
   const [servicesError, setServicesError] = useState<string | null>(null)
+  const [sedesCatalog, setSedesCatalog] = useState<AdminSedeSummary[]>([])
+  const [areSedesLoading, setAreSedesLoading] = useState(true)
+  const [areSedesAvailable, setAreSedesAvailable] = useState(true)
 
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [editingService, setEditingService] = useState<ServiceSummary | null>(null)
@@ -76,6 +84,7 @@ export default function AdminServiciosPage() {
   const [formDurationMin, setFormDurationMin] = useState("")
   const [formServiceType, setFormServiceType] = useState<"individual" | "paquete">("individual")
   const [formCategoryName, setFormCategoryName] = useState("")
+  const [formSedeIds, setFormSedeIds] = useState<number[]>([])
   const [formPackageItemServiceIds, setFormPackageItemServiceIds] = useState<number[]>([])
   const [formStatus, setFormStatus] = useState<"activo" | "inactivo">("activo")
   const [formError, setFormError] = useState<string | null>(null)
@@ -90,6 +99,7 @@ export default function AdminServiciosPage() {
     setFormDurationMin("")
     setFormServiceType("individual")
     setFormCategoryName("")
+    setFormSedeIds([])
     setFormPackageItemServiceIds([])
     setFormStatus("activo")
     setFormError(null)
@@ -132,12 +142,57 @@ export default function AdminServiciosPage() {
     [],
   )
 
+  const loadSedesCatalog = useCallback(
+    async (signal?: AbortSignal) => {
+      setAreSedesLoading(true)
+
+      try {
+        const response = await fetch("/api/admin/sedes", {
+          signal,
+          cache: "no-store",
+          headers: buildTenantHeaders(),
+        })
+        const data: SedesResponse & { code?: string } = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          if (response.status === 409 && data.code === "SEDES_MODULE_NOT_AVAILABLE") {
+            if (!signal?.aborted) {
+              setAreSedesAvailable(false)
+              setSedesCatalog([])
+            }
+            return
+          }
+
+          throw new Error(data.error ?? "No se pudieron cargar las sedes")
+        }
+
+        if (!signal?.aborted) {
+          setAreSedesAvailable(true)
+          setSedesCatalog(Array.isArray(data.sedes) ? data.sedes : [])
+        }
+      } catch (error) {
+        if (signal?.aborted) {
+          return
+        }
+
+        console.error("Error fetching sedes catalog", error)
+        setSedesCatalog([])
+      } finally {
+        if (!signal?.aborted) {
+          setAreSedesLoading(false)
+        }
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     const controller = new AbortController()
     void loadServices(controller.signal)
+    void loadSedesCatalog(controller.signal)
 
     return () => controller.abort()
-  }, [loadServices])
+  }, [loadServices, loadSedesCatalog])
 
   useEffect(() => {
     if (!isFormOpen) {
@@ -178,6 +233,45 @@ export default function AdminServiciosPage() {
   }, [services])
 
   const shouldShowErrorCard = Boolean(servicesError) && !areServicesLoading && services.length === 0
+  const activeSedeIds = useMemo(() => {
+    return sedesCatalog.filter((sede) => sede.active).map((sede) => sede.id)
+  }, [sedesCatalog])
+  const sedesCatalogIds = useMemo(() => sedesCatalog.map((sede) => sede.id), [sedesCatalog])
+  const areAllSedesSelected = useMemo(() => {
+    if (sedesCatalogIds.length === 0) {
+      return false
+    }
+
+    return sedesCatalogIds.every((sedeId) => formSedeIds.includes(sedeId))
+  }, [formSedeIds, sedesCatalogIds])
+  const hasAnySedeSelected = useMemo(() => {
+    if (sedesCatalogIds.length === 0) {
+      return false
+    }
+
+    return sedesCatalogIds.some((sedeId) => formSedeIds.includes(sedeId))
+  }, [formSedeIds, sedesCatalogIds])
+
+  const packageDurationMin = useMemo(() => {
+    if (formServiceType !== "paquete") {
+      return 0
+    }
+
+    const durationsByServiceId = new Map<number, number>(
+      services
+        .filter((service) => service.serviceType === "individual")
+        .map((service) => [service.id, service.durationMin]),
+    )
+
+    return formPackageItemServiceIds.reduce((total, serviceId) => {
+      const durationMin = durationsByServiceId.get(serviceId)
+      if (!Number.isFinite(durationMin)) {
+        return total
+      }
+
+      return total + Number(durationMin)
+    }, 0)
+  }, [formPackageItemServiceIds, formServiceType, services])
 
   const availableIndividualServices = useMemo(() => {
     return services
@@ -201,6 +295,9 @@ export default function AdminServiciosPage() {
 
   const openCreateForm = () => {
     resetForm()
+    if (activeSedeIds.length > 0) {
+      setFormSedeIds(activeSedeIds)
+    }
     setIsFormOpen(true)
   }
 
@@ -212,6 +309,7 @@ export default function AdminServiciosPage() {
     setFormDurationMin(String(service.durationMin))
     setFormServiceType(service.serviceType)
     setFormCategoryName(service.category.name ?? "")
+    setFormSedeIds(service.sedeIds)
     setFormPackageItemServiceIds(service.packageItemServiceIds)
     setFormStatus(service.status?.trim().toLowerCase() === "inactivo" ? "inactivo" : "activo")
     setFormError(null)
@@ -226,7 +324,11 @@ export default function AdminServiciosPage() {
     const description = formDescription.trim()
     const categoryName = formCategoryName.trim()
     const price = Number(formPrice.replace(",", "."))
-    const durationMin = Number(formDurationMin)
+    const providedDurationMin = Number(formDurationMin)
+    const durationMin = formServiceType === "paquete" ? packageDurationMin : providedDurationMin
+    const normalizedSedeIds = Array.from(
+      new Set(formSedeIds.map((sedeId) => Number(sedeId)).filter((sedeId) => Number.isInteger(sedeId) && sedeId > 0)),
+    )
 
     if (name.length < 2) {
       setFormError("Ingresa un nombre válido (mínimo 2 caracteres).")
@@ -238,13 +340,26 @@ export default function AdminServiciosPage() {
       return
     }
 
-    if (!Number.isInteger(durationMin) || durationMin < 5 || durationMin > 600) {
+    if (
+      formServiceType === "individual" &&
+      (!Number.isInteger(durationMin) || durationMin < 5 || durationMin > 600)
+    ) {
       setFormError("La duración debe ser un número entero entre 5 y 600 minutos.")
       return
     }
 
     if (formServiceType === "paquete" && formPackageItemServiceIds.length === 0) {
       setFormError("Selecciona al menos un servicio individual para construir el paquete.")
+      return
+    }
+
+    if (formServiceType === "paquete" && (!Number.isInteger(durationMin) || durationMin <= 0)) {
+      setFormError("La duración del paquete se calcula con la suma de los servicios seleccionados.")
+      return
+    }
+
+    if (areSedesAvailable && !areSedesLoading && sedesCatalog.length > 0 && normalizedSedeIds.length === 0) {
+      setFormError("Selecciona al menos una sede para este servicio.")
       return
     }
 
@@ -269,6 +384,7 @@ export default function AdminServiciosPage() {
           serviceType: formServiceType,
           categoryName: categoryName.length > 0 ? categoryName : null,
           packageItemServiceIds: formServiceType === "paquete" ? formPackageItemServiceIds : [],
+          sedeIds: areSedesAvailable && !areSedesLoading && sedesCatalog.length > 0 ? normalizedSedeIds : undefined,
           status: formStatus,
         }),
       })
@@ -450,38 +566,134 @@ export default function AdminServiciosPage() {
                           required
                         />
                       </Field>
-                      <Field>
-                        <FieldLabel htmlFor="service-duration">Duración (minutos)</FieldLabel>
-                        <Input
-                          id="service-duration"
-                          type="number"
-                          min={5}
-                          max={600}
-                          step={1}
-                          value={formDurationMin}
-                          onChange={(event) => {
-                            setFormDurationMin(event.target.value)
-                            setFormError(null)
-                          }}
-                          placeholder="Ej. 45"
-                          required
-                        />
-                      </Field>
-                      {formServiceType === "paquete" && (
+                      {formServiceType === "individual" && (
                         <Field>
-                          <FieldLabel>Servicios incluidos en el paquete</FieldLabel>
-                          <div className="max-h-60 space-y-2 overflow-y-auto rounded-md border border-border/60 p-3">
-                            {availableIndividualServices.length === 0 ? (
+                          <FieldLabel htmlFor="service-duration">Duración (minutos)</FieldLabel>
+                          <Input
+                            id="service-duration"
+                            type="number"
+                            min={5}
+                            max={600}
+                            step={1}
+                            value={formDurationMin}
+                            onChange={(event) => {
+                              setFormDurationMin(event.target.value)
+                              setFormError(null)
+                            }}
+                            placeholder="Ej. 45"
+                            required
+                          />
+                        </Field>
+                      )}
+                      {formServiceType === "paquete" && (
+                        <>
+                          <Field>
+                            <FieldLabel>Servicios incluidos en el paquete</FieldLabel>
+                            <div className="max-h-60 space-y-2 overflow-y-auto rounded-md border border-border/60 p-3">
+                              {availableIndividualServices.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">
+                                  No hay servicios individuales disponibles para agregar al paquete.
+                                </p>
+                              ) : (
+                                availableIndividualServices.map((service) => {
+                                  const checked = formPackageItemServiceIds.includes(service.id)
+
+                                  return (
+                                    <label
+                                      key={service.id}
+                                      className="flex cursor-pointer items-start gap-3 rounded-md border border-transparent px-2 py-1 hover:border-border/60 hover:bg-muted/40"
+                                    >
+                                      <Checkbox
+                                        checked={checked}
+                                        onCheckedChange={(value) => {
+                                          const isChecked = value === true
+
+                                          setFormPackageItemServiceIds((current) => {
+                                            if (isChecked) {
+                                              return [...new Set([...current, service.id])]
+                                            }
+
+                                            return current.filter((itemId) => itemId !== service.id)
+                                          })
+                                          setFormError(null)
+                                        }}
+                                      />
+                                      <span className="text-sm">
+                                        <span className="font-medium">{service.name}</span>
+                                        <span className="ml-2 text-muted-foreground">
+                                          {formatCurrency(service.price)} · {formatNumber(service.durationMin)} min
+                                        </span>
+                                      </span>
+                                    </label>
+                                  )
+                                })
+                              )}
+                            </div>
+                            <FieldDescription>
+                              Puedes ajustar el precio del paquete libremente sin alterar los servicios individuales.
+                            </FieldDescription>
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor="service-duration-package">Duración total del paquete</FieldLabel>
+                            <Input
+                              id="service-duration-package"
+                              type="number"
+                              value={Number.isFinite(packageDurationMin) ? packageDurationMin : 0}
+                              readOnly
+                              aria-readonly="true"
+                              className="cursor-not-allowed border-muted-foreground/25 bg-muted text-muted-foreground"
+                            />
+                            <FieldDescription>
+                              Este valor se calcula automáticamente con los servicios incluidos.
+                            </FieldDescription>
+                          </Field>
+                        </>
+                      )}
+                      {areSedesAvailable && (
+                        <Field>
+                          <FieldLabel>Sedes donde estará disponible</FieldLabel>
+                          <div className="mb-2 flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              disabled={areSedesLoading || sedesCatalog.length === 0 || areAllSedesSelected}
+                              onClick={() => {
+                                setFormSedeIds(sedesCatalogIds)
+                                setFormError(null)
+                              }}
+                            >
+                              Seleccionar todas
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              disabled={areSedesLoading || sedesCatalog.length === 0 || !hasAnySedeSelected}
+                              onClick={() => {
+                                setFormSedeIds([])
+                                setFormError(null)
+                              }}
+                            >
+                              Deseleccionar todas
+                            </Button>
+                          </div>
+                          <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border border-border/60 p-3">
+                            {areSedesLoading ? (
+                              <p className="text-sm text-muted-foreground">Cargando sedes...</p>
+                            ) : sedesCatalog.length === 0 ? (
                               <p className="text-sm text-muted-foreground">
-                                No hay servicios individuales disponibles para agregar al paquete.
+                                No hay sedes registradas. Guarda la sede primero para asociar servicios.
                               </p>
                             ) : (
-                              availableIndividualServices.map((service) => {
-                                const checked = formPackageItemServiceIds.includes(service.id)
+                              sedesCatalog.map((sede) => {
+                                const checked = formSedeIds.includes(sede.id)
 
                                 return (
                                   <label
-                                    key={service.id}
+                                    key={sede.id}
                                     className="flex cursor-pointer items-start gap-3 rounded-md border border-transparent px-2 py-1 hover:border-border/60 hover:bg-muted/40"
                                   >
                                     <Checkbox
@@ -489,21 +701,19 @@ export default function AdminServiciosPage() {
                                       onCheckedChange={(value) => {
                                         const isChecked = value === true
 
-                                        setFormPackageItemServiceIds((current) => {
+                                        setFormSedeIds((current) => {
                                           if (isChecked) {
-                                            return [...new Set([...current, service.id])]
+                                            return [...new Set([...current, sede.id])]
                                           }
 
-                                          return current.filter((itemId) => itemId !== service.id)
+                                          return current.filter((sedeId) => sedeId !== sede.id)
                                         })
                                         setFormError(null)
                                       }}
                                     />
                                     <span className="text-sm">
-                                      <span className="font-medium">{service.name}</span>
-                                      <span className="ml-2 text-muted-foreground">
-                                        {formatCurrency(service.price)} · {formatNumber(service.durationMin)} min
-                                      </span>
+                                      <span className="font-medium">{sede.name}</span>
+                                      {!sede.active && <span className="ml-2 text-muted-foreground">(inactiva)</span>}
                                     </span>
                                   </label>
                                 )
@@ -511,7 +721,15 @@ export default function AdminServiciosPage() {
                             )}
                           </div>
                           <FieldDescription>
-                            Puedes ajustar el precio del paquete libremente sin alterar los servicios individuales.
+                            El servicio solo estará visible para reservas en las sedes seleccionadas.
+                          </FieldDescription>
+                        </Field>
+                      )}
+                      {!areSedesAvailable && (
+                        <Field>
+                          <FieldLabel>Sedes</FieldLabel>
+                          <FieldDescription>
+                            El módulo de sedes no está habilitado en este tenant. El servicio quedará disponible de forma general.
                           </FieldDescription>
                         </Field>
                       )}

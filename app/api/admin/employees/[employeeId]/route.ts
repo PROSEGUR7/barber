@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { EmployeeRecordNotFoundError, ServiceRecordNotFoundError, deleteEmployee, updateEmployee } from "@/lib/admin"
+import {
+  EmployeeRecordNotFoundError,
+  SedeRecordNotFoundError,
+  ServiceRecordNotFoundError,
+  deleteEmployee,
+  updateEmployee,
+} from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
@@ -13,6 +19,7 @@ const paramsSchema = z.object({
 const updateEmployeeSchema = z.object({
   name: z.string().trim().min(2),
   email: z.string().trim().email(),
+  sedeId: z.number().int().positive().optional(),
   phone: z
     .string()
     .trim()
@@ -75,6 +82,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ emplo
       name: parsedBody.data.name,
       email: parsedBody.data.email.toLowerCase(),
       phone: parsedBody.data.phone,
+      sedeId: parsedBody.data.sedeId,
       serviceIds: parsedBody.data.serviceIds,
       tenantSchema,
     })
@@ -92,6 +100,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ emplo
       return jsonError(400, {
         code: "SERVICE_NOT_FOUND",
         error: "Uno o más servicios seleccionados no existen.",
+      })
+    }
+
+    if (error instanceof SedeRecordNotFoundError) {
+      return jsonError(400, {
+        code: "SEDE_NOT_FOUND",
+        error: "La sede seleccionada no existe.",
       })
     }
 
