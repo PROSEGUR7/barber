@@ -128,6 +128,8 @@ type TenantSedeFeatures = {
   hasSedesServiciosTable: boolean
   hasSedesEmpleadosTable: boolean
   hasUserProfileSettingsTable: boolean
+  hasServiciosTipoColumn: boolean
+  hasServiciosPackageItemsColumn: boolean
   hasServiciosSedeColumn: boolean
   hasEmpleadosSedeColumn: boolean
   hasHorariosSedeColumn: boolean
@@ -141,6 +143,8 @@ type TenantSedeFeaturesRow = {
   has_sedes_servicios_table: boolean | string
   has_sedes_empleados_table: boolean | string
   has_user_profile_settings_table: boolean | string
+  has_servicios_tipo_column: boolean | string
+  has_servicios_package_items_column: boolean | string
   has_servicios_sede_column: boolean | string
   has_empleados_sede_column: boolean | string
   has_horarios_sede_column: boolean | string
@@ -295,6 +299,20 @@ async function getTenantSedeFeatures(tenantSchema?: string | null): Promise<Tena
           FROM information_schema.columns
          WHERE table_schema = $1
            AND table_name = 'servicios'
+           AND column_name = 'tipo_servicio'
+      ) AS has_servicios_tipo_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'servicios'
+           AND column_name = 'package_item_service_ids'
+      ) AS has_servicios_package_items_column,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'servicios'
            AND column_name = 'sede_id'
       ) AS has_servicios_sede_column,
       EXISTS (
@@ -341,6 +359,8 @@ async function getTenantSedeFeatures(tenantSchema?: string | null): Promise<Tena
     hasSedesServiciosTable: toBoolean(row?.has_sedes_servicios_table),
     hasSedesEmpleadosTable: toBoolean(row?.has_sedes_empleados_table),
     hasUserProfileSettingsTable: toBoolean(row?.has_user_profile_settings_table),
+    hasServiciosTipoColumn: toBoolean(row?.has_servicios_tipo_column),
+    hasServiciosPackageItemsColumn: toBoolean(row?.has_servicios_package_items_column),
     hasServiciosSedeColumn: toBoolean(row?.has_servicios_sede_column),
     hasEmpleadosSedeColumn: toBoolean(row?.has_empleados_sede_column),
     hasHorariosSedeColumn: toBoolean(row?.has_horarios_sede_column),
@@ -529,10 +549,25 @@ export async function getBarbersForService(
 ): Promise<Barber[]> {
   const normalizedSedeId = normalizeSedeId(sedeId)
   const features = await getTenantSedeFeatures(tenantSchema)
-  const employeeSedeFilterForService =
-    normalizedSedeId !== null ? buildEmployeeSedeFilterSql(features, "$2") : null
   const employeeSedeFilterFallback =
     normalizedSedeId !== null ? buildEmployeeSedeFilterSql(features, "$1") : null
+
+  const targetServiceIds = await resolveTargetServiceIdsForBarberMatching(serviceId, features, tenantSchema)
+
+  const queryValues: Array<number[] | number> = [targetServiceIds]
+  let employeeSedeFilterForService: string | null = null
+  let requiredServicesParamRef = "$2"
+
+  if (normalizedSedeId !== null) {
+    const maybeEmployeeSedeFilter = buildEmployeeSedeFilterSql(features, "$2")
+    if (maybeEmployeeSedeFilter) {
+      employeeSedeFilterForService = maybeEmployeeSedeFilter
+      queryValues.push(normalizedSedeId)
+      requiredServicesParamRef = "$3"
+    }
+  }
+
+  queryValues.push(targetServiceIds.length)
 
   const result = await pool.query<BarberRow>(
     tenantSql(
@@ -543,12 +578,14 @@ export async function getBarbersForService(
          INNER JOIN tenant_base.empleados_servicios es
                  ON es.empleado_id = e.id
          ${features.hasUserProfileSettingsTable ? "LEFT JOIN tenant_base.user_profile_settings ups ON ups.user_id = e.user_id" : ""}
-        WHERE es.servicio_id = $1
+        WHERE es.servicio_id = ANY($1::int[])
           ${employeeSedeFilterForService ? `AND ${employeeSedeFilterForService}` : ""}
+        GROUP BY e.id, e.nombre${features.hasUserProfileSettingsTable ? ", ups.avatar_url" : ""}
+       HAVING COUNT(DISTINCT es.servicio_id) = ${requiredServicesParamRef}::int
         ORDER BY e.nombre ASC`,
       tenantSchema,
     ),
-    normalizedSedeId !== null && employeeSedeFilterForService ? [serviceId, normalizedSedeId] : [serviceId],
+    queryValues,
   )
 
   if (result.rowCount === 0) {
@@ -567,6 +604,11 @@ export async function getBarbersForService(
       normalizedSedeId !== null && employeeSedeFilterFallback ? [normalizedSedeId] : [],
     )
 
+    // For package services, returning unqualified fallback employees leads to invalid assignments.
+    if (targetServiceIds.length > 1 || targetServiceIds[0] !== serviceId) {
+      return []
+    }
+
     return fallback.rows.map((row) => ({
       id: row.id,
       name: row.nombre,
@@ -579,6 +621,48 @@ export async function getBarbersForService(
     name: row.nombre,
     avatarUrl: row.avatar_url,
   }))
+}
+
+async function resolveTargetServiceIdsForBarberMatching(
+  serviceId: number,
+  features: TenantSedeFeatures,
+  tenantSchema?: string | null,
+): Promise<number[]> {
+  if (!features.hasServiciosTipoColumn || !features.hasServiciosPackageItemsColumn) {
+    return [serviceId]
+  }
+
+  const result = await pool.query<{ tipo_servicio: string | null; package_item_service_ids: number[] | null }>(
+    tenantSql(
+      `SELECT tipo_servicio, package_item_service_ids
+         FROM tenant_base.servicios
+        WHERE id = $1
+        LIMIT 1`,
+      tenantSchema,
+    ),
+    [serviceId],
+  )
+
+  const row = result.rows[0]
+  if (!row) {
+    return [serviceId]
+  }
+
+  const serviceType = (row.tipo_servicio ?? "individual").trim().toLowerCase()
+  if (serviceType !== "paquete") {
+    return [serviceId]
+  }
+
+  const packageItems = Array.isArray(row.package_item_service_ids)
+    ? row.package_item_service_ids.filter((item): item is number => Number.isInteger(item) && item > 0)
+    : []
+
+  const uniqueItems = Array.from(new Set(packageItems))
+  if (uniqueItems.length === 0) {
+    return [serviceId]
+  }
+
+  return uniqueItems
 }
 
 export async function getAvailabilitySlots(options: {
