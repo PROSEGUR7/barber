@@ -343,6 +343,19 @@ export async function findUserByEmailAcrossChildTenants(
     }
   }
 
+  const allowBaseFallback = !normalizedPreferredTenant || normalizedPreferredTenant === BASE_TENANT_SCHEMA
+
+  if (allowBaseFallback) {
+    const baseUser = await findUserByEmail(email, BASE_TENANT_SCHEMA)
+
+    if (baseUser) {
+      return {
+        user: baseUser,
+        tenantSchema: BASE_TENANT_SCHEMA,
+      }
+    }
+  }
+
   return null
 }
 
@@ -395,6 +408,23 @@ export async function findTenantSchemaByEmail(
 
   if (matches.length === 1) {
     return matches[0]
+  }
+
+  const allowBaseFallback = !normalizedPreferredTenant || normalizedPreferredTenant === BASE_TENANT_SCHEMA
+
+  if (allowBaseFallback) {
+    const usersTable = usersTableForTenant(BASE_TENANT_SCHEMA)
+    const baseResult = await queryWithRetry<{ id: number }>(
+      `SELECT id
+         FROM ${usersTable}
+        WHERE lower(correo) = lower($1)
+        LIMIT 1`,
+      [email],
+    )
+
+    if (baseResult.rowCount > 0) {
+      return BASE_TENANT_SCHEMA
+    }
   }
 
   return null
@@ -616,6 +646,98 @@ export async function createUser({
       )
       ;(err as any).code = (error as any).code
       throw err
+    }
+
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === "23505"
+    ) {
+      throw new UserAlreadyExistsError()
+    }
+
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function createTenantWithAdmin(options: {
+  name: string
+  email: string
+  phone: string
+  password: string
+  planCode?: string | null
+}): Promise<{ tenantId: number; tenantSchema: string; user: AuthUser }> {
+  const tenantName = options.name.trim() || options.email.split("@")[0] || "Nuevo tenant"
+  const normalizedEmail = options.email.trim().toLowerCase()
+  const normalizedPhone = options.phone.trim()
+  const planCode = options.planCode?.trim().toLowerCase() || "base"
+  const hashedPassword = await bcrypt.hash(options.password, 10)
+  const client = await pool.connect()
+
+  try {
+    await client.query("BEGIN")
+    await client.query("SET CONSTRAINTS ALL DEFERRED")
+
+    const seqResult = await client.query<{ seq: string | null }>(
+      "SELECT pg_get_serial_sequence('admin_platform.tenants', 'id') AS seq",
+    )
+    const seqName = seqResult.rows[0]?.seq?.trim()
+
+    if (!seqName) {
+      throw new Error("TENANT_SEQUENCE_NOT_FOUND")
+    }
+
+    const idResult = await client.query<{ id: number }>(
+      "SELECT nextval($1::regclass) AS id",
+      [seqName],
+    )
+    const tenantId = Number(idResult.rows[0]?.id)
+
+    if (!Number.isFinite(tenantId) || tenantId <= 0) {
+      throw new Error("TENANT_ID_NOT_GENERATED")
+    }
+
+    const tenantSchema = `tenant_${tenantId}`
+
+    await client.query(
+      `INSERT INTO admin_platform.tenants
+        (id, nombre, email_contacto, telefono_contacto, passwordhash, esquema, plan_suscripcion)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [tenantId, tenantName, normalizedEmail, normalizedPhone, hashedPassword, tenantSchema, planCode],
+    )
+
+    await client.query(
+      "SELECT admin_platform.crear_tenant($1, $2, $3, $4, $5)",
+      [tenantSchema, tenantName, normalizedEmail, normalizedPhone, hashedPassword],
+    )
+
+    await client.query("COMMIT")
+
+    const createdUser = await findUserByEmail(normalizedEmail, tenantSchema)
+    if (!createdUser) {
+      throw new Error("TENANT_ADMIN_USER_NOT_FOUND")
+    }
+
+    return {
+      tenantId,
+      tenantSchema,
+      user: {
+        id: createdUser.id,
+        email: createdUser.email,
+        role: createdUser.role,
+        lastLogin: createdUser.lastLogin,
+        displayName: createdUser.displayName,
+        tenantSchema,
+      },
+    }
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackError) {
+      console.error("Failed to rollback tenant creation transaction", rollbackError)
     }
 
     if (

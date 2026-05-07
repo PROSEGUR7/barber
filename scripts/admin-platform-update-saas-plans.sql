@@ -12,10 +12,11 @@ CREATE TEMP TABLE tmp_new_saas_plans (
 
 INSERT INTO tmp_new_saas_plans (codigo, nombre, descripcion, precio_mensual, precio_trimestral, precio_anual, moneda)
 VALUES
-  ('fullstack', 'Fullstack', 'Ideal para iniciar con la operación digital de tu salón.', 120000, 360000, 1440000, 'COP'),
-  ('fullstack-sedes', 'Fullstack con sedes', 'Diseñado para negocios con múltiples sedes y operación centralizada.', 160000, 480000, 1920000, 'COP'),
-  ('fullstack-ia', 'Fullstack + IA', 'Escala con automatizaciones avanzadas y flujos de IA.', 180000, 540000, 2160000, 'COP'),
-  ('fullstack-sedes-ia', 'Fullstack con sedes + IA', 'Para equipos con sedes que requieren máxima automatización.', 200000, 600000, 2400000, 'COP');
+  ('independiente', 'Plan Independiente', 'Plan base para barberias que inician con operacion digital.', 59900, 179700, 718800, 'COP'),
+  ('independiente-ia', 'Plan Independiente + Chatbot IA', 'Plan independiente con atencion automatizada via WhatsApp.', 99900, 299700, 1198800, 'COP'),
+  ('comercial-lite', 'Plan Comercial Lite', 'Para equipos con mas personal y multiples sedes.', 99900, 299700, 1198800, 'COP'),
+  ('comercial-lite-ia', 'Plan Comercial Lite + Chatbot IA', 'Automatizacion con IA para equipos con varias sedes.', 149900, 449700, 1798800, 'COP'),
+  ('comercial-pro-ia', 'Plan Comercial Pro + Chatbot IA', 'Operacion avanzada con IA para alto volumen.', 299900, 899700, 3598800, 'COP');
 
 INSERT INTO admin_platform.planes_suscripcion (
   nombre,
@@ -51,7 +52,7 @@ DO UPDATE SET
 WITH fallback_plan AS (
   SELECT id, precio_mensual, precio_trimestral, precio_anual, moneda
   FROM admin_platform.planes_suscripcion
-  WHERE codigo = 'fullstack'
+  WHERE codigo = 'independiente'
   LIMIT 1
 )
 UPDATE admin_platform.suscripciones_tenants s

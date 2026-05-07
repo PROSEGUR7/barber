@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import {
+  createTenantWithAdmin,
   createUser,
   MissingProfileDataError,
   UserAlreadyExistsError,
@@ -111,15 +112,26 @@ export async function POST(request: Request) {
   }
 
   try {
-    const user = await createUser({
-      email,
-      password,
-      role,
-      profile: {
-        name,
-        phone,
-      },
-    })
+    const user =
+      role === "admin"
+        ? (
+            await createTenantWithAdmin({
+              name,
+              email,
+              phone,
+              password,
+              planCode: onboardingPlanId || null,
+            })
+          ).user
+        : await createUser({
+            email,
+            password,
+            role,
+            profile: {
+              name,
+              phone,
+            },
+          })
 
     return NextResponse.json(
       {

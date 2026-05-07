@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Building, Building2, Bot, Sparkles, CircleCheck, TriangleAlert, X } from "lucide-react"
+import { Bot, Building2, CircleCheck, Crown, Sparkles, TriangleAlert, User, X } from "lucide-react"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -47,16 +47,20 @@ type PlanCatalogItem = {
   description: string
   durationLabel: string
   features: string[]
+  introPriceInCop?: number
+  recurringPriceInCop?: number
+  implementationFeeInCop?: number | null
   monthlyPrice: number
   quarterlyPrice: number
   yearlyPrice: number
 }
 
 const ICON_BY_PLAN: Record<SaasPlanId, typeof Building2> = {
-  fullstack: Building2,
-  "fullstack-sedes": Building,
-  "fullstack-ia": Bot,
-  "fullstack-sedes-ia": Sparkles,
+  independiente: User,
+  "independiente-ia": Bot,
+  "comercial-lite": Building2,
+  "comercial-lite-ia": Sparkles,
+  "comercial-pro-ia": Crown,
 }
 
 export default function AdminPlanesScreen() {
@@ -66,9 +70,12 @@ export default function AdminPlanesScreen() {
   const [plans, setPlans] = useState<PlanCatalogItem[]>(
     SAAS_PLANS.map((plan) => ({
       ...plan,
-      monthlyPrice: plan.priceInCop,
-      quarterlyPrice: plan.priceInCop * 3,
-      yearlyPrice: plan.priceInCop * 12,
+      monthlyPrice: plan.recurringPriceInCop ?? plan.priceInCop,
+      quarterlyPrice: (plan.recurringPriceInCop ?? plan.priceInCop) * 3,
+      yearlyPrice: (plan.recurringPriceInCop ?? plan.priceInCop) * 12,
+      introPriceInCop: plan.introPriceInCop ?? plan.priceInCop,
+      recurringPriceInCop: plan.recurringPriceInCop ?? plan.priceInCop,
+      implementationFeeInCop: plan.implementationFeeInCop ?? null,
     })),
   )
   const [selectedPlanId, setSelectedPlanId] = useState<SaasPlanId | null>(null)
@@ -197,23 +204,30 @@ export default function AdminPlanesScreen() {
           .map((plan) => {
             const id = plan.code as SaasPlanId
             const fallback = plansMetaById[id]
+            const resolvedMonthlyPrice =
+              typeof plan.monthlyPrice === "number" && Number.isFinite(plan.monthlyPrice) && plan.monthlyPrice > 0
+                ? Math.round(plan.monthlyPrice)
+                : fallback.priceInCop
+            const resolvedQuarterlyPrice =
+              typeof plan.quarterlyPrice === "number" && Number.isFinite(plan.quarterlyPrice) && plan.quarterlyPrice > 0
+                ? Math.round(plan.quarterlyPrice)
+                : resolvedMonthlyPrice * 3
+            const resolvedYearlyPrice =
+              typeof plan.yearlyPrice === "number" && Number.isFinite(plan.yearlyPrice) && plan.yearlyPrice > 0
+                ? Math.round(plan.yearlyPrice)
+                : resolvedMonthlyPrice * 12
+
             return {
               ...fallback,
               id,
               title: plan.name?.trim() || fallback.title,
               description: plan.description?.trim() || fallback.description,
-              monthlyPrice:
-                typeof plan.monthlyPrice === "number" && Number.isFinite(plan.monthlyPrice) && plan.monthlyPrice > 0
-                  ? Math.round(plan.monthlyPrice)
-                  : fallback.priceInCop,
-              quarterlyPrice:
-                typeof plan.quarterlyPrice === "number" && Number.isFinite(plan.quarterlyPrice) && plan.quarterlyPrice > 0
-                  ? Math.round(plan.quarterlyPrice)
-                  : fallback.priceInCop * 3,
-              yearlyPrice:
-                typeof plan.yearlyPrice === "number" && Number.isFinite(plan.yearlyPrice) && plan.yearlyPrice > 0
-                  ? Math.round(plan.yearlyPrice)
-                  : fallback.priceInCop * 12,
+              monthlyPrice: resolvedMonthlyPrice,
+              quarterlyPrice: resolvedQuarterlyPrice,
+              yearlyPrice: resolvedYearlyPrice,
+              introPriceInCop: fallback.introPriceInCop ?? fallback.priceInCop,
+              recurringPriceInCop: resolvedMonthlyPrice,
+              implementationFeeInCop: fallback.implementationFeeInCop ?? null,
             }
           })
 
@@ -625,7 +639,7 @@ export default function AdminPlanesScreen() {
         <header className="space-y-1.5">
           <h1 className="text-2xl font-bold sm:text-3xl">Planes</h1>
           <p className="text-sm text-muted-foreground sm:text-base">
-            Escoge uno de los 4 planes disponibles para gestionar tu suscripción.
+            Escoge uno de los 5 planes disponibles para gestionar tu suscripción.
           </p>
           {inlineNotice && (
             <Alert variant={inlineNotice.type === "error" ? "destructive" : "default"}>
@@ -739,13 +753,15 @@ export default function AdminPlanesScreen() {
         </section>
 
         {!isSubscriptionStateLoading && (!hasPaidAccess || showPlanCatalog) && (
-          <section className="mx-auto grid max-w-6xl min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="mx-auto grid max-w-7xl min-w-0 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {plans.map((plan) => {
               const Icon = ICON_BY_PLAN[plan.id]
               const isSelected = selectedPlanId === plan.id
               const isCheckingOut = checkoutPlanId === plan.id
               const priceByCycle = getPriceByCycle(plan, selectedBillingCycle)
               const durationLabel = getCycleDurationLabel(selectedBillingCycle)
+              const introPrice = plan.introPriceInCop ?? plan.priceInCop
+              const recurringPrice = plan.recurringPriceInCop ?? plan.priceInCop
 
               return (
                 <Card key={plan.id} className={`relative h-full overflow-hidden group transition-shadow hover:shadow-lg flex flex-col gap-1.5 py-3 ${isSelected ? "border-primary" : ""}`}>
@@ -754,9 +770,19 @@ export default function AdminPlanesScreen() {
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 transition-colors group-hover:bg-primary/20">
                         <Icon className="h-5 w-5 text-primary" />
                       </div>
-                      <div className="flex shrink-0 items-baseline gap-1 text-right">
-                        <span className="whitespace-nowrap text-base font-bold leading-none sm:text-lg lg:text-xl">{formatCop(priceByCycle)}</span>
-                        <span className="whitespace-nowrap text-xs text-muted-foreground">{durationLabel}</span>
+                      <div className="flex shrink-0 flex-col items-end text-right">
+                        <div className="flex items-baseline gap-1">
+                          <span className="whitespace-nowrap text-base font-bold leading-none sm:text-lg lg:text-xl">
+                            {formatCop(priceByCycle)}
+                          </span>
+                          <span className="whitespace-nowrap text-xs text-muted-foreground">{durationLabel}</span>
+                        </div>
+                        <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                          Primer mes: {formatCop(introPrice)}
+                        </span>
+                        <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                          Desde el segundo mes: {formatCop(recurringPrice)} / mes
+                        </span>
                       </div>
                     </div>
                     <CardTitle className="text-lg">{plan.title}</CardTitle>

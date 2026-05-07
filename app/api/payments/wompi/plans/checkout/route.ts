@@ -6,7 +6,13 @@ import { findTenantSchemaByEmail } from "@/lib/auth"
 import { createWompiCheckoutDataForSaasPlan } from "@/lib/wompi"
 
 const checkoutSchema = z.object({
-  planId: z.enum(["fullstack", "fullstack-sedes", "fullstack-ia", "fullstack-sedes-ia"]),
+  planId: z.enum([
+    "independiente",
+    "independiente-ia",
+    "comercial-lite",
+    "comercial-lite-ia",
+    "comercial-pro-ia",
+  ]),
   billingCycle: z.enum(["mensual", "trimestral", "anual"]).optional(),
   tenant: z.string().optional(),
   email: z.string().email().optional(),

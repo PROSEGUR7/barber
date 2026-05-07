@@ -106,10 +106,11 @@ export type WompiCheckoutData = {
 }
 
 const PLAN_CODE_TO_REFERENCE_TOKEN: Record<string, string> = {
-  fullstack: "fs",
-  "fullstack-sedes": "fss",
-  "fullstack-ia": "fsi",
-  "fullstack-sedes-ia": "fssi",
+  independiente: "ind",
+  "independiente-ia": "indi",
+  "comercial-lite": "cl",
+  "comercial-lite-ia": "clia",
+  "comercial-pro-ia": "cpia",
 }
 
 const REFERENCE_TOKEN_TO_PLAN_CODE: Record<string, string> = Object.entries(PLAN_CODE_TO_REFERENCE_TOKEN).reduce(
