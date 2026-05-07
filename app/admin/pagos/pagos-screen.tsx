@@ -67,7 +67,7 @@ type ClientsResponse = {
   error?: string
 }
 
-type PaymentMethodOption = "cash" | "gift_card" | "wompi"
+type PaymentMethodOption = "all" | "cash" | "gift_card" | "wompi"
 
 const METHOD_OPTIONS: Array<{
   value: PaymentMethodOption
@@ -76,6 +76,12 @@ const METHOD_OPTIONS: Array<{
   icon: typeof BadgeDollarSign
   disabled?: boolean
 }> = [
+  {
+    value: "all",
+    label: "Todos",
+    description: "Ver todos los pagos",
+    icon: BadgeDollarSign,
+  },
   {
     value: "cash",
     label: "Efectivo",
@@ -147,7 +153,10 @@ export default function AdminPagosPage() {
   const [arePaymentsLoading, setArePaymentsLoading] = useState(true)
   const [paymentsError, setPaymentsError] = useState<string | null>(null)
   const [tenantSchema, setTenantSchema] = useState<string | null>(null)
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodOption>("wompi")
+  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodOption>("all")
+  const [selectedTenant, setSelectedTenant] = useState<string>("all")
+  const [fromDate, setFromDate] = useState("")
+  const [toDate, setToDate] = useState("")
   const [giftCards, setGiftCards] = useState<GiftCardSummary[]>([])
   const [giftCardMovements, setGiftCardMovements] = useState<GiftCardMovement[]>([])
   const [clients, setClients] = useState<ClientOption[]>([])
@@ -413,6 +422,13 @@ export default function AdminPagosPage() {
 
   const visiblePayments = useMemo(() => {
     return payments.filter((payment) => {
+      if (selectedTenant !== "all") {
+        const tenantMatches = payment.tenantSchema === selectedTenant || payment.tenantName === selectedTenant
+        if (!tenantMatches) {
+          return false
+        }
+      }
+
       const normalizedMethod = (payment.paymentMethod ?? payment.paymentProvider ?? "").trim().toLowerCase()
 
       if (selectedMethod === "cash") {
@@ -420,12 +436,47 @@ export default function AdminPagosPage() {
       }
 
       if (selectedMethod === "gift_card") {
+        if (!normalizedMethod.includes("gift")) {
+          return false
+        }
+      }
+
+      if (selectedMethod === "wompi" && !(normalizedMethod.includes("wompi") || normalizedMethod.length === 0)) {
         return false
       }
 
-      return normalizedMethod.includes("wompi") || normalizedMethod.length === 0
+      const paymentDate = payment.paidAt ?? payment.createdAt
+      if (fromDate || toDate) {
+        if (!paymentDate) {
+          return false
+        }
+
+        const paymentDay = paymentDate.slice(0, 10)
+        if (fromDate && paymentDay < fromDate) {
+          return false
+        }
+        if (toDate && paymentDay > toDate) {
+          return false
+        }
+      }
+
+      return true
     })
-  }, [payments, selectedMethod])
+  }, [fromDate, payments, selectedMethod, selectedTenant, toDate])
+
+  const tenantOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const payment of payments) {
+      const key = payment.tenantSchema ?? payment.tenantName
+      if (!map.has(key)) {
+        map.set(key, payment.tenantName)
+      }
+    }
+
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "es", { sensitivity: "base" }))
+  }, [payments])
 
   const metrics = useMemo(() => {
     const totals = {
@@ -452,6 +503,8 @@ export default function AdminPagosPage() {
 
   const shouldShowErrorCard = Boolean(paymentsError) && !arePaymentsLoading && payments.length === 0
   const isGiftCardView = selectedMethod === "gift_card"
+  const hasActiveFilters =
+    selectedMethod !== "all" || selectedTenant !== "all" || fromDate.length > 0 || toDate.length > 0
 
   const handleReload = useCallback(() => {
     void loadPayments()
@@ -468,11 +521,59 @@ export default function AdminPagosPage() {
           <CompactMetricCard title="Monto total registrado" value={formatCurrency(metrics.totalAmount)} className="col-span-2 xl:col-span-1" />
         </section>
 
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle>Filtros</CardTitle>
+            <CardDescription>Segmenta los movimientos por método, sede/tenant y rango de fechas.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="space-y-1">
+              <Label>Desde</Label>
+              <Input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Hasta</Label>
+              <Input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Sede / tenant</Label>
+              <Select value={selectedTenant} onValueChange={setSelectedTenant}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Todas" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas</SelectItem>
+                  {tenantOptions.map((tenant) => (
+                    <SelectItem key={tenant.value} value={tenant.value}>
+                      {tenant.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Método</Label>
+              <Select value={selectedMethod} onValueChange={(value) => setSelectedMethod(value as PaymentMethodOption)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Todos" />
+                </SelectTrigger>
+                <SelectContent>
+                  {METHOD_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
         <section className="space-y-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1">
               <h2 className="text-2xl font-semibold">Movimientos de pagos</h2>
-              <p className="text-muted-foreground">Consulta cobros de suscripción por plan, estado y referencia.</p>
+              <p className="text-muted-foreground">Consulta cobros por cita, estado y referencia.</p>
             </div>
           </div>
 
@@ -484,6 +585,9 @@ export default function AdminPagosPage() {
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {METHOD_OPTIONS.map((option) => {
+                  if (option.value === "all") {
+                    return null
+                  }
                   const Icon = option.icon
                   const isSelected = selectedMethod === option.value
 
@@ -721,13 +825,17 @@ export default function AdminPagosPage() {
                   <EmptyMedia variant="icon">
                     <Receipt className="h-6 w-6" />
                   </EmptyMedia>
-                  <EmptyTitle>Sin movimientos de pago</EmptyTitle>
+                  <EmptyTitle>{hasActiveFilters ? "Sin resultados para los filtros" : "Sin movimientos de pago"}</EmptyTitle>
                   <EmptyDescription>
-                    No encontramos pagos para el método seleccionado.
+                    {hasActiveFilters
+                      ? "No encontramos pagos con esa combinación de sede, método o fechas. Ajusta los filtros o vuelve a 'Todos'."
+                      : "No encontramos pagos registrados todavía."}
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent className="text-sm text-muted-foreground">
-                  Cambia de método o registra pagos de suscripción desde el flujo de planes.
+                  {hasActiveFilters
+                    ? "Prueba ampliando el rango de fechas o quitando la sede seleccionada."
+                    : "Registra pagos desde el flujo correspondiente o revisa si el tenant tiene movimientos disponibles."}
                 </EmptyContent>
               </Empty>
             </CardContent>

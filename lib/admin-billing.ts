@@ -1021,7 +1021,7 @@ export async function getTenantBillingPayments(options?: {
   const limit =
     typeof options?.limit === "number" && Number.isFinite(options.limit)
       ? Math.min(Math.max(Math.trunc(options.limit), 1), 1000)
-      : 300
+      : 1000
 
   parameters.push(limit)
   const limitPlaceholder = `$${parameters.length}`

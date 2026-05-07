@@ -27,6 +27,9 @@ const updateEmployeeSchema = z.object({
     .max(20)
     .regex(/^[0-9+\-\s]+$/),
   serviceIds: z.array(z.coerce.number().int().positive()).optional(),
+  compensationType: z.enum(["porcentaje", "fijo"]).nullable().optional(),
+  commissionRate: z.number().min(0).max(100).nullable().optional(),
+  fixedSalary: z.number().min(0).nullable().optional(),
 })
 
 function jsonError(status: number, payload: { error: string; code?: string }) {
@@ -84,6 +87,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ emplo
       phone: parsedBody.data.phone,
       sedeId: parsedBody.data.sedeId,
       serviceIds: parsedBody.data.serviceIds,
+      compensationType: parsedBody.data.compensationType ?? undefined,
+      commissionRate: parsedBody.data.commissionRate ?? undefined,
+      fixedSalary: parsedBody.data.fixedSalary ?? undefined,
       tenantSchema,
     })
 

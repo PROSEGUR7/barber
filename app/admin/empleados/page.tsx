@@ -113,6 +113,9 @@ export default function AdminEmployeesPage() {
   const [editEmail, setEditEmail] = useState("")
   const [editPhone, setEditPhone] = useState("")
   const [editSedeId, setEditSedeId] = useState("")
+  const [editCompensationType, setEditCompensationType] = useState<"porcentaje" | "fijo">("porcentaje")
+  const [editCommissionRate, setEditCommissionRate] = useState("")
+  const [editFixedSalary, setEditFixedSalary] = useState("")
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([])
   const [editError, setEditError] = useState<string | null>(null)
   const [isEditSubmitting, setIsEditSubmitting] = useState(false)
@@ -278,6 +281,9 @@ export default function AdminEmployeesPage() {
       setEditEmail("")
       setEditPhone("")
       setEditSedeId("")
+      setEditCompensationType("porcentaje")
+      setEditCommissionRate("")
+      setEditFixedSalary("")
       setSelectedServiceIds([])
       setEditError(null)
       setIsEditSubmitting(false)
@@ -290,6 +296,8 @@ export default function AdminEmployeesPage() {
       totalAppointments: 0,
       upcomingAppointments: 0,
       completedAppointments: 0,
+      percentageEmployees: 0,
+      fixedSalaryEmployees: 0,
     }
 
     for (const employee of employees) {
@@ -297,6 +305,12 @@ export default function AdminEmployeesPage() {
       totals.totalAppointments += employee.totalAppointments
       totals.upcomingAppointments += employee.upcomingAppointments
       totals.completedAppointments += employee.completedAppointments
+      if (employee.compensationType === "porcentaje") {
+        totals.percentageEmployees += 1
+      }
+      if (employee.compensationType === "fijo") {
+        totals.fixedSalaryEmployees += 1
+      }
     }
 
     return totals
@@ -428,6 +442,9 @@ export default function AdminEmployeesPage() {
     setEditEmail(employee.email)
     setEditPhone(employee.phone ?? "")
     setEditSedeId(employee.sedeId != null ? String(employee.sedeId) : "")
+    setEditCompensationType(employee.compensationType ?? "porcentaje")
+    setEditCommissionRate(employee.commissionRate != null ? String(employee.commissionRate) : "")
+    setEditFixedSalary(employee.fixedSalary != null ? String(employee.fixedSalary) : "")
     setSelectedServiceIds(employee.serviceIds)
     setEditError(null)
     setIsEditOpen(true)
@@ -504,6 +521,19 @@ export default function AdminEmployeesPage() {
       return
     }
 
+    const parsedCommissionRate = Number(editCommissionRate)
+    const parsedFixedSalary = Number(editFixedSalary)
+
+    if (editCompensationType === "porcentaje" && (!Number.isFinite(parsedCommissionRate) || parsedCommissionRate < 0 || parsedCommissionRate > 100)) {
+      setEditError("Ingresa un porcentaje de comisión válido entre 0 y 100.")
+      return
+    }
+
+    if (editCompensationType === "fijo" && (!Number.isFinite(parsedFixedSalary) || parsedFixedSalary < 0)) {
+      setEditError("Ingresa un sueldo fijo válido.")
+      return
+    }
+
     setIsEditSubmitting(true)
 
     try {
@@ -519,6 +549,9 @@ export default function AdminEmployeesPage() {
           phone: sanitizedPhone,
           ...(hasEditSedeSelection ? { sedeId: parsedEditSedeId } : {}),
           serviceIds: selectedServiceIds,
+          compensationType: editCompensationType,
+          commissionRate: editCompensationType === "porcentaje" ? parsedCommissionRate : null,
+          fixedSalary: editCompensationType === "fijo" ? parsedFixedSalary : null,
         }),
       })
 
@@ -831,6 +864,60 @@ export default function AdminEmployeesPage() {
                         </FieldDescription>
                       </Field>
                       <Field>
+                        <FieldLabel>Tipo de compensación</FieldLabel>
+                        <Select
+                          value={editCompensationType}
+                          onValueChange={(value) => {
+                            setEditCompensationType(value as "porcentaje" | "fijo")
+                            setEditError(null)
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona un tipo" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="porcentaje">Porcentaje de comisión</SelectItem>
+                            <SelectItem value="fijo">Sueldo fijo</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      {editCompensationType === "porcentaje" ? (
+                        <Field>
+                          <FieldLabel htmlFor="edit-employee-commission-rate">Porcentaje de comisión</FieldLabel>
+                          <Input
+                            id="edit-employee-commission-rate"
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="0.01"
+                            value={editCommissionRate}
+                            onChange={(event) => {
+                              setEditCommissionRate(event.target.value)
+                              setEditError(null)
+                            }}
+                            placeholder="Ej. 35"
+                          />
+                          <FieldDescription>Se aplicará a las ventas que genere este empleado.</FieldDescription>
+                        </Field>
+                      ) : (
+                        <Field>
+                          <FieldLabel htmlFor="edit-employee-fixed-salary">Sueldo fijo</FieldLabel>
+                          <Input
+                            id="edit-employee-fixed-salary"
+                            type="number"
+                            min={0}
+                            step="1000"
+                            value={editFixedSalary}
+                            onChange={(event) => {
+                              setEditFixedSalary(event.target.value)
+                              setEditError(null)
+                            }}
+                            placeholder="Ej. 1500000"
+                          />
+                          <FieldDescription>Define el pago fijo mensual para este empleado.</FieldDescription>
+                        </Field>
+                      )}
+                      <Field>
                         <FieldLabel>Servicios asignados</FieldLabel>
                         {!areServicesLoading && servicesCatalog.length > 0 && (
                           <div className="mb-2 flex items-center gap-2">
@@ -925,6 +1012,19 @@ export default function AdminEmployeesPage() {
                         </CardHeader>
                       </Card>
                     </div>
+
+                    <Card>
+                      <CardHeader className="space-y-1">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Compensación</CardTitle>
+                        <CardDescription className="text-base font-semibold text-foreground">
+                          {profileEmployee?.compensationType === "fijo"
+                            ? `Sueldo fijo ${formatCurrency(profileEmployee?.fixedSalary ?? 0)}`
+                            : profileEmployee?.compensationType === "porcentaje"
+                              ? `${profileEmployee?.commissionRate ?? 0}% de comisión`
+                              : "Sin configuración"}
+                        </CardDescription>
+                      </CardHeader>
+                    </Card>
                   </div>
                   <SheetFooter className="border-t px-6 py-4">
                     <Button

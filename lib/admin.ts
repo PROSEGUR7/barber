@@ -12,6 +12,9 @@ export type EmployeeSummary = {
   sedeName: string | null
   status: string | null
   joinedAt: string | null
+  compensationType: "porcentaje" | "fijo" | null
+  commissionRate: number | null
+  fixedSalary: number | null
   totalAppointments: number
   upcomingAppointments: number
   completedAppointments: number
@@ -292,6 +295,9 @@ type EmployeeSummaryRow = {
   sede_nombre: string | null
   estado: string | null
   fecha_ingreso: Date | null
+  tipo_compensacion: string | null
+  porcentaje_comision: string | number | null
+  sueldo_fijo: string | number | null
   total_appointments: string | null
   active_appointments: string | null
   completed_appointments: string | null
@@ -311,6 +317,9 @@ type EmployeeBasicRow = {
   sede_nombre: string | null
   estado: string | null
   fecha_ingreso: Date | null
+  tipo_compensacion: string | null
+  porcentaje_comision: string | number | null
+  sueldo_fijo: string | number | null
 }
 
 type EmployeeLegacyBasicRow = {
@@ -321,6 +330,9 @@ type EmployeeLegacyBasicRow = {
   telefono: string | null
   sede_id: number | null
   sede_nombre: string | null
+  tipo_compensacion: string | null
+  porcentaje_comision: string | number | null
+  sueldo_fijo: string | number | null
 }
 
 type ClientSummaryRow = {
@@ -600,6 +612,9 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
     sedeName: row.sede_nombre,
     status: row.estado,
     joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
+    compensationType: normalizeCompensationType(row.tipo_compensacion),
+    commissionRate: parseNullableNumber(row.porcentaje_comision),
+    fixedSalary: parseNullableNumber(row.sueldo_fijo),
     totalAppointments,
     upcomingAppointments,
     completedAppointments,
@@ -609,6 +624,33 @@ function mapEmployeeRow(row: EmployeeSummaryRow): EmployeeSummary {
     services,
     rating: null,
   }
+}
+
+function parseNullableNumber(value: string | number | null | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim()
+    if (!normalized) {
+      return null
+    }
+
+    const parsed = Number(normalized)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  return null
+}
+
+function normalizeCompensationType(value: string | null | undefined): "porcentaje" | "fijo" | null {
+  const normalized = (value ?? "").trim().toLowerCase()
+  if (normalized === "porcentaje" || normalized === "fijo") {
+    return normalized
+  }
+
+  return null
 }
 
 function mapClientRow(row: ClientSummaryRow): ClientSummary {
@@ -686,6 +728,7 @@ function mapServiceRow(row: ServiceSummaryRow): ServiceSummary {
 
 const ensuredServiceCatalogSchemas = new Set<string>()
 const serviceSedeCapabilitiesCache = new Map<string, ServiceSedeCapabilities>()
+const ensuredEmployeeCompensationSchemas = new Set<string>()
 
 type ServiceSedeCapabilities = {
   hasSedesTable: boolean
@@ -697,6 +740,81 @@ type ServiceSedeCapabilitiesRow = {
   has_sedes_table: boolean | string
   has_sedes_servicios_table: boolean | string
   has_servicios_sede_column: boolean | string
+}
+
+async function ensureEmployeeCompensationColumns(tenantSchema?: string | null): Promise<void> {
+  const schemaKey = normalizeTenantSchema(tenantSchema) ?? BASE_TENANT_SCHEMA
+  const cacheKey = schemaKey.toLowerCase()
+
+  if (ensuredEmployeeCompensationSchemas.has(cacheKey)) {
+    return
+  }
+
+  const result = await pool.query<{
+    has_tipo_compensacion: boolean | string
+    has_porcentaje_comision: boolean | string
+    has_sueldo_fijo: boolean | string
+  }>(
+    `SELECT
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'empleados'
+           AND column_name = 'tipo_compensacion'
+      ) AS has_tipo_compensacion,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'empleados'
+           AND column_name = 'porcentaje_comision'
+      ) AS has_porcentaje_comision,
+      EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = 'empleados'
+           AND column_name = 'sueldo_fijo'
+      ) AS has_sueldo_fijo`,
+    [schemaKey],
+  )
+
+  const hasTipoCompensacion = toBooleanFlag(result.rows[0]?.has_tipo_compensacion)
+  const hasPorcentajeComision = toBooleanFlag(result.rows[0]?.has_porcentaje_comision)
+  const hasSueldoFijo = toBooleanFlag(result.rows[0]?.has_sueldo_fijo)
+
+  if (!hasTipoCompensacion) {
+    await pool.query(
+      tenantSql(
+        `ALTER TABLE tenant_base.empleados
+           ADD COLUMN IF NOT EXISTS tipo_compensacion VARCHAR(20) NOT NULL DEFAULT 'porcentaje'`,
+        tenantSchema,
+      ),
+    )
+  }
+
+  if (!hasPorcentajeComision) {
+    await pool.query(
+      tenantSql(
+        `ALTER TABLE tenant_base.empleados
+           ADD COLUMN IF NOT EXISTS porcentaje_comision NUMERIC(5,2) NULL`,
+        tenantSchema,
+      ),
+    )
+  }
+
+  if (!hasSueldoFijo) {
+    await pool.query(
+      tenantSql(
+        `ALTER TABLE tenant_base.empleados
+           ADD COLUMN IF NOT EXISTS sueldo_fijo NUMERIC(12,2) NULL`,
+        tenantSchema,
+      ),
+    )
+  }
+
+  ensuredEmployeeCompensationSchemas.add(cacheKey)
 }
 
 type ServiceSedeAssignmentRow = {
@@ -1344,6 +1462,8 @@ export async function getEmployeesWithStats(filter?: {
   userId?: number
   tenantSchema?: string | null
 }): Promise<EmployeeSummary[]> {
+  await ensureEmployeeCompensationColumns(filter?.tenantSchema)
+
   const conditions: string[] = []
   const parameters: (number)[] = []
 
@@ -1369,6 +1489,9 @@ export async function getEmployeesWithStats(filter?: {
       sd.nombre AS sede_nombre,
       e.estado,
       e.fecha_ingreso,
+      e.tipo_compensacion,
+      e.porcentaje_comision,
+      e.sueldo_fijo,
       u.correo,
       COALESCE(appointments.total_appointments, 0)::text AS total_appointments,
       COALESCE(appointments.active_appointments, 0)::text AS active_appointments,
@@ -1447,6 +1570,9 @@ export async function getEmployeesWithStats(filter?: {
         NULL::text AS sede_nombre,
         e.estado,
         e.fecha_ingreso,
+        NULL::text AS tipo_compensacion,
+        NULL::numeric AS porcentaje_comision,
+        NULL::numeric AS sueldo_fijo,
         u.correo
       FROM tenant_base.empleados e
       INNER JOIN tenant_base.users u ON u.id = e.user_id
@@ -1466,6 +1592,9 @@ export async function getEmployeesWithStats(filter?: {
         sedeName: row.sede_nombre,
         status: row.estado,
         joinedAt: row.fecha_ingreso ? row.fecha_ingreso.toISOString() : null,
+        compensationType: normalizeCompensationType(row.tipo_compensacion),
+        commissionRate: parseNullableNumber(row.porcentaje_comision),
+        fixedSalary: parseNullableNumber(row.sueldo_fijo),
         totalAppointments: 0,
         upcomingAppointments: 0,
         completedAppointments: 0,
@@ -1486,6 +1615,9 @@ export async function getEmployeesWithStats(filter?: {
           e.telefono,
           NULL::int AS sede_id,
           NULL::text AS sede_nombre,
+          NULL::text AS tipo_compensacion,
+          NULL::numeric AS porcentaje_comision,
+          NULL::numeric AS sueldo_fijo,
           u.correo
         FROM tenant_base.empleados e
         INNER JOIN tenant_base.users u ON u.id = e.user_id
@@ -1508,6 +1640,9 @@ export async function getEmployeesWithStats(filter?: {
         sedeName: row.sede_nombre,
         status: null,
         joinedAt: null,
+        compensationType: normalizeCompensationType(row.tipo_compensacion),
+        commissionRate: parseNullableNumber(row.porcentaje_comision),
+        fixedSalary: parseNullableNumber(row.sueldo_fijo),
         totalAppointments: 0,
         upcomingAppointments: 0,
         completedAppointments: 0,
@@ -1573,6 +1708,9 @@ export async function updateEmployee(input: {
   phone: string
   sedeId?: number | null
   serviceIds?: number[]
+  compensationType?: "porcentaje" | "fijo" | null
+  commissionRate?: number | null
+  fixedSalary?: number | null
   tenantSchema?: string | null
 }): Promise<EmployeeSummary> {
   const client = await pool.connect()
@@ -1580,6 +1718,8 @@ export async function updateEmployee(input: {
 
   try {
     await client.query("BEGIN")
+
+    await ensureEmployeeCompensationColumns(resolvedTenantSchema)
 
     const hasSedeColumnResult = await client.query<{ has_column: boolean }>(
       `SELECT EXISTS (
@@ -1607,24 +1747,54 @@ export async function updateEmployee(input: {
       }
     }
 
-    const employeeResult = hasSedeColumn && hasSedeInput
-      ? await client.query<{ user_id: number }>(
-          tenantSql(`UPDATE tenant_base.empleados
-              SET nombre = $2,
-                  telefono = $3,
-                  sede_id = $4
-            WHERE id = $1
-            RETURNING user_id`, input.tenantSchema),
-          [input.employeeId, input.name, input.phone, normalizedSedeId],
-        )
-      : await client.query<{ user_id: number }>(
-          tenantSql(`UPDATE tenant_base.empleados
-              SET nombre = $2,
-                  telefono = $3
-            WHERE id = $1
-            RETURNING user_id`, input.tenantSchema),
-          [input.employeeId, input.name, input.phone],
-        )
+    const hasCompensationTypeInput = input.compensationType !== undefined
+    const hasCommissionRateInput = input.commissionRate !== undefined
+    const hasFixedSalaryInput = input.fixedSalary !== undefined
+
+    const updateFragments = [
+      "nombre = $2",
+      "telefono = $3",
+    ]
+    const updateParameters: Array<number | string | null> = [input.employeeId, input.name, input.phone]
+
+    if (hasSedeColumn && hasSedeInput) {
+      updateFragments.push(`sede_id = $${updateParameters.length + 1}`)
+      updateParameters.push(normalizedSedeId)
+    }
+
+    if (hasCompensationTypeInput) {
+      updateFragments.push(`tipo_compensacion = $${updateParameters.length + 1}`)
+      updateParameters.push(normalizeCompensationType(input.compensationType) ?? "porcentaje")
+    }
+
+    if (hasCommissionRateInput) {
+      updateFragments.push(`porcentaje_comision = $${updateParameters.length + 1}`)
+      updateParameters.push(
+        typeof input.commissionRate === "number" && Number.isFinite(input.commissionRate)
+          ? Math.max(0, Math.min(100, Number(input.commissionRate)))
+          : null,
+      )
+    }
+
+    if (hasFixedSalaryInput) {
+      updateFragments.push(`sueldo_fijo = $${updateParameters.length + 1}`)
+      updateParameters.push(
+        typeof input.fixedSalary === "number" && Number.isFinite(input.fixedSalary)
+          ? Math.max(0, Number(input.fixedSalary))
+          : null,
+      )
+    }
+
+    const employeeResult = await client.query<{ user_id: number }>(
+      tenantSql(
+        `UPDATE tenant_base.empleados
+            SET ${updateFragments.join(",\n                ")}
+          WHERE id = $1
+          RETURNING user_id`,
+        input.tenantSchema,
+      ),
+      updateParameters,
+    )
 
     if (employeeResult.rowCount === 0) {
       throw new EmployeeRecordNotFoundError()

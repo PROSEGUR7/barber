@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { generatePasskeyRegistrationOptions } from "@/lib/webauthn"
+import { resolveTenantHintFromRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -8,6 +9,7 @@ type Body = {
   userId?: unknown
   rpIdHint?: unknown
   originHint?: unknown
+  tenantSchema?: unknown
 }
 
 function jsonError(
@@ -43,13 +45,16 @@ export async function POST(request: Request) {
 
   const rpIdHint = typeof body.rpIdHint === "string" ? body.rpIdHint : null
   const originHint = typeof body.originHint === "string" ? body.originHint.trim() : ""
+  const tenantSchema = typeof body.tenantSchema === "string" ? body.tenantSchema.trim() : null
   const requestOrigin = request.headers.get("origin") ?? (originHint || null)
 
   try {
+    const resolvedTenantSchema = tenantSchema || resolveTenantHintFromRequest(request)
+
     const options = await generatePasskeyRegistrationOptions(userId, {
       requestOrigin,
       rpIdHint,
-    })
+    }, resolvedTenantSchema)
 
     return NextResponse.json({ ok: true, options }, { status: 200 })
   } catch (error) {

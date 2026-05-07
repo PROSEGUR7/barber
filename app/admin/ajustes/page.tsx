@@ -1,6 +1,7 @@
 "use client"
 
 import { type ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { startRegistration } from "@simplewebauthn/browser"
 import { Camera, Plus, Trash2, Upload } from "lucide-react"
 import { useTheme } from "next-themes"
 
@@ -10,6 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -72,6 +74,14 @@ type Preferences = {
   notifySms: boolean
 }
 
+type PasskeySummary = {
+  credentialId: string
+  counter: number
+  transports: string[] | null
+  createdAt: string
+  updatedAt: string
+}
+
 const EMPTY_SUMMARY: AdminSettingsSummary = {
   totalAdminUsers: 0,
   totalEmployees: 0,
@@ -131,6 +141,7 @@ export default function AdminAjustesPage() {
 
   const [isProfileLoading, setIsProfileLoading] = useState(true)
   const [profileError, setProfileError] = useState<string | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null)
   const [currentEmail, setCurrentEmail] = useState("")
   const [role, setRole] = useState<ProfileRole>("admin")
   const [lastLogin, setLastLogin] = useState<string | null>(null)
@@ -139,6 +150,17 @@ export default function AdminAjustesPage() {
   const [phone, setPhone] = useState("")
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
+  const [passkeys, setPasskeys] = useState<PasskeySummary[]>([])
+  const [isLoadingPasskeys, setIsLoadingPasskeys] = useState(false)
+  const [passkeysError, setPasskeysError] = useState<string | null>(null)
+  const [pendingDeletePasskeyId, setPendingDeletePasskeyId] = useState<string | null>(null)
+  const [isPreparingPasskey, setIsPreparingPasskey] = useState(false)
+  const [passkeyRegistrationOptions, setPasskeyRegistrationOptions] = useState<{
+    optionsJSON: Parameters<typeof startRegistration>[0]["optionsJSON"]
+    rpIdHint: string | null
+    originHint: string | null
+    tenantSchema: string | null
+  } | null>(null)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingPreferences, setIsSavingPreferences] = useState(false)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
@@ -189,10 +211,89 @@ export default function AdminAjustesPage() {
     window.dispatchEvent(new Event("user-profile-updated"))
   }, [])
 
+  const loadPasskeys = useCallback(async (targetEmail: string) => {
+    const normalizedEmail = targetEmail.trim().toLowerCase()
+
+    if (!normalizedEmail) {
+      setPasskeys([])
+      return
+    }
+
+    setIsLoadingPasskeys(true)
+    setPasskeysError(null)
+
+    try {
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+      const query = new URLSearchParams({ email: normalizedEmail })
+
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+
+      const response = await fetch(`/api/profile/passkeys?${query.toString()}`, {
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { passkeys?: PasskeySummary[]; error?: string }
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudieron cargar tus llaves de acceso")
+      }
+
+      setPasskeys(Array.isArray(data.passkeys) ? data.passkeys : [])
+    } catch (error) {
+      console.error("Error loading passkeys", error)
+      setPasskeys([])
+      setPasskeysError("No se pudieron cargar tus llaves de acceso.")
+    } finally {
+      setIsLoadingPasskeys(false)
+    }
+  }, [])
+
+  const loadPasskeyRegistrationOptions = useCallback(async (userId: number, targetEmail: string) => {
+    const normalizedEmail = targetEmail.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setPasskeyRegistrationOptions(null)
+      return
+    }
+
+    try {
+      const { rpIdHint, originHint } = getWebAuthnHints()
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+
+      const response = await fetch("/api/webauthn/register/options", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({ userId, rpIdHint, originHint, tenantSchema }),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { options?: unknown; error?: string }
+      if (!response.ok || !data.options) {
+        setPasskeyRegistrationOptions(null)
+        return
+      }
+
+      setPasskeyRegistrationOptions({
+        optionsJSON: data.options as Parameters<typeof startRegistration>[0]["optionsJSON"],
+        rpIdHint,
+        originHint,
+        tenantSchema,
+      })
+    } catch (error) {
+      console.error("Error preloading passkey registration options", error)
+      setPasskeyRegistrationOptions(null)
+    }
+  }, [])
+
   const loadProfileSettings = useCallback(async () => {
     setIsProfileLoading(true)
     setProfileError(null)
     setProfileFeedback(null)
+    setPasskeysError(null)
 
     try {
       const storedEmail = typeof window !== "undefined" ? localStorage.getItem("userEmail")?.trim() ?? "" : ""
@@ -257,6 +358,7 @@ export default function AdminAjustesPage() {
       }
 
       const profile = data.profile
+      setCurrentUserId(profile.id)
       setCurrentEmail(profile.email)
       setRole(profile.role)
       setLastLogin(profile.lastLogin)
@@ -266,6 +368,7 @@ export default function AdminAjustesPage() {
       setAvatarUrl(profile.avatarUrl ?? null)
 
       syncSidebarUserInfo(profile.name, profile.email, profile.avatarUrl ?? null)
+      void loadPasskeys(profile.email)
 
       const rawPreferences = localStorage.getItem(getPreferencesKey(profile.email))
 
@@ -289,7 +392,7 @@ export default function AdminAjustesPage() {
     } finally {
       setIsProfileLoading(false)
     }
-  }, [syncSidebarUserInfo])
+  }, [loadPasskeyRegistrationOptions, loadPasskeys, syncSidebarUserInfo])
 
   const loadSettings = useCallback(
     async (signal?: AbortSignal) => {
@@ -623,6 +726,122 @@ export default function AdminAjustesPage() {
     }
   }
 
+  const getWebAuthnHints = () => {
+    if (typeof window === "undefined") {
+      return {
+        rpIdHint: null as string | null,
+        originHint: null as string | null,
+      }
+    }
+
+    return {
+      rpIdHint: window.location.hostname,
+      originHint: window.location.origin,
+    }
+  }
+
+  const handleAddPasskey = async () => {
+    if (!currentUserId || !currentEmail) {
+      setProfileFeedback({ type: "error", message: "No encontramos tu usuario para registrar la llave." })
+      return
+    }
+
+    setProfileFeedback(null)
+    setIsPreparingPasskey(true)
+
+    try {
+      if (!passkeyRegistrationOptions) {
+        await loadPasskeyRegistrationOptions(currentUserId, currentEmail)
+      }
+
+      const options = passkeyRegistrationOptions
+      if (!options) {
+        setProfileFeedback({ type: "error", message: "No se pudo preparar la llave. Intenta otra vez." })
+        return
+      }
+
+      const credential = await startRegistration({ optionsJSON: options.optionsJSON })
+
+      const verifyResponse = await fetch("/api/webauthn/register/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          userId: currentUserId,
+          credential,
+          rpIdHint: options.rpIdHint,
+          originHint: options.originHint,
+          tenantSchema: options.tenantSchema,
+        }),
+      })
+
+      const verifyData = (await verifyResponse.json().catch(() => ({}))) as { error?: string }
+      if (!verifyResponse.ok) {
+        setProfileFeedback({ type: "error", message: verifyData.error ?? "No se pudo registrar la llave." })
+        return
+      }
+
+      setProfileFeedback({ type: "success", message: "Llave de acceso agregada correctamente." })
+      await loadPasskeys(currentEmail)
+      setPasskeyRegistrationOptions(null)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        setProfileFeedback({ type: "info", message: "El registro de la llave fue cancelado." })
+        return
+      }
+
+      if (error instanceof DOMException && error.name === "InvalidStateError") {
+        setProfileFeedback({
+          type: "warning",
+          message:
+            "Este dispositivo ya tiene registrada esa llave. Elimínala del gestor de llaves de tu dispositivo (Windows Hello, Touch ID, Face ID, etc.) antes de registrarla nuevamente.",
+        })
+        return
+      }
+
+      console.error("Error adding passkey", error)
+      setProfileFeedback({ type: "error", message: "No fue posible registrar la llave de acceso." })
+    } finally {
+      setIsPreparingPasskey(false)
+    }
+  }
+
+  const handleConfirmDeletePasskey = async () => {
+    if (!pendingDeletePasskeyId || !currentEmail) {
+      setPendingDeletePasskeyId(null)
+      return
+    }
+
+    try {
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+      const response = await fetch("/api/profile/passkeys", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({ email: currentEmail, credentialId: pendingDeletePasskeyId, tenantSchema }),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      if (!response.ok) {
+        setProfileFeedback({ type: "error", message: data.error ?? "No se pudo eliminar la llave." })
+        return
+      }
+
+      setPasskeys((previous) => previous.filter((passkey) => passkey.credentialId !== pendingDeletePasskeyId))
+      setPasskeyRegistrationOptions(null)
+      setProfileFeedback({ type: "success", message: "Llave de acceso eliminada." })
+    } catch (error) {
+      console.error("Error deleting passkey", error)
+      setProfileFeedback({ type: "error", message: "No fue posible eliminar la llave de acceso." })
+    } finally {
+      setPendingDeletePasskeyId(null)
+    }
+  }
+
   const handlePreferencesSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setProfileFeedback(null)
@@ -875,6 +1094,48 @@ export default function AdminAjustesPage() {
                           <Trash2 className="mr-2 h-4 w-4" />
                           {isRemovingAvatar ? "Eliminando..." : "Quitar"}
                         </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-medium">Llaves de acceso</p>
+                          <p className="text-xs text-muted-foreground">Agrega o elimina las llaves registradas para esta cuenta.</p>
+                        </div>
+                        <Button type="button" variant="outline" disabled={isPreparingPasskey} onClick={() => void handleAddPasskey()}>
+                          <Plus className="mr-2 h-4 w-4" />
+                          {isPreparingPasskey ? "Registrando..." : "Agregar llave"}
+                        </Button>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {isLoadingPasskeys ? (
+                          <p className="text-sm text-muted-foreground">Cargando llaves registradas...</p>
+                        ) : passkeysError ? (
+                          <p className="text-sm text-destructive">{passkeysError}</p>
+                        ) : passkeys.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">Aún no tienes llaves de acceso registradas.</p>
+                        ) : (
+                          passkeys.map((passkey) => (
+                            <div
+                              key={passkey.credentialId}
+                              className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background p-4 sm:flex-row sm:items-center sm:justify-between"
+                            >
+                              <div className="space-y-1">
+                                <p className="text-sm font-medium">Llave de acceso</p>
+                                <p className="font-mono text-xs text-muted-foreground break-all">{passkey.credentialId.slice(0, 12)}…</p>
+                                <p className="text-xs text-muted-foreground">Creada: {formatDateTime(passkey.createdAt)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Medio: {passkey.transports?.length ? passkey.transports.join(", ") : "No disponible"}
+                                </p>
+                              </div>
+                              <Button type="button" variant="destructive" className="sm:self-start" onClick={() => setPendingDeletePasskeyId(passkey.credentialId)}>
+                                Eliminar
+                              </Button>
+                            </div>
+                          ))
+                        )}
                       </div>
                     </div>
 
@@ -1218,6 +1479,27 @@ export default function AdminAjustesPage() {
           </SheetContent>
         </Sheet>
       </main>
+
+      <Dialog open={Boolean(pendingDeletePasskeyId)} onOpenChange={(open) => !open && setPendingDeletePasskeyId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Eliminar llave de acceso</DialogTitle>
+            <DialogDescription>
+              Esta acción quitará la llave seleccionada de tu cuenta. Tendrás que registrarla otra vez si la necesitas.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingDeletePasskeyId(null)}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmDeletePasskey()}>
+              Eliminar llave
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
     </div>
   )
 }

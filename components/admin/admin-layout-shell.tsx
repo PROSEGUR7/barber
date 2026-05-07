@@ -50,7 +50,7 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
     <AuthGuard allowedRoles={["admin"]}>
       <SidebarProvider>
         <AppSidebar />
-        <SidebarInset className="h-svh">
+        <SidebarInset className="min-h-svh">
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar:duration-200">
             <div className="flex items-center gap-2 px-4">
               <SidebarTrigger className="-ml-1" />
@@ -72,7 +72,7 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
               </Breadcrumb>
             </div>
           </header>
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden p-4 pt-0">{children}</div>
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-x-hidden p-4 pt-0">{children}</div>
         </SidebarInset>
       </SidebarProvider>
     </AuthGuard>

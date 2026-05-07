@@ -17,6 +17,7 @@ import type {
 
 import { findUserByEmail, findUserById } from "@/lib/auth"
 import { pool } from "@/lib/db"
+import { tenantSql } from "@/lib/tenant"
 
 const DEFAULT_APP_URL = "http://localhost:3000"
 
@@ -259,10 +260,11 @@ function getExpectedOrigins(requestOrigin?: string | null): string[] {
 
 let ensuredTablesPromise: Promise<void> | null = null
 
-async function ensureTables() {
+async function ensureTables(tenantSchema?: string | null) {
   if (!ensuredTablesPromise) {
     ensuredTablesPromise = (async () => {
-      await pool.query(`
+      await pool.query(
+        tenantSql(`
         CREATE TABLE IF NOT EXISTS tenant_base.passkeys (
           id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL REFERENCES tenant_base.users(id) ON DELETE CASCADE,
@@ -282,7 +284,8 @@ async function ensureTables() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY (user_id, challenge_type)
         );
-      `)
+      `, tenantSchema),
+      )
     })().catch((error) => {
       ensuredTablesPromise = null
       throw error
@@ -299,6 +302,16 @@ type PasskeyRow = {
   public_key: Buffer
   counter: string | number
   transports: string[] | null
+  created_at: Date
+  updated_at: Date
+}
+
+export type PasskeySummary = {
+  credentialId: string
+  counter: number
+  transports: string[] | null
+  createdAt: string
+  updatedAt: string
 }
 
 type ChallengeType = "registration" | "authentication"
@@ -337,25 +350,25 @@ type AuthenticationOptionsParams = {
   rpIdHint?: string | null
 }
 
-async function upsertChallenge(userId: number, challengeType: ChallengeType, challenge: string) {
+async function upsertChallenge(userId: number, challengeType: ChallengeType, challenge: string, tenantSchema?: string | null) {
   await pool.query(
-    `INSERT INTO tenant_base.passkey_challenges (user_id, challenge_type, challenge, expires_at)
+    tenantSql(`INSERT INTO tenant_base.passkey_challenges (user_id, challenge_type, challenge, expires_at)
      VALUES ($1, $2, $3, now() + interval '10 minutes')
      ON CONFLICT (user_id, challenge_type)
      DO UPDATE
         SET challenge = EXCLUDED.challenge,
             expires_at = now() + interval '10 minutes',
-            created_at = now()` ,
+            created_at = now()` , tenantSchema),
     [userId, challengeType, challenge],
   )
 }
 
-async function consumeChallenge(userId: number, challengeType: ChallengeType): Promise<string | null> {
+async function consumeChallenge(userId: number, challengeType: ChallengeType, tenantSchema?: string | null): Promise<string | null> {
   const result = await pool.query<ChallengeRow>(
-    `SELECT user_id, challenge_type, challenge, expires_at
+    tenantSql(`SELECT user_id, challenge_type, challenge, expires_at
        FROM tenant_base.passkey_challenges
       WHERE user_id = $1 AND challenge_type = $2
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
     [userId, challengeType],
   )
 
@@ -366,8 +379,8 @@ async function consumeChallenge(userId: number, challengeType: ChallengeType): P
   const challengeRow = result.rows[0]
 
   await pool.query(
-    `DELETE FROM tenant_base.passkey_challenges
-      WHERE user_id = $1 AND challenge_type = $2`,
+    tenantSql(`DELETE FROM tenant_base.passkey_challenges
+      WHERE user_id = $1 AND challenge_type = $2`, tenantSchema),
     [userId, challengeType],
   )
 
@@ -378,38 +391,83 @@ async function consumeChallenge(userId: number, challengeType: ChallengeType): P
   return challengeRow.challenge
 }
 
-async function getPasskeysForUser(userId: number): Promise<PasskeyRow[]> {
+async function getPasskeysForUser(userId: number, tenantSchema?: string | null): Promise<PasskeyRow[]> {
   const result = await pool.query<PasskeyRow>(
-    `SELECT id, user_id, credential_id, public_key, counter, transports
+    tenantSql(`SELECT id, user_id, credential_id, public_key, counter, transports, created_at, updated_at
        FROM tenant_base.passkeys
-      WHERE user_id = $1`,
+      WHERE user_id = $1`, tenantSchema),
     [userId],
   )
   return result.rows
 }
 
-export async function userHasPasskeys(userId: number): Promise<boolean> {
-  await ensureTables()
+export async function userHasPasskeys(userId: number, tenantSchema?: string | null): Promise<boolean> {
+  await ensureTables(tenantSchema)
 
   const result = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS (
+    tenantSql(`SELECT EXISTS (
         SELECT 1
           FROM tenant_base.passkeys
          WHERE user_id = $1
          LIMIT 1
-      ) AS exists`,
+      ) AS exists`, tenantSchema),
     [userId],
   )
 
   return result.rows[0]?.exists ?? false
 }
 
-async function getPasskeyByCredentialId(credentialId: Buffer): Promise<PasskeyRow | null> {
+export async function listPasskeysForUser(userId: number, tenantSchema?: string | null): Promise<PasskeySummary[]> {
+  await ensureTables(tenantSchema)
+
+  const passkeys = await getPasskeysForUser(userId, tenantSchema)
+
+  return passkeys.map((passkey) => ({
+    credentialId: isoBase64URL.fromBuffer(new Uint8Array(passkey.credential_id)),
+    counter:
+      typeof passkey.counter === "string"
+        ? Number.parseInt(passkey.counter, 10)
+        : passkey.counter,
+    transports: passkey.transports,
+    createdAt:
+      passkey.created_at instanceof Date
+        ? passkey.created_at.toISOString()
+        : new Date(passkey.created_at).toISOString(),
+    updatedAt:
+      passkey.updated_at instanceof Date
+        ? passkey.updated_at.toISOString()
+        : new Date(passkey.updated_at).toISOString(),
+  }))
+}
+
+export async function deletePasskeyForUser(
+  userId: number,
+  credentialId: string,
+  tenantSchema?: string | null,
+): Promise<boolean> {
+  await ensureTables(tenantSchema)
+
+  const credentialIdBuffer = Buffer.from(isoBase64URL.toBuffer(credentialId))
+
+  const result = await pool.query(
+    tenantSql(
+      `DELETE FROM tenant_base.passkeys
+        WHERE user_id = $1
+          AND credential_id = $2`,
+      tenantSchema,
+    ),
+    [userId, credentialIdBuffer],
+  )
+
+  return result.rowCount > 0
+}
+
+async function getPasskeyByCredentialId(credentialId: Buffer, tenantSchema?: string | null): Promise<PasskeyRow | null> {
   const result = await pool.query<PasskeyRow>(
-    `SELECT id, user_id, credential_id, public_key, counter, transports
+    tenantSql(`SELECT id, user_id, credential_id, public_key, counter, transports, created_at, updated_at
        FROM tenant_base.passkeys
       WHERE credential_id = $1
-      LIMIT 1`,
+      LIMIT 1`, tenantSchema),
     [credentialId],
   )
 
@@ -432,24 +490,24 @@ async function savePasskey({
   credentialPublicKey: Buffer
   counter: number
   transports?: string[] | null
-}) {
+}, tenantSchema?: string | null) {
   await pool.query(
-    `INSERT INTO tenant_base.passkeys (user_id, credential_id, public_key, counter, transports)
+    tenantSql(`INSERT INTO tenant_base.passkeys (user_id, credential_id, public_key, counter, transports)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (credential_id)
      DO UPDATE SET counter = EXCLUDED.counter,
                    transports = EXCLUDED.transports,
-                   updated_at = now()`,
+                   updated_at = now()`, tenantSchema),
     [userId, credentialID, credentialPublicKey, counter, transports ?? null],
   )
 }
 
-async function updatePasskeyCounter(credentialId: Buffer, counter: number) {
+async function updatePasskeyCounter(credentialId: Buffer, counter: number, tenantSchema?: string | null) {
   await pool.query(
-    `UPDATE tenant_base.passkeys
+    tenantSql(`UPDATE tenant_base.passkeys
         SET counter = $2,
             updated_at = now()
-      WHERE credential_id = $1`,
+      WHERE credential_id = $1`, tenantSchema),
     [credentialId, counter],
   )
 }
@@ -502,15 +560,16 @@ function mapPasskeysToAllowCredentials(passkeys: PasskeyRow[], preferPlatform?: 
 export async function generatePasskeyRegistrationOptions(
   userId: number,
   params?: RegistrationOptionsParams,
+  tenantSchema?: string | null,
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
-  await ensureTables()
+  await ensureTables(tenantSchema)
 
-  const user = await findUserById(userId)
+  const user = await findUserById(userId, tenantSchema)
   if (!user) {
     throw new Error("USER_NOT_FOUND")
   }
 
-  const existingPasskeys = await getPasskeysForUser(user.id)
+  const existingPasskeys = await getPasskeysForUser(user.id, tenantSchema)
 
   const overrides = params?.overrides
   const rpID = resolveRpId(params?.requestOrigin, params?.rpIdHint)
@@ -541,7 +600,7 @@ export async function generatePasskeyRegistrationOptions(
   }
 
   // Ensure the RP ID returned to the client is explicit for debugging and clients that expect it
-  await upsertChallenge(user.id, "registration", options.challenge)
+  await upsertChallenge(user.id, "registration", options.challenge, tenantSchema)
 
   return options
 }
@@ -551,20 +610,22 @@ export async function verifyPasskeyRegistration({
   credential,
   requestOrigin,
   rpIdHint,
+  tenantSchema,
 }: {
   userId: number
   credential: RegistrationResponseJSON
   requestOrigin?: string | null
   rpIdHint?: string | null
+  tenantSchema?: string | null
 }) {
-  await ensureTables()
+  await ensureTables(tenantSchema)
 
-  const user = await findUserById(userId)
+  const user = await findUserById(userId, tenantSchema)
   if (!user) {
     throw new Error("USER_NOT_FOUND")
   }
 
-  const expectedChallenge = await consumeChallenge(user.id, "registration")
+  const expectedChallenge = await consumeChallenge(user.id, "registration", tenantSchema)
   if (!expectedChallenge) {
     throw new Error("CHALLENGE_NOT_FOUND")
   }
@@ -600,7 +661,7 @@ export async function verifyPasskeyRegistration({
     credentialPublicKey: Buffer.from(publicKey),
     counter,
     transports: sanitizeTransports(transports)?.map((transport) => transport as string),
-  })
+  }, tenantSchema)
 
   return {
     verified: verification.verified,
@@ -611,15 +672,16 @@ export async function verifyPasskeyRegistration({
 export async function generatePasskeyAuthenticationOptions(
   email: string,
   params?: AuthenticationOptionsParams,
+  tenantSchema?: string | null,
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
-  await ensureTables()
+  await ensureTables(tenantSchema)
 
-  const userRecord = await findUserByEmail(email)
+  const userRecord = await findUserByEmail(email, tenantSchema)
   if (!userRecord) {
     throw new Error("USER_NOT_FOUND")
   }
 
-  const passkeys = await getPasskeysForUser(userRecord.id)
+  const passkeys = await getPasskeysForUser(userRecord.id, tenantSchema)
   if (passkeys.length === 0) {
     throw new Error("NO_PASSKEYS")
   }
@@ -638,7 +700,7 @@ export async function generatePasskeyAuthenticationOptions(
     rpId: (baseOptions as { rpId?: string }).rpId ?? rpID,
   }
 
-  await upsertChallenge(userRecord.id, "authentication", options.challenge)
+  await upsertChallenge(userRecord.id, "authentication", options.challenge, tenantSchema)
 
   return options
 }
@@ -647,22 +709,24 @@ export async function verifyPasskeyAuthentication({
   credential,
   requestOrigin,
   rpIdHint,
+  tenantSchema,
 }: {
   credential: AuthenticationResponseJSON
   requestOrigin?: string | null
   rpIdHint?: string | null
+  tenantSchema?: string | null
 }) {
-  await ensureTables()
+  await ensureTables(tenantSchema)
 
   const credentialIdBytes = isoBase64URL.toBuffer(credential.id)
   const credentialIdBuffer = Buffer.from(credentialIdBytes)
-  const passkey = await getPasskeyByCredentialId(credentialIdBuffer)
+  const passkey = await getPasskeyByCredentialId(credentialIdBuffer, tenantSchema)
 
   if (!passkey) {
     throw new Error("PASSKEY_NOT_FOUND")
   }
 
-  const expectedChallenge = await consumeChallenge(passkey.user_id, "authentication")
+  const expectedChallenge = await consumeChallenge(passkey.user_id, "authentication", tenantSchema)
   if (!expectedChallenge) {
     throw new Error("CHALLENGE_NOT_FOUND")
   }
@@ -698,9 +762,9 @@ export async function verifyPasskeyAuthentication({
     throw new Error("AUTHENTICATION_NOT_VERIFIED")
   }
 
-  await updatePasskeyCounter(passkey.credential_id, verification.authenticationInfo.newCounter)
+  await updatePasskeyCounter(passkey.credential_id, verification.authenticationInfo.newCounter, tenantSchema)
 
-  const user = await findUserById(passkey.user_id)
+  const user = await findUserById(passkey.user_id, tenantSchema)
   if (!user) {
     throw new Error("USER_NOT_FOUND")
   }

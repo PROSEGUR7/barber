@@ -4,6 +4,7 @@ import { verifyPasskeyAuthentication, userHasPasskeys } from "@/lib/webauthn"
 import { markUserLogin } from "@/lib/auth"
 import { getTenantSubscriptionSnapshot } from "@/lib/admin-billing"
 import { validateTenantAccess } from "@/lib/admin-billing"
+import { resolveTenantHintFromRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
 
@@ -11,6 +12,7 @@ type Body = {
   credential?: unknown
   rpIdHint?: unknown
   originHint?: unknown
+  tenantSchema?: unknown
 }
 
 function jsonError(
@@ -45,13 +47,17 @@ export async function POST(request: Request) {
 
   const rpIdHint = typeof body.rpIdHint === "string" ? body.rpIdHint : null
   const originHint = typeof body.originHint === "string" ? body.originHint.trim() : ""
+  const tenantSchema = typeof body.tenantSchema === "string" ? body.tenantSchema.trim() : null
   const requestOrigin = request.headers.get("origin") ?? (originHint || null)
 
   try {
+    const resolvedTenantSchema = tenantSchema || resolveTenantHintFromRequest(request)
+
     const result = await verifyPasskeyAuthentication({
       credential: body.credential as any,
       requestOrigin,
       rpIdHint,
+      tenantSchema: resolvedTenantSchema,
     })
 
     if (!result.verified) {
@@ -95,7 +101,7 @@ export async function POST(request: Request) {
           email: result.user.email,
           role: result.user.role,
           displayName: result.user.displayName ?? null,
-          hasPasskeys: await userHasPasskeys(result.user.id),
+          hasPasskeys: await userHasPasskeys(result.user.id, resolvedTenantSchema),
           tenant: result.user.tenantSchema ?? null,
           canAccessAdminSections,
         },

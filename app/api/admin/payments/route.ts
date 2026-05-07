@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { getTenantBillingPayments } from "@/lib/admin-billing"
+import { getAdminPayments } from "@/lib/admin"
 import { resolveTenantSchemaForAdminRequest } from "@/lib/tenant"
 
 export const runtime = "nodejs"
@@ -43,11 +43,32 @@ export async function GET(request: Request) {
       })
     }
 
-    const payments = await getTenantBillingPayments({
+    const adminPayments = await getAdminPayments({
       tenantSchema,
       status,
       limit,
     })
+
+    // Map admin appointment payments to the billing table shape expected by the UI.
+    const payments = adminPayments.map((p) => ({
+      paymentId: p.rowId,
+      amount: p.amount,
+      currency: null,
+      paymentStatus: p.status,
+      paidAt: p.appointmentDate,
+      createdAt: null,
+      paymentMethod: null,
+      paymentProvider: null,
+      externalReference: null,
+      billingCycle: null,
+      planCode: null,
+      planName: null,
+      invoiceNumber: null,
+      invoiceStatus: null,
+      tenantId: null,
+      tenantName: tenantSchema ?? "",
+      tenantSchema: tenantSchema ?? null,
+    }))
 
     return NextResponse.json({ ok: true, payments }, { status: 200 })
   } catch (error) {

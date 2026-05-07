@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
+import { Eye, EyeOff } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -13,6 +15,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 
@@ -30,11 +33,27 @@ export function LoginForm({
   const [isPasskeySupported, setIsPasskeySupported] = useState(true)
   const [hasPlatformAuthenticator, setHasPlatformAuthenticator] = useState<boolean | null>(null)
   const [shouldSuggestPasskeySetup, setShouldSuggestPasskeySetup] = useState(false)
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false)
+  const [isPasskeyDialogOpen, setIsPasskeyDialogOpen] = useState(false)
+  const [pendingPasskeyUserId, setPendingPasskeyUserId] = useState<number | null>(null)
+  const [pendingPasskeyShouldRegister, setPendingPasskeyShouldRegister] = useState(false)
+  const [pendingPasskeyMessage, setPendingPasskeyMessage] = useState("")
+  const [pendingPasskeyDestination, setPendingPasskeyDestination] = useState<string | null>(null)
+  const [pendingPasskeyData, setPendingPasskeyData] = useState<{
+    userId: number
+    displayName: string | null
+    tenant: string | null
+    email: string | null
+    canAccessAdminSections: boolean | null
+  } | null>(null)
 
-  const showPasskeySetupPopup = () => {
-    window.alert(
-      "Aún no tienes una llave de acceso disponible para este dispositivo o dominio. Inicia sesión con tu contraseña primero y luego registra tu llave de acceso.",
-    )
+  const closePasskeyDialog = () => {
+    setIsPasskeyDialogOpen(false)
+    setPendingPasskeyUserId(null)
+    setPendingPasskeyShouldRegister(false)
+    setPendingPasskeyMessage("")
+    setPendingPasskeyDestination(null)
+    setPendingPasskeyData(null)
   }
 
   const persistTenant = (tenantValue: string | null | undefined) => {
@@ -282,22 +301,24 @@ export function LoginForm({
       const shouldOfferSetup = Boolean(userId) && (!user.hasPasskeys || shouldSuggestPasskeySetup)
 
       if (userId && shouldOfferSetup) {
-        const wantsPasskey = window.confirm(
+        setPendingPasskeyUserId(userId)
+        setPendingPasskeyShouldRegister(true)
+        setPendingPasskeyMessage(
           user.hasPasskeys
-            ? "No encontramos una llave válida en este dispositivo o dominio. ¿Deseas registrar una llave de acceso aquí ahora?"
-            : "Tu cuenta aún no tiene una llave de acceso. ¿Deseas configurarla ahora?",
+            ? "No encontramos una llave válida en este dispositivo o dominio. Puedes registrarla ahora o continuar al sistema y hacerlo luego."
+            : "Tu cuenta aún no tiene una llave de acceso. Puedes configurarla ahora o seguir al sistema y hacerlo luego.",
         )
-
-        if (wantsPasskey) {
-          const registered = await registerPasskeyForUser(userId)
-          if (!registered) {
-            setError(
-              "No fue posible registrar la llave de acceso. Intenta de nuevo desde la configuración de tu cuenta.",
-            )
-          } else {
-            setShouldSuggestPasskeySetup(false)
-          }
-        }
+        setPendingPasskeyDestination(destination)
+        setPendingPasskeyData({
+          userId,
+          displayName: user.displayName ?? null,
+          tenant: user.tenant ?? null,
+          email: user.email ?? sanitizedEmail,
+          canAccessAdminSections: user.canAccessAdminSections ?? null,
+        })
+        setIsPasskeyDialogOpen(true)
+        setError(null)
+        return
       }
 
       router.push(destination)
@@ -327,13 +348,17 @@ export function LoginForm({
 
     try {
       const { rpIdHint, originHint } = getWebAuthnHints()
+      const tenantSchema =
+        (typeof window !== "undefined"
+          ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+          : "")
 
       const optionsResponse = await fetch("/api/webauthn/auth/options", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email: sanitizedEmail, rpIdHint, originHint }),
+        body: JSON.stringify({ email: sanitizedEmail, rpIdHint, originHint, tenantSchema }),
       })
 
       const optionsData = await optionsResponse.json().catch(() => ({}))
@@ -343,7 +368,12 @@ export function LoginForm({
         if (optionsCode === "NO_PASSKEYS") {
           setShouldSuggestPasskeySetup(true)
           setError(null)
-          showPasskeySetupPopup()
+          setPendingPasskeyMessage(
+            "No tienes una llave de acceso registrada para este dispositivo o dominio. Puedes configurarla ahora o seguir con tu contraseña.",
+          )
+          setPendingPasskeyDestination(null)
+          setPendingPasskeyData(null)
+          setIsPasskeyDialogOpen(true)
           return
         }
 
@@ -358,7 +388,7 @@ export function LoginForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ credential, rpIdHint, originHint }),
+        body: JSON.stringify({ credential, rpIdHint, originHint, tenantSchema }),
       })
 
       const verifyData = await verifyResponse.json().catch(() => ({}))
@@ -432,7 +462,12 @@ export function LoginForm({
       if (isNotAllowedDomError || isNotAllowedMessage) {
         setShouldSuggestPasskeySetup(true)
         setError(null)
-        showPasskeySetupPopup()
+        setPendingPasskeyMessage(
+          "No se pudo usar la llave de acceso en este momento. Puedes configurarla más tarde o continuar con tu contraseña.",
+        )
+        setPendingPasskeyDestination(null)
+        setPendingPasskeyData(null)
+        setIsPasskeyDialogOpen(true)
       } else if (err instanceof Error) {
         console.error("Passkey login error", err)
         setError(err.message)
@@ -444,18 +479,54 @@ export function LoginForm({
     }
   }
 
+  const handlePasskeyDialogRegister = async () => {
+    if (!pendingPasskeyUserId || !pendingPasskeyData) {
+      closePasskeyDialog()
+      return
+    }
+
+    const registered = await registerPasskeyForUser(pendingPasskeyUserId)
+    if (registered) {
+      setShouldSuggestPasskeySetup(false)
+      closePasskeyDialog()
+      router.push(pendingPasskeyDestination ?? await resolveDestinationByRole({
+        role: typeof localStorage !== "undefined" ? localStorage.getItem("userRole") ?? undefined : undefined,
+        tenant: pendingPasskeyData.tenant,
+        email: pendingPasskeyData.email,
+        canAccessAdminSections: pendingPasskeyData.canAccessAdminSections,
+      }))
+      return
+    }
+
+    closePasskeyDialog()
+  }
+
+  const handlePasskeyDialogCancel = () => {
+    const destination = pendingPasskeyDestination
+    closePasskeyDialog()
+
+    if (destination) {
+      router.push(destination)
+    }
+  }
+
   const registerPasskeyForUser = async (userId: number) => {
     setError(null)
 
     try {
       const { rpIdHint, originHint } = getWebAuthnHints()
+      const tenantSchema =
+        pendingPasskeyData?.tenant?.trim() ||
+        (typeof window !== "undefined"
+          ? (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+          : "")
 
       const optionsResponse = await fetch("/api/webauthn/register/options", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ userId, rpIdHint, originHint }),
+        body: JSON.stringify({ userId, rpIdHint, originHint, tenantSchema }),
       })
 
       const optionsData = await optionsResponse.json().catch(() => ({}))
@@ -472,7 +543,7 @@ export function LoginForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ userId, credential, rpIdHint, originHint }),
+        body: JSON.stringify({ userId, credential, rpIdHint, originHint, tenantSchema }),
       })
 
       const verifyData = await verifyResponse.json().catch(() => ({}))
@@ -539,14 +610,27 @@ export function LoginForm({
                     ¿Olvidaste tu contraseña?
                   </a>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="********"
-                  required
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={isPasswordVisible ? "text" : "password"}
+                    placeholder="********"
+                    required
+                    className="pr-10"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+                    onClick={() => setIsPasswordVisible((current) => !current)}
+                    aria-label={isPasswordVisible ? "Ocultar contraseña" : "Ver contraseña"}
+                  >
+                    {isPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
               </Field>
               <Field>
                 <Button type="submit" className="w-full" disabled={isSubmitting}>
@@ -620,6 +704,23 @@ export function LoginForm({
           Volver al inicio
         </Link>
       </div>
+
+      <Dialog open={isPasskeyDialogOpen} onOpenChange={(open) => !open && handlePasskeyDialogCancel()}>
+        <DialogContent className="sm:max-w-md" showCloseButton={false}>
+          <DialogHeader className="text-left">
+            <DialogTitle>Configurar llave de acceso</DialogTitle>
+            <DialogDescription>{pendingPasskeyMessage}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={handlePasskeyDialogCancel}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={pendingPasskeyShouldRegister ? handlePasskeyDialogRegister : handlePasskeyDialogCancel}>
+              Aceptar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import { type ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { startRegistration } from "@simplewebauthn/browser"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import { Camera, Trash2, Upload } from "lucide-react"
@@ -17,6 +18,7 @@ import {
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -49,6 +51,14 @@ type Preferences = {
   notifyWhatsapp: boolean
   notifyEmail: boolean
   notifySms: boolean
+}
+
+type PasskeySummary = {
+  credentialId: string
+  counter: number
+  transports: string[] | null
+  createdAt: string
+  updatedAt: string
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -103,6 +113,7 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [currentEmail, setCurrentEmail] = useState("")
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null)
   const [role, setRole] = useState<ProfileRole>("client")
   const [lastLogin, setLastLogin] = useState<string | null>(null)
 
@@ -112,6 +123,10 @@ export default function ProfilePage() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
+  const [passkeys, setPasskeys] = useState<PasskeySummary[]>([])
+  const [isLoadingPasskeys, setIsLoadingPasskeys] = useState(false)
+  const [passkeysError, setPasskeysError] = useState<string | null>(null)
+  const [credentialIdPendingDelete, setCredentialIdPendingDelete] = useState<string | null>(null)
 
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -134,6 +149,44 @@ export default function ProfilePage() {
     }
 
     window.dispatchEvent(new Event("user-profile-updated"))
+  }, [])
+
+  const loadPasskeys = useCallback(async (targetEmail: string) => {
+    const normalizedEmail = targetEmail.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setPasskeys([])
+      return
+    }
+
+    setIsLoadingPasskeys(true)
+    setPasskeysError(null)
+
+    try {
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+      const query = new URLSearchParams({ email: normalizedEmail })
+      if (tenantSchema) {
+        query.set("tenant", tenantSchema)
+      }
+
+      const response = await fetch(`/api/profile/passkeys?${query.toString()}`, {
+        cache: "no-store",
+        headers: buildTenantHeaders(),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { passkeys?: PasskeySummary[]; error?: string }
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudieron cargar tus llaves de acceso.")
+      }
+
+      setPasskeys(Array.isArray(data.passkeys) ? data.passkeys : [])
+    } catch (error) {
+      console.error("Error loading passkeys", error)
+      setPasskeys([])
+      setPasskeysError("No se pudieron cargar tus llaves de acceso.")
+    } finally {
+      setIsLoadingPasskeys(false)
+    }
   }, [])
 
   const loadProfile = useCallback(async () => {
@@ -166,6 +219,7 @@ export default function ProfilePage() {
       }
 
       const profile = data.profile
+      setCurrentUserId(profile.id)
       setCurrentEmail(profile.email)
       setRole(profile.role)
       setLastLogin(profile.lastLogin)
@@ -175,6 +229,7 @@ export default function ProfilePage() {
       setAvatarUrl(profile.avatarUrl ?? null)
 
       syncSidebarUserInfo(profile.name, profile.email, profile.avatarUrl ?? null)
+      void loadPasskeys(profile.email)
 
       const rawPreferences = localStorage.getItem(getPreferencesKey(profile.email))
 
@@ -198,7 +253,7 @@ export default function ProfilePage() {
     } finally {
       setIsLoading(false)
     }
-  }, [router, syncSidebarUserInfo])
+  }, [loadPasskeys, router, syncSidebarUserInfo])
 
   useEffect(() => {
     void loadProfile()
@@ -534,6 +589,141 @@ export default function ProfilePage() {
     }
   }
 
+  const handleDeletePasskey = async (credentialId: string) => {
+    if (!currentEmail || !credentialId) {
+      return
+    }
+
+    setCredentialIdPendingDelete(null)
+
+    try {
+      const response = await fetch("/api/profile/passkeys", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          email: currentEmail,
+          credentialId,
+          tenantSchema: (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim(),
+        }),
+      })
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+
+      if (!response.ok) {
+        toast({
+          variant: "destructive",
+          title: "No se pudo eliminar la llave",
+          description: data.error ?? "Intenta nuevamente.",
+        })
+        return
+      }
+
+      setPasskeys((previous) => previous.filter((passkey) => passkey.credentialId !== credentialId))
+      toast({ title: "Llave eliminada", description: "La llave de acceso se quitó de tu cuenta." })
+    } catch (error) {
+      console.error("Error deleting passkey", error)
+      toast({
+        variant: "destructive",
+        title: "Error de conexión",
+        description: "No fue posible eliminar la llave de acceso.",
+      })
+    }
+  }
+
+  const handleAddPasskey = async () => {
+    if (!currentUserId || !currentEmail) {
+      toast({
+        variant: "destructive",
+        title: "Sesión inválida",
+        description: "No encontramos tu usuario para registrar la llave.",
+      })
+      return
+    }
+
+    try {
+      const { rpIdHint, originHint } = getWebAuthnHints()
+      const tenantSchema = (localStorage.getItem("tenantSchema") ?? localStorage.getItem("userTenant") ?? "").trim()
+
+      const optionsResponse = await fetch("/api/webauthn/register/options", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          userId: currentUserId,
+          rpIdHint,
+          originHint,
+          tenantSchema,
+        }),
+      })
+
+      const optionsData = (await optionsResponse.json().catch(() => ({}))) as { options?: unknown; error?: string }
+
+      if (!optionsResponse.ok || !optionsData.options) {
+        toast({
+          variant: "destructive",
+          title: "No se pudo preparar la llave",
+          description: optionsData.error ?? "Intenta nuevamente.",
+        })
+        return
+      }
+
+      const credential = await startRegistration({ optionsJSON: optionsData.options as Parameters<typeof startRegistration>[0]["optionsJSON"] })
+
+      const verifyResponse = await fetch("/api/webauthn/register/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildTenantHeaders(),
+        },
+        body: JSON.stringify({
+          userId: currentUserId,
+          credential,
+          rpIdHint,
+          originHint,
+          tenantSchema,
+        }),
+      })
+
+      const verifyData = (await verifyResponse.json().catch(() => ({}))) as { error?: string }
+
+      if (!verifyResponse.ok) {
+        toast({
+          variant: "destructive",
+          title: "No se pudo registrar la llave",
+          description: verifyData.error ?? "Intenta nuevamente.",
+        })
+        return
+      }
+
+      toast({
+        title: "Llave agregada",
+        description: "La llave de acceso quedó registrada en tu cuenta.",
+      })
+
+      await loadPasskeys(currentEmail)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        toast({
+          title: "Registro cancelado",
+          description: "No se registró ninguna llave.",
+        })
+        return
+      }
+
+      console.error("Error adding passkey", error)
+      toast({
+        variant: "destructive",
+        title: "Error de conexión",
+        description: "No fue posible registrar la llave de acceso.",
+      })
+    }
+  }
+
   return (
     <SidebarProvider>
       <AppSidebar />
@@ -635,6 +825,60 @@ export default function ProfilePage() {
                               {isRemovingAvatar ? "Eliminando..." : "Eliminar"}
                             </Button>
                           </div>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 rounded-lg border border-border/70 bg-muted/20 p-4">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-medium">Llaves de acceso</p>
+                            <p className="text-xs text-muted-foreground">
+                              Agrega o elimina las llaves registradas para este usuario.
+                            </p>
+                          </div>
+                          <Button type="button" variant="outline" onClick={() => void handleAddPasskey()}>
+                            Agregar llave
+                          </Button>
+                        </div>
+
+                        <div className="mt-4 space-y-3">
+                          {isLoadingPasskeys ? (
+                            <p className="text-sm text-muted-foreground">Cargando llaves registradas...</p>
+                          ) : passkeysError ? (
+                            <p className="text-sm text-destructive">{passkeysError}</p>
+                          ) : passkeys.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">Aún no tienes llaves de acceso registradas.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {passkeys.map((passkey) => (
+                                <div
+                                  key={passkey.credentialId}
+                                  className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background p-4 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <div className="space-y-1">
+                                    <p className="text-sm font-medium">Llave de acceso</p>
+                                    <p className="font-mono text-xs text-muted-foreground break-all">
+                                      {passkey.credentialId.slice(0, 12)}…
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Creada: {formatDateTime(passkey.createdAt)}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Medio: {passkey.transports?.length ? passkey.transports.join(", ") : "No disponible"}
+                                    </p>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="destructive"
+                                    className="sm:self-start"
+                                    onClick={() => setCredentialIdPendingDelete(passkey.credentialId)}
+                                  >
+                                    Eliminar
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -769,58 +1013,88 @@ export default function ProfilePage() {
               </TabsContent>
 
               <TabsContent value="seguridad">
-                <Card className="border border-border/70 shadow-sm">
-                  <form onSubmit={handlePasswordSubmit}>
-                    <CardHeader>
-                      <CardTitle>Seguridad de la cuenta</CardTitle>
-                      <CardDescription>Cambia tu contraseña para mantener tu cuenta protegida.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="current-password">Contraseña actual</Label>
-                        <Input
-                          id="current-password"
-                          type="password"
-                          value={currentPassword}
-                          onChange={(event) => setCurrentPassword(event.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="new-password">Nueva contraseña</Label>
-                        <Input
-                          id="new-password"
-                          type="password"
-                          value={newPassword}
-                          onChange={(event) => setNewPassword(event.target.value)}
-                          required
-                          minLength={8}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="confirm-password">Confirmar nueva contraseña</Label>
-                        <Input
-                          id="confirm-password"
-                          type="password"
-                          value={confirmPassword}
-                          onChange={(event) => setConfirmPassword(event.target.value)}
-                          required
-                          minLength={8}
-                        />
-                      </div>
-                    </CardContent>
-                    <CardFooter className="mt-2 flex justify-end pt-4">
-                      <Button type="submit" disabled={isSavingPassword}>
-                        {isSavingPassword ? "Actualizando..." : "Actualizar contraseña"}
-                      </Button>
-                    </CardFooter>
-                  </form>
-                </Card>
+                <div className="grid gap-4">
+                  <Card className="border border-border/70 shadow-sm">
+                    <form onSubmit={handlePasswordSubmit}>
+                      <CardHeader>
+                        <CardTitle>Seguridad de la cuenta</CardTitle>
+                        <CardDescription>Cambia tu contraseña para mantener tu cuenta protegida.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="grid gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="current-password">Contraseña actual</Label>
+                          <Input
+                            id="current-password"
+                            type="password"
+                            value={currentPassword}
+                            onChange={(event) => setCurrentPassword(event.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="new-password">Nueva contraseña</Label>
+                          <Input
+                            id="new-password"
+                            type="password"
+                            value={newPassword}
+                            onChange={(event) => setNewPassword(event.target.value)}
+                            required
+                            minLength={8}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="confirm-password">Confirmar nueva contraseña</Label>
+                          <Input
+                            id="confirm-password"
+                            type="password"
+                            value={confirmPassword}
+                            onChange={(event) => setConfirmPassword(event.target.value)}
+                            required
+                            minLength={8}
+                          />
+                        </div>
+                      </CardContent>
+                      <CardFooter className="mt-2 flex justify-end pt-4">
+                        <Button type="submit" disabled={isSavingPassword}>
+                          {isSavingPassword ? "Actualizando..." : "Actualizar contraseña"}
+                        </Button>
+                      </CardFooter>
+                    </form>
+                  </Card>
+
+                </div>
               </TabsContent>
             </Tabs>
           )}
         </div>
       </SidebarInset>
+
+      <Dialog open={Boolean(credentialIdPendingDelete)} onOpenChange={(open) => !open && setCredentialIdPendingDelete(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader className="text-left">
+            <DialogTitle>Eliminar llave de acceso</DialogTitle>
+            <DialogDescription>
+              Esta acción quitará la llave seleccionada de tu cuenta. Si aún la necesitas, tendrás que registrarla otra vez.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCredentialIdPendingDelete(null)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (credentialIdPendingDelete) {
+                  void handleDeletePasskey(credentialIdPendingDelete)
+                }
+              }}
+            >
+              Eliminar llave
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   )
 }
